@@ -9,19 +9,16 @@ use std::{
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
-unsafe extern "C" {
-    fn voice_asio_com_initialize() -> i32;
-    fn voice_asio_com_uninitialize();
-}
+use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 struct ComApartment;
 impl ComApartment {
     fn initialize() -> Result<Self, Box<dyn Error>> {
         // SAFETY: called only on the owning audio worker, before loading ASIO.
-        let result = unsafe { voice_asio_com_initialize() };
-        if result < 0 {
+        let result = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+        if result.is_err() {
             return Err(format!(
                 "Audio worker COM initialization failed: HRESULT 0x{:08x}",
-                result as u32
+                result.0 as u32
             )
             .into());
         }
@@ -31,7 +28,7 @@ impl ComApartment {
 impl Drop for ComApartment {
     fn drop(&mut self) {
         // SAFETY: RAII value is local to run_audio; the driver is dropped first.
-        unsafe { voice_asio_com_uninitialize() };
+        unsafe { CoUninitialize() };
     }
 }
 

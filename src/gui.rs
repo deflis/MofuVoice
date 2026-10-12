@@ -274,13 +274,28 @@ pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 pub fn show_message(message: &str, error: bool) {
-    unsafe extern "C" {
-        fn voice_gui_message(title: *const u16, message: *const u16, error: i32);
-    }
-    let title: Vec<_> = "Voice Changer".encode_utf16().chain(Some(0)).collect();
-    let message: Vec<_> = message.encode_utf16().chain(Some(0)).collect();
+    use windows::{
+        core::PCWSTR,
+        Win32::UI::WindowsAndMessaging::{
+            MessageBoxW, MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MESSAGEBOX_STYLE,
+        },
+    };
+    let title: Vec<u16> = "Voice Changer".encode_utf16().chain(Some(0)).collect();
+    let body: Vec<u16> = message.encode_utf16().chain(Some(0)).collect();
+    let icon: MESSAGEBOX_STYLE = if error {
+        MB_ICONERROR
+    } else {
+        MB_ICONINFORMATION
+    };
     // SAFETY: both buffers remain alive through the modal native call.
-    unsafe { voice_gui_message(title.as_ptr(), message.as_ptr(), i32::from(error)) };
+    unsafe {
+        let _ = MessageBoxW(
+            None,
+            PCWSTR(body.as_ptr()),
+            PCWSTR(title.as_ptr()),
+            MB_OK | icon,
+        );
+    }
 }
 #[cfg(test)]
 mod tests {
