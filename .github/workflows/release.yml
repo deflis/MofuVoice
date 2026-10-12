@@ -1,0 +1,52 @@
+name: Release
+
+on:
+  push:
+    branches: [master]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.99.0
+
+      - name: Install LLVM
+        uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: "20"
+
+      - name: Set LIBCLANG_PATH
+        shell: pwsh
+        run: |
+          if (-not $env:LLVM_PATH) { throw 'LLVM_PATH was not set by install-llvm-action' }
+          "LIBCLANG_PATH=$($env:LLVM_PATH)\bin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Cache ASIO SDK
+        uses: actions/cache@v4
+        with:
+          path: .tools/asiosdk
+          key: asio-sdk-${{ hashFiles('scripts/fetch-asio-sdk.ps1') }}
+
+      - name: Fetch ASIO SDK
+        shell: pwsh
+        run: ./scripts/fetch-asio-sdk.ps1
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release
+        run: cargo build --release --locked
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64-release
+          path: |
+            target/release/rust-low-latency-voice-changer-gui.exe
+            target/release/rust-low-latency-voice-changer-cli.exe
+          if-no-files-found: error
