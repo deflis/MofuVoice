@@ -1,0 +1,35 @@
+# Paired A/B: HEAD pitch.rs vs optimized (real FFT + remapping/sincos tables)
+# Distinct binaries (SHA256 differed). Alternating runs on the same machine.
+# Metric: median ns/sample from benches/spectral.rs
+
+## Round 1
+# setting                   baseline   optimized   speedup
+pitch=-12 preserve=false      3233.6     1615.2     50.0%
+pitch=-12 preserve=true       5357.0     3144.9     41.3%
+pitch=-3  preserve=false      3754.9     1945.0     48.2%
+pitch=-3  preserve=true       5522.7     2878.3     47.9%
+pitch=+0  preserve=false      3550.0     1453.2     59.1%
+pitch=+0  preserve=true       5499.4     2769.7     49.6%
+pitch=+3  preserve=false      3324.7     1529.9     54.0%
+pitch=+3  preserve=true       6733.1     2623.2     61.0%
+pitch=+7  preserve=false      4650.7     1538.6     66.9%
+pitch=+7  preserve=true       4172.7     2430.3     41.8%
+pitch=+12 preserve=false      2305.2     1567.3     32.0%
+pitch=+12 preserve=true       3884.5     2733.9     29.6%
+
+## Round 2
+pitch=-12 preserve=false      2314.6     1723.4     25.5%
+pitch=-12 preserve=true       4255.6     3295.1     22.6%
+pitch=-3  preserve=false      2374.2     1864.2     21.5%
+pitch=-3  preserve=true       4074.2     2658.8     34.7%
+pitch=+0  preserve=false      2338.0     1492.4     36.2%
+pitch=+0  preserve=true       3808.8     2571.3     32.5%
+pitch=+3  preserve=false      2499.9     1561.2     37.6%
+pitch=+3  preserve=true       4195.8     2741.9     34.7%
+pitch=+7  preserve=false      2416.6     1702.0     29.6%
+pitch=+7  preserve=true       3879.9     2803.4     27.7%
+pitch=+12 preserve=false      2874.8     1672.1     41.8%
+pitch=+12 preserve=true       4945.3     2783.5     43.7%
+
+# Conclusion: every pitch/formant setting improved by >20% (goal was 10%).
+# Quality: cargo test --locked --release (unit + spectral_quality + spectral_allocation) all passed.
