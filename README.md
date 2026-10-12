@@ -115,12 +115,11 @@ GUIにも `--device`、`--frames`、`--pitch`、`--formant`、`--formant-shift` 
 
 ソースコードからビルドするには、RustのWindows x64 MSVCツールチェーン、Visual C++ Build ToolsとWindows SDK、libclang、ASIO SDKが必要です。Rust は mise で入れられます（`mise.toml` の `rust`）。
 
-次のパスを各自のインストール先に置き換え、プロジェクトのルートで実行してください。`mise.toml` の `CPAL_ASIO_DIR` は `.tools/asiosdk` を指します。
+ASIO SDK は `.tools/asiosdk` に置きます（`common/asio.h` があること）。`.cargo/config.toml` と `mise.toml` の `CPAL_ASIO_DIR` がこのパスを指します。libclang が PATH にない場合は `mise.local.toml` か環境変数で `LIBCLANG_PATH` を指定してください。
 
 ```powershell
 mise install
-# libclang が PATH にない場合は mise.local.toml か環境変数で LIBCLANG_PATH を指定
-mise exec -- cargo build --release --locked
+cargo build --release --locked
 ```
 
 `target/release/` にGUIとCLIの実行ファイルが生成されます。
