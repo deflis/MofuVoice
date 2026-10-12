@@ -1,122 +1,129 @@
 # Rust Low-Latency Voice Changer
 
-## DSP性能の検証
+Windows向けのリアルタイムボイスチェンジャーです。GUIで音声デバイスを選び、声の高さとフォルマントの移動量を個別に設定できます。通常の操作はGUIで行い、CLIは設定確認や自動実行に利用できます。
 
-LPC自己相関を4 lagずつ計算し、各lagの加算順序を維持して処理時間を削減した。変更前DSPとのF32全ビット・I32/I16出力一致を `cargo test --release --locked --offline --test dsp_equivalence` で検証できる。既存の共鳴・ピッチ・再構成テストも継続する。
+## はじめに
 
-`. .\scripts\dev-env.ps1` の後、`cargo bench --bench dsp --locked --offline` で変更前後を同一プロセス内で比較する。48 kHz、512 frames、formant preserve、−12/−3/0/+3/+12半音、各11組を交互順序で測定し、各設定で処理時間の短縮率中央値10%以上を要求する。測定条件と結果はローカルに記録し、ログはバージョン管理に含めない。これはDSPのCPU処理時間であり、実機の総往復遅延や聴取品質は別途評価する。
+Windows x64と、48 kHzのフルデュプレックス入出力に対応したASIOドライバが必要です。実行ファイルを用意してから、次の手順で音声処理を開始します。ソースコードから実行ファイルを作成する場合は、末尾の「ビルド」を参照してください。
 
-Phase 4のLPCフォルマント補正を実装。`--pitch` で±12半音（小数可）を指定する。既定の0半音ではサンプルの全ビットを保持する遅延0のバイパス。補正は既定で有効。`--formant preserve` で元の声の共鳴を復元し、`--formant off` で無効にする。聴取品質は未検証。
+### 1. 起動する
 
-入出力を同一のフルデュプレックスASIOコールバックで処理し、入力1を同じbuffer indexの出力1へ送る。追加FIFOはない。その他の出力チャンネルは無音。ピッチ処理有効時にはDSPの循環バッファによる遅延がある。
+`rust-low-latency-voice-changer-gui.exe` をダブルクリックします。コンソールウィンドウは開きません。
 
-## 実行
+### 2. デバイスと音声の接続を準備する
 
-48 kHzに設定したフルデュプレックスASIOデバイスを使用する。既定バッファは512 samples。CLIでは `--list-devices` で登録名を確認し、`--device "ASIOデバイス名"` を明示指定する。GUIではデバイス欄から選択する。
+**Device** の一覧から使用するASIOデバイスを選びます。起動時は未選択です。
+
+デバイス側の設定でサンプルレートを **48 kHz** にし、マイクの信号を **入力1** に接続してください。アプリは入力1を処理して **出力1** へ送り、その他の出力は無音にします。
+
+出力1をヘッドホンなどのモニター先、または録音・通話・配信に使う音声入力へ接続します。接続方法はデバイスや音声ルーティング機能によって異なります。アプリは外部の接続設定を自動変更しません。出力を入力へ戻す接続は避けてください。
+
+### 3. 設定を確認する
+
+最初は **Frames = 512**、**Pitch = 0**、**Preserve formants = オン**、**Formant shift = 0** のままで **Inspect** を押します。
+
+下部の表示が `Inspection OK` になれば、デバイスの形式・レート・バッファサイズが対応しています。Inspectでは音声処理は始まりません。エラーの場合は表示内容を確認し、設定を直してから再度Inspectを押してください。
+
+### 4. 元の声で接続を確かめる
+
+**Start** を押し、マイクに向かって話します。下部に `Running` と表示され、出力先から元の声が聞こえることを確認してください。PitchとFormant shiftが両方0のときは、入力をそのまま返します。
+
+### 5. 声を変える
+
+**Stop** を押し、停止が完了して設定欄が操作できるようになったら、**Pitch** を変更して **Start** を押します。
+
+- `3`：声を3半音高くする
+- `-3`：声を3半音低くする
+- `0`：元の声の高さに戻す
+
+小数も指定できます。まずは小さな変更で試し、聞きながら調整してください。設定を変えるたびにStop → 設定変更 → Startの順で操作します。
+
+声の高さを保って響きを変えるには、Preserve formantsをオンにし、**Formant shift** を変更します。`3` は共鳴を高く、`-3` は低くし、`0` は元の共鳴を保持します。Pitchが0でも変更でき、Pitchと組み合わせても使えます。
+
+## 設定項目
+
+| 項目 | 使い方 |
+| --- | --- |
+| **Device** | 使用するASIOデバイスを選択します |
+| **Frames** | 音声バッファのサイズ。既定512。デバイスが対応する値を指定します |
+| **Pitch** | 声の高さ。−12〜+12半音、小数可。既定0 |
+| **Preserve formants** | オンにすると、ピッチ変更時に元の声の響きを保つ補正を行います。既定オン |
+| **Formant shift** | 声の共鳴の移動量。−12〜+12半音、小数可。既定0。非ゼロではPreserve formantsをオンにします |
+
+Preserve formantsをオフにすると、声の高さとともに響きも変わります。同じPitchでオン・オフを切り替えて聞き比べると違いを確認できます。オフのときにFormant shiftを非ゼロにするとエラーになります。PitchとFormant shiftが両方0のときは、この設定にかかわらず元の音声を返します。
+
+大きなフォルマント移動では響きの幅や音量も変わり、歪みが生じる場合があります。まず±2〜3半音程度で聞きながら調整してください。
+
+Framesを小さくすると音声処理の周期が短くなりますが、処理が間に合わず音が途切れる場合があります。まず対応するサイズで安定して使えることを確認し、必要に応じて小さくしてください。
+
+## 停止と終了
+
+**Stop** で音声処理を停止します。停止後にデバイスや声の設定を変更し、Startで再開できます。処理中は設定欄が無効になります。
+
+ウィンドウを閉じると音声処理を停止して終了します。ドライバの解放が完了するまで、閉じる処理に時間がかかる場合があります。
+
+## 困ったとき
+
+| 状況 | 確認すること |
+| --- | --- |
+| Deviceの一覧にデバイスがない | 使用するデバイスのASIOドライバがインストールされているか確認し、アプリを起動し直します |
+| Inspectでレートのエラーが出る | デバイス側を48 kHzに設定し直します。アプリはレートを変更しません |
+| Framesが非対応と表示される | 下部に表示されるバッファ範囲・推奨値を確認し、対応するサイズを指定します |
+| 形式が非対応と表示される | 全入出力チャンネルが同じlittle-endian f32、i32、またはi16形式に対応するデバイスが必要です |
+| Startしても声が聞こえない | マイクが入力1に届いているか、出力1が聞きたい出力先へ接続されているか確認します |
+| 元の声と変えた声が重なる | デバイスの直接モニターや、未処理マイクを出力する別経路を確認します |
+| 音が途切れる・異常で停止する | 下部のエラーを確認し、対応範囲内でFramesを大きくして再開します |
+| 声が歪む・揺れる | マイクの入力レベルを下げ、Pitchの変更幅を小さくして試します |
+
+下部には入力信号の累計、処理回数、ドライバのレイテンシ、異常などが表示されます。`nonzero input samples` が増えていれば入力信号が届いていますが、出力先で聞こえるかは実際に確認してください。
+
+Pitchが0でも、デバイスや音声の接続経路による遅延はあります。表示されるドライバのレイテンシは、マイクから出力先までの総遅延とは異なります。
+
+## CLIでの操作
+
+設定確認や時間を指定した実行には、補助ツールの `rust-low-latency-voice-changer-cli.exe` を使用できます。
 
 ```powershell
-# プロジェクトのルートディレクトリで実行
-# 動作確認GUI
-.\target\release\rust-low-latency-voice-changer-gui.exe
 .\target\release\rust-low-latency-voice-changer-cli.exe --list-devices
 .\target\release\rust-low-latency-voice-changer-cli.exe --device "ASIOデバイス名" --inspect
-.\target\release\rust-low-latency-voice-changer-cli.exe --device "ASIOデバイス名" --seconds 60
-# ±3半音を試す（通常実行の開始時に固定）
 .\target\release\rust-low-latency-voice-changer-cli.exe --device "ASIOデバイス名" --pitch 3 --seconds 60
-.\target\release\rust-low-latency-voice-changer-cli.exe --device "ASIOデバイス名" --pitch -3 --seconds 60
-# 補正なしとの比較
-.\target\release\rust-low-latency-voice-changer-cli.exe --device "ASIOデバイス名" --pitch 3 --formant off --seconds 60
-# Enterを押すまで実行
-.\target\release\rust-low-latency-voice-changer-cli.exe --device "ASIOデバイス名"
+.\target\release\rust-low-latency-voice-changer-cli.exe --device "ASIOデバイス名" --pitch 0 --formant-shift -3
 ```
 
-## 動作確認GUI
+`--seconds` を省略するとEnterで停止します。`--frames`、`--pitch`、`--formant preserve` または `--formant off`、`--formant-shift` で設定を指定できます。フォルマントシフトは−12〜+12半音、小数可、既定0です。詳細は `--help` を参照してください。
 
-`rust-low-latency-voice-changer-gui.exe` でWindowsのネイティブGUIを起動する。コンソールウィンドウは表示しない。登録済みASIOデバイスを選択し、frames、±12半音のピッチ（小数可）、Preserve formantsを設定する。デバイスは未選択で起動し、その他の初期値はCLIと同じ。`--device`、`--frames`、`--pitch`、`--formant` で起動時の値を指定できる。`--help` と起動引数のエラーはダイアログで表示する。`--seconds`、`--inspect`、`--list-devices` はGUI起動引数として拒否する。
-
-- **Inspect**：デバイス設定と指定framesの対応を確認する。音声バッファは作らない。
-- **Start**：入力1→出力1の音声処理を開始する。その他の出力は無音。
-- **Stop**：停止・ドライバ解放後に設定変更と再開ができる。実行中の設定欄は無効。
-
-100 msごとに実行時間、デバイス形式・レート、frames、ドライバ報告レイテンシ、入力累計、コールバック数、最大処理時間、処理期限超過、sample-position不連続、異常フラグを表示する。終了後も最終統計を保持する。ウィンドウを閉じると停止を要求し、音声スレッドとドライバの解放を待つ。
-
-`src/gui.rs` の専用スレッドがCOM初期化とASIOのロード・設定照会・開始・停止・解放を所有する。DSPは音声コールバックで処理し、GUIのロック・文字列生成・待機をコールバックに入れない。
-
-GUI操作の実機スモークテストは `scripts/gui-smoke.ps1 -Device "ASIOデバイス名" -Frames 512 -RunSeconds 3`。対象デバイスを48 kHzに設定し、対応するframesを指定する。設定確認、不正frames、存在しないデバイス、0/+3/−3半音での開始・停止・再開、設定欄の無効化、再生中の終了を検証する。聴取・録音による音質や総遅延の評価は別途行う。
-
-CLIは独立した実行ファイル `rust-low-latency-voice-changer-cli.exe`。`--list-devices` はドライバを開かずに登録名を取得する。`--inspect --device "ASIOデバイス名"` は指定ドライバを初期化してチャンネル形式・レート・バッファ範囲を照会し、音声バッファを作成せず、レートも変更しない。非対応設定はエラー終了し、他設定へ自動で切り替えない。
-
-## 音声のルーティング
-
-マイク信号を選択したASIOデバイスの入力1へ送り、出力1をモニターや録音・配信先へ接続する。接続方法は利用するデバイスや音声ルーティング環境に合わせて設定する。
-
-アプリはモノラルの入力1→出力1を扱い、その他の出力は無音。出力を入力へ再送しない。直接モニターと未処理マイクの別経路がある場合、処理後の音声との二重再生を避ける。アプリは外部のルーティング設定を自動変更しない。
-
-## 遅延
-
-| 項目 | 現在の値 |
-| --- | --- |
-| DSPバイパス遅延 | 0 samples（0半音で全ビット保持） |
-| ピッチ処理の読み出し遅延 | 2〜478 samples / 0.042〜9.958 ms。中心240 samples / 5 ms。固定遅延ではない |
-| 追加FIFO遅延 | 0 samples。FIFOを除去 |
-| ASIO処理周期 | frames / 48000秒（512 framesなら10.667 ms） |
-| ドライバ報告入力レイテンシ | デバイス・設定に依存。起動後に表示 |
-| ドライバ報告出力レイテンシ | デバイス・設定に依存。起動後に表示 |
-| 実総往復遅延 | 利用環境での測定が必要 |
-
-ドライバ報告値は起動後に `ASIOGetLatencies` から取得する。処理周期やこれらの値の単純加算を実総往復遅延とは扱わない。64 samplesでの動作可否はデバイスの対応範囲と設定に依存し、利用環境で検証する必要がある。DSP内部5 ms以下と総往復5 msは別の目標。
-
-## ピッチ処理と制約
-
-`src/pitch.rs` は48 kHz固定、512サンプルの事前確保循環バッファ、半周期ずらした2つの読み出しヘッド、線形補間、相補Hannクロスフェードを使う。比率は `2^(semitones/12)`。遅延の変化量を `1 - ratio` とすることで読み出し速度を変える。[可変遅延の原理](https://www.dsprelated.com/freebooks/pasp/Time_Varying_Delay_Line_Reads.html)を参照。
-
-ライブラリの `set_semitones` は現在値から20 msで比率を平滑化し、0半音への出入りは10 msでdry/wetをフェードする。復帰後は遅延0のビット保持バイパス。CLI・GUIともストリーム開始時の値を固定する。GUIでは停止して設定変更・再開できる。ASIO制御スレッドからDSPを直接変更しない。
-
-短い窓では低音、過渡音、大幅な変更に揺れ、振幅変調、副成分が出る。窓に周期が一致しない信号の主要周波数も理想比率からずれる場合がある。線形補間は高域を減衰させ、ピッチアップ時のエイリアシングを防ぐフィルタも未実装。±12半音の範囲対応は音質保証を意味しない。DSP最大遅延5 ms以下の目標は未達で、高音質モードは未実装。
-
-wet側の履歴は初期値0で、開始直後は過去入力に対応する無音を読む。F32ではNaN/Infをwet側だけ0として扱い、履歴への伝播を防ぐ。整数のwet処理はf64正規化、丸め・飽和変換を使い、0半音の出力は数値変換しない。
-
-## フォルマント補正
-
-`src/formant.rs` は32次LPCの音源・フィルタ分離を行う。直前1024 samples（21.333 ms）のHann窓から128 samples（2.667 ms）ごとに自己相関とLevinson–Durbin法で共鳴モデルを推定する。逆ラティスで残差を取り出し、既存のピッチシフターで残差だけを変調し、元の共鳴モデルで再合成する。[LPCスペクトル包絡](https://www.dsprelated.com/freebooks/sasp/Spectral_Envelope_Extraction.html)と[分析・合成の例](https://www.mathworks.com/help/audio/ug/lpc-analysis-and-synthesis-of-speech.html)を参照。
-
-反射係数を±0.995以内に制限し、128 samplesで線形補間する。IIR多項式の直接補間はしない。自己相関の対角正則化と35 HzのGaussian lag taperで鋭すぎる共鳴を抑える。無音の窓では係数を0へ戻す。wet出力は±1にクリップし、内部状態はクリップしない。過大入力では歪みが生じる。履歴・分析用配列・窓・lag taperは開始前に確保・計算し、コールバック内の動的確保・指数計算はない。
-
-過去の入力のみを使い、先読みや追加ブロック待機はない。21.333 msは分析窓の長さで、声の変化への追従時間に影響する。フィルタには周波数依存の位相遅延と残響があり、補正時の全DSP応答が2〜478 samples以内で終わるという意味ではない。0半音では補正の内部状態を更新しつつ、元サンプルをそのまま返す。
-
-独立したフォルマント上下移動パラメータはない。1500 Hz共鳴の合成雑音モデルで±3半音の補正を検証したが、実声の母音・子音・急変・大幅なピッチ変更の品質は未検証。既存ピッチシフターの副成分やエイリアシングは残る。
-
-## 状態表示と停止
-
-毎秒と終了時に、フルデュプレックスブロック数、frames、非ゼロ入力累計、最大コールバック時間、周期を超えた処理数、有効なsample-position付きブロック数、位置の不連続数、ドライバ通知フラグを表示する。
-
-`timestamp blocks=0` ならsample-positionによる欠落判定は利用できていない。`nonzero input samples=0` ならマイク信号到達は未確認。非ゼロ入力や終了コード0だけで音声品質を保証しない。レイテンシ変更通知は制御スレッドで再照会し、reset/resync/レート変更/クロック変更/overload/不正なbuffer index/コールバック再入は停止理由として記録する。2秒のコールバック停止、処理期限超過、sample-position不連続も失敗として扱う。
-
-終了時は処理を無効化→ASIOStop→状態ポインタ解除→実行中コールバックの終了待ち→ASIODisposeBuffers→ドライバ解放。初期化途中の失敗でも終了処理を行う。再設定通知を受けた場合は設定を確認して再起動する。
+GUIにも `--device`、`--frames`、`--pitch`、`--formant`、`--formant-shift` で起動時の値を渡せます。通常はウィンドウ内で設定できます。
 
 ## ビルド
 
+ソースコードからビルドするには、RustのWindows x64 MSVCツールチェーン、Visual C++ Build ToolsとWindows SDK、libclang、ASIO SDKが必要です。
+
+次のパスを各自のインストール先に置き換え、プロジェクトのルートで実行してください。
+
 ```powershell
-. .\scripts\dev-env.ps1
-cargo check --locked
+$env:CPAL_ASIO_DIR = "<ASIO SDKのルートディレクトリ>"
+$env:LIBCLANG_PATH = "<libclang.dllのディレクトリ>"
 cargo build --release --locked
-cargo test --locked
-cargo clippy --all-targets --locked -- -D warnings
-cargo fmt --check
 ```
 
-リリースビルドで `target/release/rust-low-latency-voice-changer-cli.exe` と `target/release/rust-low-latency-voice-changer-gui.exe` が生成される。個別にビルド/実行する場合は `cargo build --release --locked --bin rust-low-latency-voice-changer-gui`、`cargo run --release --locked --bin rust-low-latency-voice-changer-cli -- --inspect --device "ASIOデバイス名"` のように指定する。入口は `src/bin/cli.rs` と `src/bin/gui.rs`、共通コードは `src/lib.rs` のモジュールとして共有する。
+`target/release/` にGUIとCLIの実行ファイルが生成されます。
 
-ビルドにはWindows x64 Rust MSVC、rustfmt、Clippy、Visual C++ Build ToolsとWindows SDK、libclang、ASIO SDKを用意する。ASIO SDKのパスを `CPAL_ASIO_DIR`、libclang DLLのディレクトリを `LIBCLANG_PATH` に設定する。
+<details>
+<summary>開発者向けの検証</summary>
 
-上記の `dev-env.ps1` は `.tools` 内にローカルツールチェーンを配置した開発環境向けで、現在のPowerShellセッションだけを設定する。既存のツールチェーンを使用する場合はこの行を省略し、必要な環境変数を設定してCargoコマンドを実行する。
+フォルマントシフトは分析側のLPCフィルタを維持し、自己相関のラグ軸を移動して合成側のフィルタを作ります。有限次数と線形補間による近似のため、大きな移動や高域では精度が低下します。反射係数を制限・補間し、コールバック内では固定サイズの領域だけを使います。非ゼロのシフトには追加の分析処理が必要です。
 
-依存関係はasio-sys 0.2.6、ビルド用cc。Cargo.lockで固定。asio-sysはドライバのロード/解放とSDKバインディングに使用し、同クレートの高水準ストリームやMutex付きコールバックは使用しない。native/asio_extra.cppはレイテンシ照会のC++ ABIをC ABIへ橋渡しする小さなファイル。
+テストでは共鳴の移動、ピッチとの独立性、ブロック分割、引数検証、シフト0での参照DSPとのビット一致を確認します。既存の比較ベンチマークはシフト0が対象です。
 
-src/lib.rsは共通モジュールを公開し、src/pitch.rs、src/formant.rsのDSPはASIOから独立する。src/asio.rsのunsafeはドライバ所有ダブルバッファ、SDK ABI、コールバック寿命、排他的なDSP状態アクセスの境界に限定する。DSPはUnsafeCellに置き、既存のprocessingアトミックガードでコールバック再入を拒否する。初期化時に全チャンネル形式、ポインタのNULL/整列/領域重複を検証する。対応形式は同一のlittle-endian f32/i32/i16。
+```powershell
+cargo check --locked
+cargo test --locked
+cargo test --release --locked --test dsp_equivalence
+cargo clippy --all-targets --locked -- -D warnings
+cargo fmt --check
+cargo bench --locked --bench dsp
+```
 
-アプリのデータコールバックには動的確保、Mutex、ログ、ファイルアクセス、待機を置かない。ドライバ内部の実装は制御できない。処理時間はInstantの壁時計計測で、OSスケジューリングの影響も含む。
+GUIの実機テストは `scripts/gui-smoke.ps1 -Device "ASIOデバイス名" -Frames 512 -RunSeconds 3` で実行できます。対象デバイスを48 kHzに設定し、対応するバッファサイズを指定してください。このテストは実際に音声処理を開始します。音声品質と総遅延は聴取・録音で確認し、ログはバージョン管理に含めません。
 
-## 自動テスト
-
-自動テストはLPC再構成、共鳴保持、補正有効時のピッチ比・ブロック分割・無音・過大入力・非有限値・整数形式・設定再変更・バイパス復帰に加え、±3/±12半音の周波数、短窓の副成分を含む主要周波数、インパルス遅延範囲、無音、1/7/64/512/8192サンプルのブロック分割、パラメータ再変更、バイパス復帰、整数変換、不正なCLI値を検証する。低周波テスト信号での変化幅制約は、すべての入力でクリックが聞こえないことの保証ではない。
+</details>
