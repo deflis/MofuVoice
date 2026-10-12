@@ -4,6 +4,7 @@ pub mod cli;
 pub mod gui;
 mod gui_settings;
 pub mod pitch;
+pub mod spectrum;
 pub const RATE: u32 = 48_000;
 pub const DEFAULT_FRAMES: u32 = 512;
 pub const TARGET_FRAMES: u32 = 64;

@@ -1,6 +1,6 @@
 //! UI callbacks run on the main thread. The worker owns the entire ASIO lifetime;
 //! driver callbacks own DSP. No GUI locks or messages occur in audio callbacks.
-use crate::{asio, cli::Options, gui_settings};
+use crate::{asio, cli::Options, gui_settings, spectrum::SpectrumController};
 use std::{
     error::Error,
     ffi::c_void,
@@ -36,6 +36,11 @@ unsafe extern "C" {
         start: extern "C" fn(*mut c_void, *const u16, *const u16, *const u16, *const u16, i32, i32),
         stop: extern "C" fn(*mut c_void),
         poll: extern "C" fn(*mut c_void, *mut u16, usize) -> i32,
+        spectrum_open: extern "C" fn(*mut c_void) -> i32,
+        spectrum_close: extern "C" fn(*mut c_void),
+        spectrum_set_wideband: extern "C" fn(*mut c_void, i32),
+        spectrum_set_frozen: extern "C" fn(*mut c_void, i32),
+        spectrum_poll: extern "C" fn(*mut c_void, *mut u8, usize, *mut u64) -> i32,
     ) -> u32;
 }
 
@@ -66,6 +71,8 @@ struct Session {
     worker: Option<JoinHandle<()>>,
     stop: Arc<AtomicBool>,
     status: Arc<Mutex<String>>,
+    spectrum: Option<SpectrumController>,
+    spectrum_generation: u64,
 }
 impl Session {
     fn new(settings_path: PathBuf) -> Self {
@@ -74,6 +81,8 @@ impl Session {
             worker: None,
             stop: Arc::new(AtomicBool::new(false)),
             status: Arc::new(Mutex::new("Ready. Inspect settings or start audio.".into())),
+            spectrum: None,
+            spectrum_generation: 0,
         }
     }
     fn start(&mut self, options: Options) {
@@ -309,6 +318,76 @@ extern "C" fn poll(context: *mut c_void, output: *mut u16, capacity: usize) -> i
     }
     i32::from(busy)
 }
+extern "C" fn spectrum_open(context: *mut c_void) -> i32 {
+    // SAFETY: UI thread exclusively owns Session for the native message loop.
+    let session = unsafe { &mut *context.cast::<Session>() };
+    if session.spectrum.is_some() {
+        return 1;
+    }
+    match SpectrumController::start() {
+        Ok(controller) => {
+            session.spectrum_generation = 0;
+            session.spectrum = Some(controller);
+            1
+        }
+        Err(error) => {
+            set_status(&session.status, format!("ERROR: {error}"));
+            0
+        }
+    }
+}
+extern "C" fn spectrum_close(context: *mut c_void) {
+    // SAFETY: see spectrum_open.
+    let session = unsafe { &mut *context.cast::<Session>() };
+    session.spectrum = None;
+    session.spectrum_generation = 0;
+}
+extern "C" fn spectrum_set_wideband(context: *mut c_void, wideband: i32) {
+    // SAFETY: see spectrum_open.
+    let session = unsafe { &mut *context.cast::<Session>() };
+    if let Some(spectrum) = &session.spectrum {
+        spectrum.set_wideband(wideband != 0);
+    }
+}
+extern "C" fn spectrum_set_frozen(context: *mut c_void, frozen: i32) {
+    // SAFETY: see spectrum_open.
+    let session = unsafe { &mut *context.cast::<Session>() };
+    if let Some(spectrum) = &session.spectrum {
+        spectrum.set_frozen(frozen != 0);
+    }
+}
+extern "C" fn spectrum_poll(
+    context: *mut c_void,
+    pixels: *mut u8,
+    capacity: usize,
+    generation: *mut u64,
+) -> i32 {
+    // SAFETY: UI thread owns Session; pixels/generation are writable buffers from the native window.
+    let session = unsafe { &mut *context.cast::<Session>() };
+    let Some(spectrum) = &session.spectrum else {
+        return 0;
+    };
+    let need = crate::spectrum::IMAGE_WIDTH
+        * crate::spectrum::IMAGE_HEIGHT
+        * crate::spectrum::BYTES_PER_PIXEL;
+    if capacity < need || pixels.is_null() || generation.is_null() {
+        set_status(
+            &session.status,
+            "ERROR: Spectrum poll received an undersized or null image buffer.".into(),
+        );
+        return 0;
+    }
+    let last = unsafe { *generation };
+    let mut last_generation = last;
+    let pixels = unsafe { std::slice::from_raw_parts_mut(pixels, need) };
+    if spectrum.copy_image(pixels, &mut last_generation) {
+        session.spectrum_generation = last_generation;
+        unsafe { *generation = last_generation };
+        1
+    } else {
+        0
+    }
+}
 /// Load preferences, then apply only explicitly supplied GUI arguments.
 pub fn initial_options(args: impl IntoIterator<Item = String>) -> Result<Options, Box<dyn Error>> {
     let args: Vec<_> = args.into_iter().collect();
@@ -341,6 +420,11 @@ pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
             start,
             stop,
             poll,
+            spectrum_open,
+            spectrum_close,
+            spectrum_set_wideband,
+            spectrum_set_frozen,
+            spectrum_poll,
         )
     };
     if error != 0 {
