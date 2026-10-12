@@ -194,8 +194,7 @@ impl Fft {
         data: &mut [Complex; N],
         scale: Option<f64>,
     ) {
-        for i in 0..N {
-            let j = reverse[i];
+        for (i, &j) in reverse.iter().enumerate() {
             if i < j {
                 data.swap(i, j);
             }
