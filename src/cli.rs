@@ -1,3 +1,4 @@
+use crate::gate::{validate_time_ms, GateThreshold};
 use std::error::Error;
 
 #[derive(Debug, PartialEq)]
@@ -8,6 +9,10 @@ pub struct Options {
     pub pitch: f64,
     pub preserve_formants: bool,
     pub formant_shift: f64,
+    pub gate: bool,
+    pub gate_threshold: GateThreshold,
+    pub gate_attack_ms: f64,
+    pub gate_release_ms: f64,
     pub list: bool,
     pub inspect: bool,
     pub help: bool,
@@ -22,6 +27,10 @@ impl Options {
             pitch: 0.0,
             preserve_formants: true,
             formant_shift: 0.0,
+            gate: false,
+            gate_threshold: GateThreshold::Auto,
+            gate_attack_ms: 5.0,
+            gate_release_ms: 80.0,
             list: false,
             inspect: false,
             help: false,
@@ -32,6 +41,10 @@ impl Options {
         let mut pitch_given = false;
         let mut formant_given = false;
         let mut shift_given = false;
+        let mut gate_given = false;
+        let mut gate_threshold_given = false;
+        let mut gate_attack_given = false;
+        let mut gate_release_given = false;
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--formant-shift" if !shift_given => {
@@ -55,6 +68,37 @@ impl Options {
                     options.pitch = args.next().ok_or("--pitch requires semitones")?.parse()?;
                     crate::pitch::pitch_ratio(options.pitch)?;
                     pitch_given = true;
+                }
+                "--gate" if !gate_given => {
+                    options.gate = match args.next().as_deref() {
+                        Some("on") => true,
+                        Some("off") => false,
+                        _ => return Err("--gate requires on or off".into()),
+                    };
+                    gate_given = true;
+                }
+                "--gate-threshold" if !gate_threshold_given => {
+                    let value = args
+                        .next()
+                        .ok_or("--gate-threshold requires auto or a dB value")?;
+                    options.gate_threshold = GateThreshold::parse(&value)?;
+                    gate_threshold_given = true;
+                }
+                "--gate-attack" if !gate_attack_given => {
+                    options.gate_attack_ms = args
+                        .next()
+                        .ok_or("--gate-attack requires milliseconds")?
+                        .parse()?;
+                    validate_time_ms(options.gate_attack_ms)?;
+                    gate_attack_given = true;
+                }
+                "--gate-release" if !gate_release_given => {
+                    options.gate_release_ms = args
+                        .next()
+                        .ok_or("--gate-release requires milliseconds")?
+                        .parse()?;
+                    validate_time_ms(options.gate_release_ms)?;
+                    gate_release_given = true;
                 }
                 "--device" if !device_given => {
                     options.device = args
@@ -95,21 +139,27 @@ impl Options {
         if !options.preserve_formants && options.formant_shift != 0.0 {
             return Err(crate::pitch::InvalidFormant.to_string().into());
         }
+        let gate_tuned = gate_threshold_given || gate_attack_given || gate_release_given;
         let modes =
             usize::from(options.list) + usize::from(options.inspect) + usize::from(options.help);
         if modes > 1
             || (modes > 0
-                && (options.seconds.is_some() || pitch_given || formant_given || shift_given))
+                && (options.seconds.is_some()
+                    || pitch_given
+                    || formant_given
+                    || shift_given
+                    || gate_given
+                    || gate_tuned))
             || ((options.list || options.help) && (device_given || frames_given))
         {
-            return Err("Choose one CLI mode: --help, --list-devices, --inspect [--device NAME] [--frames N], or [--device NAME] [--frames N] [--seconds N] [--pitch SEMITONES] [--formant preserve|off] [--formant-shift SEMITONES]".into());
+            return Err("Choose one CLI mode: --help, --list-devices, --inspect [--device NAME] [--frames N], or [--device NAME] [--frames N] [--seconds N] [--pitch SEMITONES] [--formant preserve|off] [--formant-shift SEMITONES] [--gate on|off] [--gate-threshold auto|DB] [--gate-attack MS] [--gate-release MS]".into());
         }
         Ok(options)
     }
     pub fn parse_gui(args: impl IntoIterator<Item = String>) -> Result<Self, Box<dyn Error>> {
         let options = Self::parse(args)?;
         if options.seconds.is_some() || options.inspect || options.list {
-            return Err("GUI accepts only --device NAME, --frames N, --pitch SEMITONES, --formant preserve|off, --formant-shift SEMITONES, or --help".into());
+            return Err("GUI accepts only --device NAME, --frames N, --pitch SEMITONES, --formant preserve|off, --formant-shift SEMITONES, --gate on|off, --gate-threshold auto|DB, --gate-attack MS, --gate-release MS, or --help".into());
         }
         Ok(options)
     }
@@ -148,6 +198,38 @@ mod tests {
             assert!(parse(&args).is_err(), "{args:?}");
         }
         assert!(parse(&["--formant", "off", "--formant-shift", "0"]).is_ok());
+    }
+
+    #[test]
+    fn parses_gate_options() {
+        let options = parse(&[
+            "--gate",
+            "on",
+            "--gate-threshold",
+            "-35",
+            "--gate-attack",
+            "3",
+            "--gate-release",
+            "120",
+        ])
+        .unwrap();
+        assert!(options.gate);
+        assert_eq!(options.gate_threshold, GateThreshold::Db(-35.0));
+        assert_eq!(options.gate_attack_ms, 3.0);
+        assert_eq!(options.gate_release_ms, 120.0);
+        assert_eq!(parse(&[]).unwrap().gate_threshold, GateThreshold::Auto);
+        assert!(!parse(&[]).unwrap().gate);
+        for args in [
+            vec!["--gate"],
+            vec!["--gate", "maybe"],
+            vec!["--gate-threshold"],
+            vec!["--gate-threshold", "loud"],
+            vec!["--gate-attack", "0"],
+            vec!["--gate-release", "NaN"],
+            vec!["--gate", "on", "--help"],
+        ] {
+            assert!(parse(&args).is_err(), "{args:?}");
+        }
     }
 
     #[test]

@@ -12,10 +12,12 @@
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "dwmapi.lib")
 
-using Start = void (*)(void *, const wchar_t *, const wchar_t *, const wchar_t *, const wchar_t *, int, int);
+using Start = void (*)(void *, const wchar_t *, const wchar_t *, const wchar_t *, const wchar_t *,
+                       int, int, const wchar_t *, const wchar_t *, const wchar_t *, int);
 using Stop = void (*)(void *);
 using Poll = int (*)(void *, wchar_t *, size_t);
-using Save = int (*)(void *, const wchar_t *, const wchar_t *, const wchar_t *, const wchar_t *, int);
+using Save = int (*)(void *, const wchar_t *, const wchar_t *, const wchar_t *, const wchar_t *,
+                     int, int, const wchar_t *, const wchar_t *, const wchar_t *);
 using SpectrumOpen = int (*)(void *);
 using SpectrumClose = void (*)(void *);
 using SpectrumSetWideband = void (*)(void *, int);
@@ -28,7 +30,8 @@ enum {
 enum { SPEC_WIDE = 301, SPEC_NARROW, SPEC_FREEZE };
 enum {
     SET_DEVICE = 201, SET_FRAMES = 202, SET_PITCH = 203, SET_FORMANT = 204,
-    SET_SHIFT = 206, SET_PITCH_SLIDER = 207, SET_SHIFT_SLIDER = 208
+    SET_SHIFT = 206, SET_PITCH_SLIDER = 207, SET_SHIFT_SLIDER = 208,
+    SET_GATE = 210, SET_GATE_THRESHOLD, SET_GATE_ATTACK, SET_GATE_RELEASE
 };
 enum { STATUS_DETAIL = 205, STATUS_SUMMARY = 209 };
 enum { SPEC_W = 720, SPEC_H = 400, SPEC_BPP = 4 };
@@ -63,6 +66,10 @@ struct Gui {
     std::wstring pitch_value;
     std::wstring shift_value;
     int preserve_value = 1;
+    int gate_value = 0;
+    std::wstring gate_threshold_value;
+    std::wstring gate_attack_value;
+    std::wstring gate_release_value;
     HWND main = nullptr;
     HWND settings_window = nullptr;
     HWND status_window = nullptr;
@@ -70,6 +77,7 @@ struct Gui {
     HWND status_summary = nullptr;
     HWND status_detail = nullptr;
     HWND device = nullptr, frames = nullptr, pitch = nullptr, formant = nullptr, shift = nullptr;
+    HWND gate_enabled = nullptr, gate_threshold = nullptr, gate_attack = nullptr, gate_release = nullptr;
     HWND pitch_slider = nullptr, shift_slider = nullptr;
     HWND start_button = nullptr, stop_button = nullptr, inspect_button = nullptr;
     HWND spectrum_button = nullptr, settings_button = nullptr, status_button = nullptr;
@@ -174,12 +182,18 @@ static void pull_settings_from_controls(Gui &gui) {
     gui.shift_value = text_of(gui.shift);
     if (gui.formant)
         gui.preserve_value = SendMessageW(gui.formant, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    if (gui.gate_enabled)
+        gui.gate_value = SendMessageW(gui.gate_enabled, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    gui.gate_threshold_value = text_of(gui.gate_threshold);
+    gui.gate_attack_value = text_of(gui.gate_attack);
+    gui.gate_release_value = text_of(gui.gate_release);
 }
 
 static void set_settings_enabled(Gui &gui, bool enabled) {
     if (!gui.settings_window) return;
     for (HWND item : {gui.device, gui.frames, gui.pitch, gui.formant, gui.shift,
-                      gui.pitch_slider, gui.shift_slider}) {
+                      gui.pitch_slider, gui.shift_slider,
+                      gui.gate_enabled, gui.gate_threshold, gui.gate_attack, gui.gate_release}) {
         if (item) EnableWindow(item, enabled);
     }
 }
@@ -565,8 +579,23 @@ static LRESULT CALLBACK settings_proc(HWND window, UINT message, WPARAM wp, LPAR
             ES_AUTOHSCROLL | WS_TABSTOP, 416, 248, 84, 28, SET_SHIFT, WS_EX_CLIENTEDGE);
         SendMessageW(gui->shift, EM_SETLIMITTEXT, 32, 0);
 
+        gui->gate_enabled = control(window, *gui, L"BUTTON", L"Noise gate",
+            BS_AUTOCHECKBOX | WS_TABSTOP, 140, 296, 240, 28, SET_GATE);
+        SendMessageW(gui->gate_enabled, BM_SETCHECK,
+            gui->gate_value ? BST_CHECKED : BST_UNCHECKED, 0);
+        gui->gate_threshold = control(window, *gui, L"EDIT", gui->gate_threshold_value.c_str(),
+            ES_AUTOHSCROLL | WS_TABSTOP, 140, 336, 100, 28, SET_GATE_THRESHOLD, WS_EX_CLIENTEDGE);
+        SendMessageW(gui->gate_threshold, EM_SETLIMITTEXT, 32, 0);
+        gui->gate_attack = control(window, *gui, L"EDIT", gui->gate_attack_value.c_str(),
+            ES_AUTOHSCROLL | WS_TABSTOP, 140, 376, 100, 28, SET_GATE_ATTACK, WS_EX_CLIENTEDGE);
+        SendMessageW(gui->gate_attack, EM_SETLIMITTEXT, 32, 0);
+        gui->gate_release = control(window, *gui, L"EDIT", gui->gate_release_value.c_str(),
+            ES_AUTOHSCROLL | WS_TABSTOP, 400, 376, 100, 28, SET_GATE_RELEASE, WS_EX_CLIENTEDGE);
+        SendMessageW(gui->gate_release, EM_SETLIMITTEXT, 32, 0);
+
         if (!gui->device || !gui->frames || !gui->pitch || !gui->formant || !gui->shift
-            || !gui->pitch_slider || !gui->shift_slider) {
+            || !gui->pitch_slider || !gui->shift_slider
+            || !gui->gate_enabled || !gui->gate_threshold || !gui->gate_attack || !gui->gate_release) {
             if (!gui->error) gui->error = GetLastError();
             return -1;
         }
@@ -589,7 +618,11 @@ static LRESULT CALLBACK settings_proc(HWND window, UINT message, WPARAM wp, LPAR
         draw_label(dc, gui->font_small, theme::muted, 20, 184, 480, 20,
             L"Slider and value: -12 to +12 semitones");
         draw_label(dc, gui->font, theme::muted, 20, 248, 110, 28, L"Formant shift");
-        draw_label(dc, gui->font_small, theme::muted, 20, 288, 480, 40,
+        draw_label(dc, gui->font, theme::muted, 20, 336, 110, 28, L"Threshold");
+        draw_label(dc, gui->font_small, theme::muted, 260, 336, 240, 28, L"auto or dB (-90..0)");
+        draw_label(dc, gui->font, theme::muted, 20, 376, 110, 28, L"Attack ms");
+        draw_label(dc, gui->font, theme::muted, 280, 376, 110, 28, L"Release ms");
+        draw_label(dc, gui->font_small, theme::muted, 20, 416, 480, 40,
             L"Stop before changing settings. Values stay until the next Start.");
         EndPaint(window, &ps);
         return 0;
@@ -634,7 +667,9 @@ static LRESULT CALLBACK settings_proc(HWND window, UINT message, WPARAM wp, LPAR
             if (id == SET_PITCH) sync_slider_from_edit(*gui, gui->pitch, gui->pitch_slider);
             else sync_slider_from_edit(*gui, gui->shift, gui->shift_slider);
             pull_settings_from_controls(*gui);
-        } else if (id == SET_DEVICE || id == SET_FRAMES || id == SET_FORMANT) {
+        } else if (id == SET_DEVICE || id == SET_FRAMES || id == SET_FORMANT
+            || id == SET_GATE || id == SET_GATE_THRESHOLD || id == SET_GATE_ATTACK
+            || id == SET_GATE_RELEASE) {
             pull_settings_from_controls(*gui);
         }
         return 0;
@@ -647,6 +682,7 @@ static LRESULT CALLBACK settings_proc(HWND window, UINT message, WPARAM wp, LPAR
         pull_settings_from_controls(*gui);
         gui->device = gui->frames = gui->pitch = gui->formant = gui->shift = nullptr;
         gui->pitch_slider = gui->shift_slider = nullptr;
+        gui->gate_enabled = gui->gate_threshold = gui->gate_attack = gui->gate_release = nullptr;
         gui->settings_window = nullptr;
         return 0;
     }
@@ -670,7 +706,7 @@ static void open_settings_window(HWND parent, Gui &gui) {
         gui.error = GetLastError();
         return;
     }
-    RECT bounds{0, 0, 520, 360};
+    RECT bounds{0, 0, 520, 472};
     DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
     AdjustWindowRect(&bounds, style, FALSE);
     gui.settings_window = CreateWindowExW(0, class_name, L"Settings", style,
@@ -774,7 +810,9 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM
             pull_settings_from_controls(*gui);
             gui->start(gui->context, gui->device_value.c_str(), gui->frames_value.c_str(),
                 gui->pitch_value.c_str(), gui->shift_value.c_str(),
-                gui->preserve_value, LOWORD(wp) == INSPECT);
+                gui->preserve_value, gui->gate_value,
+                gui->gate_threshold_value.c_str(), gui->gate_attack_value.c_str(),
+                gui->gate_release_value.c_str(), LOWORD(wp) == INSPECT);
             refresh(window, *gui);
         } else if (LOWORD(wp) == STOP) {
             gui->stop(gui->context);
@@ -794,7 +832,9 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM
         if (gui->closing) return 0;
         pull_settings_from_controls(*gui);
         if (!gui->save(gui->context, gui->device_value.c_str(), gui->frames_value.c_str(),
-            gui->pitch_value.c_str(), gui->shift_value.c_str(), gui->preserve_value)) return 0;
+            gui->pitch_value.c_str(), gui->shift_value.c_str(), gui->preserve_value,
+            gui->gate_value, gui->gate_threshold_value.c_str(), gui->gate_attack_value.c_str(),
+            gui->gate_release_value.c_str())) return 0;
         if (gui->spectrum_window) DestroyWindow(gui->spectrum_window);
         if (gui->settings_window) DestroyWindow(gui->settings_window);
         if (gui->status_window) DestroyWindow(gui->status_window);
@@ -813,6 +853,7 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM
 
 extern "C" unsigned long voice_gui_run(void *context, const wchar_t *device,
     const wchar_t *devices, const wchar_t *frames, const wchar_t *pitch, const wchar_t *shift, int preserve,
+    int gate, const wchar_t *gate_threshold, const wchar_t *gate_attack, const wchar_t *gate_release,
     Save save, Start start, Stop stop, Poll poll,
     SpectrumOpen spectrum_open, SpectrumClose spectrum_close,
     SpectrumSetWideband spectrum_set_wideband, SpectrumSetFrozen spectrum_set_frozen,
@@ -837,6 +878,10 @@ extern "C" unsigned long voice_gui_run(void *context, const wchar_t *device,
     gui.pitch_value = pitch ? pitch : L"";
     gui.shift_value = shift ? shift : L"";
     gui.preserve_value = preserve;
+    gui.gate_value = gate;
+    gui.gate_threshold_value = gate_threshold ? gate_threshold : L"";
+    gui.gate_attack_value = gate_attack ? gate_attack : L"";
+    gui.gate_release_value = gate_release ? gate_release : L"";
     gui.bg_brush = CreateSolidBrush(theme::bg);
     gui.surface_brush = CreateSolidBrush(theme::surface);
     gui.edit_brush = CreateSolidBrush(theme::surface);

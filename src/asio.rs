@@ -1,5 +1,6 @@
 //! Direct ASIO buffer callbacks. asio-sys is used only to load/unload the driver.
 use crate::{
+    gate::{GateSettings, NoiseGate},
     pitch::{PitchShifter, Sample, LATENCY},
     RATE,
 };
@@ -168,6 +169,8 @@ struct CallbackState {
     output_ready: AtomicBool,
     last_position: AtomicU64,
     metrics: Metrics,
+    gate: UnsafeCell<NoiseGate>,
+    scratch: UnsafeCell<Vec<f32>>,
     pitch: UnsafeCell<PitchShifter>,
 }
 impl CallbackState {
@@ -185,7 +188,26 @@ impl CallbackState {
             if channel == 0 {
                 // SAFETY: only the callback holding the processing guard accesses DSP.
                 // The control thread never reads or mutates it during streaming.
-                nonzero = unsafe { &mut *self.pitch.get() }.process_block(input, output);
+                let gate = unsafe { &mut *self.gate.get() };
+                let pitch = unsafe { &mut *self.pitch.get() };
+                if gate.enabled() {
+                    // Scratch is frames of f32 storage; reinterpret as T (f32/i32/i16 all fit).
+                    let scratch = unsafe {
+                        let storage = &mut *self.scratch.get();
+                        debug_assert!(
+                            std::mem::size_of_val(storage.as_slice())
+                                >= self.frames * std::mem::size_of::<T>()
+                        );
+                        std::slice::from_raw_parts_mut(
+                            storage.as_mut_ptr().cast::<T>(),
+                            self.frames,
+                        )
+                    };
+                    gate.process_block(input, scratch);
+                    nonzero = pitch.process_block(scratch, output);
+                } else {
+                    nonzero = pitch.process_block(input, output);
+                }
                 crate::spectrum::push_output_samples(output);
             } else {
                 output.fill(T::default());
@@ -424,9 +446,11 @@ impl Engine {
         semitones: f64,
         preserve_formants: bool,
         formant_shift: f64,
+        gate: GateSettings,
     ) -> Result<Self> {
         config.validate(frames)?;
         let pitch = PitchShifter::new(semitones, preserve_formants, formant_shift)?;
+        let gate = gate.build()?;
         let mut buffers = Vec::with_capacity(config.inputs + config.outputs);
         for (input, channels) in [(true, config.inputs), (false, config.outputs)] {
             for channel in 0..channels {
@@ -447,6 +471,8 @@ impl Engine {
             output_ready: AtomicBool::new(false),
             last_position: AtomicU64::new(u64::MAX),
             metrics: Metrics::default(),
+            gate: UnsafeCell::new(gate),
+            scratch: UnsafeCell::new(vec![0.0; frames as usize]),
             pitch: UnsafeCell::new(pitch),
         });
         let mut engine = Self {
@@ -624,6 +650,17 @@ mod tests {
             output_ready: AtomicBool::new(false),
             last_position: AtomicU64::new(u64::MAX),
             metrics: Metrics::default(),
+            gate: UnsafeCell::new(
+                GateSettings {
+                    enabled: false,
+                    threshold: crate::gate::GateThreshold::Auto,
+                    attack_ms: 5.0,
+                    release_ms: 80.0,
+                }
+                .build()
+                .unwrap(),
+            ),
+            scratch: UnsafeCell::new(vec![0.0; 4]),
             pitch: UnsafeCell::new(PitchShifter::new(0.0, true, 0.0).unwrap()),
         };
         state.validate_pointers().unwrap();
