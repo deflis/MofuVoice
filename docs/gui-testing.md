@@ -6,9 +6,7 @@ Node.js 26とRust/MSVC、ASIO SDK、libclangを用意して実行します。
 
 ~~~powershell
 pnpm install --frozen-lockfile
-mise run build:web
-cargo fmt --check
-cargo clippy --all-targets --all-features --locked -- -D warnings
+mise run check
 cargo test --features desktop --locked
 cargo test --release --locked --test spectral_quality
 pnpm desktop:build

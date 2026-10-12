@@ -127,9 +127,11 @@ pnpm install --frozen-lockfile
 pnpm desktop:build
 ```
 
-Pull request と `master` への push では、GitHub Actions が `cargo fmt`、`clippy`、`cargo test`、Release の `spectral_quality` を実行します。`master` への push では、加えて GUI / CLI の Release バイナリを成果物としてアップロードします。
+Pull request と `master` への push では、GitHub Actions が `mise run check`、`cargo test`、Release の `spectral_quality` を実行します。`master` への push では、加えて GUI / CLI の Release バイナリを成果物としてアップロードします。
 
 `target/release/` にGUIとCLIの実行ファイルが生成されます。配布するGUIにはReactの静的ファイルが埋め込まれます。
+
+検証コマンドは `mise.toml` のタスクで管理します。`mise run check` でRustとフロントエンドの整形・lint・型を検証し、`mise run fmt` で整形、`mise run fmt:check` で整形チェック、`mise run lint` でClippyとoxlintを実行します。フロントエンドだけなら `mise run check:web`、型チェックだけなら `mise run typecheck` を使います。Clippyに必要なReactのビルドはタスクの依存関係で先に実行します。
 
 React画面の開発には `pnpm desktop:dev` を使います。音声処理を含む動作確認はTauriで行い、`pnpm dev` は画面側の開発サーバーだけを起動します。CLIだけなら `cargo build --release --locked` でビルドできます。
 
@@ -146,8 +148,7 @@ GUIとCLIのDSPは `src/pitch.rs` です。2048サンプルの解析窓と512サ
 cargo check --features desktop --locked
 cargo test --features desktop --locked
 cargo test --release --locked --test spectral_quality
-cargo clippy --all-targets --all-features --locked -- -D warnings
-cargo fmt --check
+mise run check
 cargo bench --locked --bench spectral
 ```
 

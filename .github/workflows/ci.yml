@@ -40,14 +40,8 @@ jobs:
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Build React frontend
-        run: mise run build:web
-
-      - name: cargo fmt
-        run: cargo fmt --check
-
-      - name: cargo clippy
-        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+      - name: Check Rust and frontend
+        run: mise run check
 
       - name: cargo test
         run: cargo test --all-features --locked

@@ -36,6 +36,9 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Check frontend
+        run: mise run check:web
+
       - name: Build React frontend
         run: mise run build:web
 
