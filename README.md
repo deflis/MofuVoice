@@ -2,11 +2,11 @@
 
 Windows向けのリアルタイムボイスチェンジャーです。GUIで音声デバイスを選び、声の高さとフォルマントの移動量を個別に設定できます。通常の操作はGUIで行い、CLIは設定確認や自動実行に利用できます。
 
-音声変換には、自前のFFTと位相同期を使うスペクトル方式を使用します。低い声を上げたときの不要な低域成分を抑えることを検証した実験的な方式です。変換時のDSP遅延は512サンプル（48 kHzで約10.67 ms）です。解析窓は2048サンプルのまま、右寄せの短い合成窓で遅延を抑えます。マイクからヘッドホンまでの総遅延10 ms以下を今後の目標とし、現在は品質検証を優先しています。実際の会話音声の自然さは聴取で確認する必要があります。
+変換時のDSP遅延は512サンプル（48 kHzで約10.67 ms）です。マイクからヘッドホンまでの総遅延10 ms以下を今後の目標とし、現在は品質検証を優先しています。実際の会話音声の自然さは聴取で確認する必要があります。
 
 ## はじめに
 
-Windows x64と、48 kHzのフルデュプレックス入出力に対応したASIOドライバが必要です。実行ファイルを用意してから、次の手順で音声処理を開始します。ソースコードから実行ファイルを作成する場合は、末尾の「ビルド」を参照してください。
+Windows x64と、48 kHzのフルデュプレックス入出力に対応したASIOドライバが必要です。実行ファイルを用意してから、次の手順で音声処理を開始します。WebView2 Runtimeが必要です。ソースコードから実行ファイルを作成する場合は、末尾の「ビルド」を参照してください。
 
 ### 1. 起動する
 
@@ -14,7 +14,7 @@ Windows x64と、48 kHzのフルデュプレックス入出力に対応したASI
 
 ### 2. デバイスと音声の接続を準備する
 
-**Device** の一覧から使用するASIOデバイスを選びます。初回起動時は未選択です。次回からは前回保存した設定を復元します。
+**ASIO device** の一覧から使用するASIOデバイスを選びます。初回起動時は未選択です。次回からは前回保存した設定を復元します。
 
 デバイス側の設定でサンプルレートを **48 kHz** にし、マイクの信号を **入力1** に接続してください。アプリは入力1を処理して **出力1** へ送り、その他の出力は無音にします。
 
@@ -62,7 +62,7 @@ Framesを小さくすると音声処理の周期が短くなりますが、処�
 
 ## 自動音量調整
 
-Settingsの **Auto level** をオンにすると、声の変換後に緩やかなRMS音量補正とソフトニーコンプレッサーを適用します。既定ではオフです。まず既定値で使い、必要なときだけ **Customize auto level** を開いて調整してください。**Reset auto level defaults** は詳細設定を既定値に戻します。オフにすると詳細設定を保持したまま、この処理をバイパスします。
+**Auto level** をオンにすると、声の変換後に緩やかなRMS音量補正とソフトニーコンプレッサーを適用します。既定ではオフです。まず既定値で使い、必要なときだけ **詳細設定** を開いて調整してください。**既定値に戻す** は詳細設定を既定値に戻します。オフにすると詳細設定を保持したまま、この処理をバイパスします。
 
 | 詳細設定 | 既定値 | 範囲・効果 | CLI |
 | --- | --- | --- | --- |
@@ -154,44 +154,18 @@ GUIにも `--device`、`--frames`、`--pitch`、`--formant`、`--formant-shift` 
 
 ## ビルド
 
-ソースコードからビルドするには、RustのWindows x64 MSVCツールチェーン、Visual C++ Build ToolsとWindows SDK、libclang、ASIO SDKが必要です。Rust は mise で入れられます（`mise.toml` の `rust`）。
+ソースコードからビルドするには、RustのWindows x64 MSVCツールチェーン、Visual C++ Build ToolsとWindows SDK、libclang、ASIO SDK、WebView2 Runtimeとmiseが必要です。
 
-ASIO SDK は `.tools/asiosdk` に置きます（`common/asio.h` があること）。`.cargo/config.toml` と `mise.toml` の `CPAL_ASIO_DIR` がこのパスを指します。次のスクリプトで Steinberg から取得できます（SDK 自体は再配布しないでください）。libclang が PATH にない場合は `mise.local.toml` か環境変数で `LIBCLANG_PATH` を指定してください。
+ASIO SDK は `.tools/asiosdk` に置きます（`common/asio.h` があること）。次のスクリプトで Steinberg から取得できます（SDK 自体は再配布しないでください）。libclang が PATH にない場合は `mise.local.toml` か環境変数で `LIBCLANG_PATH` を指定してください。
 
 ```powershell
+mise trust
 mise install
 ./scripts/fetch-asio-sdk.ps1
-cargo build --release --locked
+pnpm install --frozen-lockfile
+pnpm desktop:build
 ```
 
-Pull request と `master` への push では、GitHub Actions が `cargo fmt`、`clippy`、`cargo test`、Release の `spectral_quality` を実行します。`master` への push では、加えて GUI / CLI の Release バイナリを成果物としてアップロードします。
+`target/release/` に実行ファイルが生成されます。React画面の開発には `pnpm desktop:dev`、CLIだけのビルドには `cargo build --release --locked` を使います。
 
-`target/release/` にGUIとCLIの実行ファイルが生成されます。
-
-<details>
-<summary>開発者向けの検証</summary>
-
-GUIとCLIのDSPは `src/pitch.rs` です。2048サンプルの解析窓と512サンプルの右寄せ合成窓（積がHann）、128サンプルのホップ、スペクトルピークに対する位相同期を使い、各ピークの周囲の成分をまとめて移動します。前のフレームの近接ピークから位相を引き継ぎ、ピーク位置が変わっても発振の位相を連続させます。移動量には位相差から測定した周波数を使い、隣接する周波数ビンへ補間して丸めによる変化を抑えます。フォルマントは実ケプストラムの平滑化で包絡を推定し、指定した包絡に近づくよう補正します。包絡補正のゲインを制限し、最終出力は正規化範囲に制限します。大きな変換、高い入力レベル、子音や声の急変では歪みや不自然さが生じる可能性があります。解析・合成用領域とFFTの表は起動前に確保します。
-
-`tests/spectral_quality.rs` は低域の不要成分、ピッチ精度、共鳴の移動、連続的なピッチ変化時の音量・位相の揺れ、ブロック分割、引数検証、バイパスを検証します。単音の結果は会話音声の品質保証ではありません。DSPの速度は `spectral` ベンチマークで測定します。
-
-```powershell
-cargo check --locked
-cargo test --locked
-cargo test --release --locked --test spectral_quality
-cargo clippy --all-targets --locked -- -D warnings
-cargo fmt --check
-cargo bench --locked --bench spectral
-```
-
-GUIの実機テストは `scripts/gui-smoke.ps1 -Device "ASIOデバイス名" -Frames 512 -RunSeconds 3` で実行できます。対象デバイスを48 kHzに設定し、対応するバッファサイズを指定してください。このテストは実際に音声処理を開始します。音声品質と総遅延は聴取・録音で確認し、ログはバージョン管理に含めません。
-
-実声の比較には、48 kHz・モノラル・PCM16のWAVを用意し、次の例を実行します。既存の出力ファイルは上書きしません。
-
-```powershell
-cargo run --release --locked --example pitch_render -- voice.wav logs/listening-01 7 3
-```
-
-`input.wav` と変換後の `processed.wav` を出力します。変換後の音声は既知のDSP遅延を除いて書き出します。音量は自動調整しません。母音、サ行、息、低い発声から高い発声への変化を同じ箇所で比較し、入力レベルと変換量、クリッピング、聴取結果を記録してください。
-
-</details>
+整形は `mise run fmt`、チェックは `mise run check` で実行します。

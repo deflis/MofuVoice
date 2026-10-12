@@ -1,0 +1,105 @@
+:root {
+  font-family: system-ui, sans-serif;
+  font-size: 13px;
+  color-scheme: light dark;
+}
+body {
+  margin: 0;
+}
+main {
+  max-width: 560px;
+  padding: 16px;
+  margin: auto;
+}
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+h1 {
+  font-size: 18px;
+  margin: 0 0 12px;
+}
+h2 {
+  font-size: 13px;
+  margin: 0 0 10px;
+}
+section {
+  margin: 18px 0;
+}
+.settings {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+label {
+  display: grid;
+  gap: 4px;
+  margin: 10px 0;
+}
+input,
+select,
+button {
+  font: inherit;
+}
+input:not([type="range"]):not([type="checkbox"]),
+select {
+  padding: 5px;
+  min-width: 0;
+}
+button {
+  padding: 5px 12px;
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.semitones > span {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+.slider-row {
+  display: grid;
+  grid-template-columns: 1fr 80px;
+  gap: 12px;
+}
+.slider-row input[type="range"] {
+  width: 100%;
+}
+.gate-fields {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+.error {
+  color: light-dark(#a80000, #ff9090);
+  overflow-wrap: anywhere;
+}
+p,
+pre {
+  overflow-wrap: anywhere;
+}
+details {
+  margin-top: 16px;
+}
+summary {
+  cursor: pointer;
+}
+pre {
+  white-space: pre-wrap;
+  font-size: 12px;
+}
+
+.level-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 12px;
+}

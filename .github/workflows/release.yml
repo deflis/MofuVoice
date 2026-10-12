@@ -10,11 +10,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: 1.99.0
-
       - name: Install LLVM
         uses: KyleMayes/install-llvm-action@v2
         with:
@@ -36,11 +31,22 @@ jobs:
         shell: pwsh
         run: ./scripts/fetch-asio-sdk.ps1
 
+      - uses: jdx/mise-action@v5
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check frontend
+        run: mise run check:web
+
+      - name: Build React frontend
+        run: mise run build:web
+
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
 
       - name: Build release
-        run: cargo build --release --locked
+        run: cargo build --release --features desktop,custom-protocol --locked
 
       - name: Upload binaries
         uses: actions/upload-artifact@v4

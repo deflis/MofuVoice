@@ -1,0 +1,31 @@
+{
+  "name": "voice-changer-ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --config frontend/vite.config.ts",
+    "build": "vite build --config frontend/vite.config.ts",
+    "desktop:dev": "tauri dev --features desktop",
+    "desktop:build": "tauri build --features desktop -- --locked"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.12.3",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "oxfmt": "0.72.0",
+    "oxlint": "1.87.0",
+    "typescript": "7.0.2",
+    "vite": "8.3.4"
+  },
+  "engines": {
+    "node": ">=26.11.1 <27",
+    "pnpm": "12.11.2"
+  },
+  "packageManager": "pnpm@12.11.2"
+}

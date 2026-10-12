@@ -3,3 +3,7 @@
 /logs/
 /mise.local.toml
 
+
+/node_modules/
+/frontend/dist/
+/gen/
