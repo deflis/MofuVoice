@@ -5,6 +5,10 @@ export function useSettingsReady() {
   return useSettingsStore((state) => state.settings !== undefined);
 }
 
+export function useSettingsLoadFailed() {
+  return useSettingsStore((state) => state.loadFailed);
+}
+
 export function useSettingsLocked() {
   return useSettingsStore((state) => state.pending || state.closing || state.snapshot.busy);
 }
