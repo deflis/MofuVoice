@@ -43,6 +43,9 @@ jobs:
       - name: Check Rust and frontend
         run: mise run check
 
+      - name: Frontend regression tests
+        run: pnpm test:web
+
       - name: cargo test
         run: cargo test --all-features --locked
 

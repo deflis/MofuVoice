@@ -9,6 +9,7 @@ type SettingsStore = {
   snapshot: Snapshot;
   pending: boolean;
   closing: boolean;
+  loadFailed: boolean;
   error: string;
   notice: string;
   connect: () => () => void;
@@ -30,6 +31,7 @@ export function requireSettings(settings: Settings | undefined): Settings {
 }
 
 export const useSettingsStore = create<SettingsStore>()((set, get) => {
+  let closeRequested = false;
   const run = async (action: () => Promise<void>) => {
     if (get().pending || get().closing) {
       return;
@@ -42,6 +44,9 @@ export const useSettingsStore = create<SettingsStore>()((set, get) => {
       set({ error: String(failure) });
     } finally {
       set({ pending: false });
+      if (closeRequested) {
+        void get().close();
+      }
     }
   };
 
@@ -52,9 +57,11 @@ export const useSettingsStore = create<SettingsStore>()((set, get) => {
     snapshot: { busy: false, status: "準備中…" },
     pending: false,
     closing: false,
+    loadFailed: false,
     error: "",
     notice: "",
     connect: () => {
+      set({ loadFailed: false, error: "" });
       let disposed = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
       const reportError = (failure: unknown) => {
@@ -80,8 +87,15 @@ export const useSettingsStore = create<SettingsStore>()((set, get) => {
           const result = await api.bootstrap();
           if (!disposed) {
             set(result);
+            if (closeRequested) {
+              void get().close();
+            }
           }
         } catch (failure) {
+          if (!disposed) {
+            closeRequested = false;
+            set({ loadFailed: true });
+          }
           reportError(failure);
         }
       };
@@ -112,9 +126,14 @@ export const useSettingsStore = create<SettingsStore>()((set, get) => {
       }),
     close: async () => {
       const { settings, pending, closing } = get();
-      if (pending || closing || !settings) {
+      if (closing) {
         return;
       }
+      if (pending || !settings) {
+        closeRequested = true;
+        return;
+      }
+      closeRequested = false;
       set({ closing: true, error: "" });
       try {
         await api.close(settings);
