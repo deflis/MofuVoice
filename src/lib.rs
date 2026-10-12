@@ -6,6 +6,7 @@ pub mod gate;
 pub mod gui;
 #[cfg(feature = "desktop")]
 mod gui_settings;
+pub mod level;
 pub mod native_spectrum;
 pub mod pitch;
 pub mod session;

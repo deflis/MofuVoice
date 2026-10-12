@@ -6,7 +6,49 @@ use tauri::{Emitter, Manager, State};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LevelControls {
+    enabled: bool,
+    target_db: String,
+    max_gain_db: String,
+    floor_db: String,
+    response_ms: String,
+    threshold_db: String,
+    ratio: String,
+    attack_ms: String,
+    release_ms: String,
+}
+impl LevelControls {
+    fn from_settings(settings: crate::level::LevelSettings) -> Self {
+        Self {
+            enabled: settings.enabled,
+            target_db: settings.target_db.to_string(),
+            max_gain_db: settings.max_gain_db.to_string(),
+            floor_db: settings.floor_db.to_string(),
+            response_ms: settings.response_ms.to_string(),
+            threshold_db: settings.threshold_db.to_string(),
+            ratio: settings.ratio.to_string(),
+            attack_ms: settings.attack_ms.to_string(),
+            release_ms: settings.release_ms.to_string(),
+        }
+    }
+    fn values(&self) -> [&str; 8] {
+        [
+            &self.target_db,
+            &self.max_gain_db,
+            &self.floor_db,
+            &self.response_ms,
+            &self.threshold_db,
+            &self.ratio,
+            &self.attack_ms,
+            &self.release_ms,
+        ]
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Settings {
+    level: LevelControls,
     device: String,
     frames: String,
     pitch: String,
@@ -20,6 +62,7 @@ pub struct Settings {
 impl Settings {
     fn from_options(options: &Options) -> Self {
         Self {
+            level: LevelControls::from_settings(options.level),
             device: options.device.clone(),
             frames: options.frames.to_string(),
             pitch: options.pitch.to_string(),
@@ -58,6 +101,13 @@ impl Settings {
             "--gate-release".into(),
             self.gate_release_ms.clone(),
         ];
+        args.extend([
+            "--auto-level".into(),
+            if self.level.enabled { "on" } else { "off" }.into(),
+        ]);
+        for (flag, value) in crate::level::FLAGS.iter().zip(self.level.values()) {
+            args.extend([(*flag).into(), value.into()]);
+        }
         if !self.device.is_empty() {
             args.extend(["--device".into(), self.device.clone()]);
         }
@@ -81,7 +131,9 @@ struct Snapshot {
     status: String,
 }
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct Bootstrap {
+    level_defaults: LevelControls,
     settings: Settings,
     devices: Vec<String>,
 }
@@ -90,6 +142,7 @@ struct Bootstrap {
 fn bootstrap(state: State<'_, DesktopState>) -> Result<Bootstrap, String> {
     let desktop = state.lock().map_err(|error| error.to_string())?;
     Ok(Bootstrap {
+        level_defaults: LevelControls::from_settings(crate::level::LevelSettings::default()),
         settings: desktop.settings.clone(),
         devices: asio_sys::Asio::new().driver_names(),
     })
@@ -232,6 +285,55 @@ pub fn show_message(message: &str, error: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn auto_level_controls_round_trip_validate_and_persist() {
+        let options = Options::parse_gui(
+            [
+                "--auto-level",
+                "on",
+                "--level-target",
+                "-18",
+                "--level-max-gain",
+                "6",
+                "--level-floor",
+                "-55",
+                "--level-response",
+                "1200",
+                "--compress-threshold",
+                "-10",
+                "--compress-ratio",
+                "4",
+                "--compress-attack",
+                "3",
+                "--compress-release",
+                "100",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        let mut controls = Settings::from_options(&options);
+        assert_eq!(controls.options().unwrap(), options);
+        let path =
+            std::env::temp_dir().join(format!("voice-tauri-level-{}.ini", std::process::id()));
+        gui_settings::save(&path, &controls.options().unwrap()).unwrap();
+        assert_eq!(gui_settings::load(&path).unwrap(), options);
+        controls.level.enabled = false;
+        assert_eq!(
+            controls.options().unwrap().level.values(),
+            options.level.values()
+        );
+        controls.level.ratio = "NaN".into();
+        assert!(controls.options().is_err());
+        controls.level.ratio = "4".into();
+        controls.level.floor_db = "-15".into();
+        assert!(controls.options().is_err());
+        controls.level = LevelControls::from_settings(crate::level::LevelSettings::default());
+        assert_eq!(
+            controls.options().unwrap().level,
+            crate::level::LevelSettings::default()
+        );
+        std::fs::remove_file(path).unwrap();
+    }
     #[test]
     fn command_settings_use_engine_validation() {
         let options = Options::parse_gui(Vec::new()).unwrap();

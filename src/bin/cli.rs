@@ -12,7 +12,7 @@ use std::{
 fn main() -> Result<(), Box<dyn Error>> {
     let options = cli::Options::parse(std::env::args().skip(1))?;
     if options.help {
-        println!("Usage: rust-low-latency-voice-changer-cli --device NAME [--frames N] [--seconds N] [--pitch SEMITONES] [--formant preserve|off] [--formant-shift SEMITONES] [--gate on|off] [--gate-threshold auto|DB] [--gate-attack MS] [--gate-release MS]\n       rust-low-latency-voice-changer-cli --inspect --device NAME [--frames N]\n       rust-low-latency-voice-changer-cli --list-devices\nSelect a device with --device NAME; use --list-devices to see registered names.\nDefault: 512 frames / pitch 0 / gate off. Pitch and formant shift range: -12..12 (fractional allowed). Formant shift defaults to 0; nonzero shift requires preserve.\nGate is a soft pre-pitch expander; threshold defaults to auto noise-floor tracking; attack/release default to 5/80 ms.\nInput 1 -> output 1; other outputs silent. Pitch 0, formant shift 0, and gate off: bit-preserving zero-delay bypass.\nWet DSP: spectral phase locking, fixed {LATENCY} samples of delay. Formant correction: cepstral envelope, default preserve; --formant off disables it.\nEnter stops interactive mode.");
+        println!("Usage: rust-low-latency-voice-changer-cli --device NAME [--frames N] [--seconds N] [--pitch SEMITONES] [--formant preserve|off] [--formant-shift SEMITONES] [--auto-level on|off] [--level-target DB] [--level-max-gain DB] [--level-floor DB] [--level-response MS] [--compress-threshold DB] [--compress-ratio N] [--compress-attack MS] [--compress-release MS] [--gate on|off] [--gate-threshold auto|DB] [--gate-attack MS] [--gate-release MS]\n       rust-low-latency-voice-changer-cli --inspect --device NAME [--frames N]\n       rust-low-latency-voice-changer-cli --list-devices\nSelect a device with --device NAME; use --list-devices to see registered names.\nDefault: 512 frames / pitch 0 / gate off / auto level off. Pitch and formant shift range: -12..12 (fractional allowed). Formant shift defaults to 0; nonzero shift requires preserve.\nAuto level is a post-pitch RMS leveler and soft-knee compressor with a -1 dBFS peak guard. Defaults: target -20 dBFS RMS, max gain +9 dB, activity floor -50 dBFS, response 1500 ms; compression -12 dBFS / 3:1 / attack 5 ms / release 150 ms. All parameters are customizable. No added sample delay.\nGate is a soft pre-pitch expander; threshold defaults to auto noise-floor tracking; attack/release default to 5/80 ms.\nInput 1 -> output 1; other outputs silent. Pitch 0, formant shift 0, gate off, and auto level off: bit-preserving zero-delay bypass.\nWet DSP: spectral phase locking, fixed {LATENCY} samples of delay. Formant correction: cepstral envelope, default preserve; --formant off disables it.\nEnter stops interactive mode.");
         return Ok(());
     }
     if !options.list && options.device.is_empty() {
@@ -52,21 +52,32 @@ fn main() -> Result<(), Box<dyn Error>> {
         driver,
         config,
         options.frames,
-        options.pitch,
-        options.preserve_formants,
-        options.formant_shift,
-        rust_low_latency_voice_changer::gate::GateSettings {
-            enabled: options.gate,
-            threshold: options.gate_threshold,
-            attack_ms: options.gate_attack_ms,
-            release_ms: options.gate_release_ms,
+        asio::DspSettings {
+            semitones: options.pitch,
+            preserve_formants: options.preserve_formants,
+            formant_shift: options.formant_shift,
+            level: options.level,
+            gate: rust_low_latency_voice_changer::gate::GateSettings {
+                enabled: options.gate,
+                threshold: options.gate_threshold,
+                attack_ms: options.gate_attack_ms,
+                release_ms: options.gate_release_ms,
+            },
         },
     )?;
     engine.print_latencies()?;
-    if options.pitch == 0.0 && options.formant_shift == 0.0 && !options.gate {
-        println!("Pitch=0; gate off; DSP=0 samples; FIFO=0 samples. Input 1 -> output 1.");
+    println!(
+        "Auto level: {}; added DSP delay=0 samples.",
+        if options.level.enabled { "on" } else { "off" }
+    );
+    if options.pitch == 0.0 && options.formant_shift == 0.0 {
+        println!("Pitch/formant DSP=0 samples; gate and auto level add 0 samples; FIFO=0 samples. Input 1 -> output 1.");
     } else {
-        println!("Pitch={} semitones; ratio={:.6}; spectral wet DSP delay={LATENCY} samples ({:.3} ms). Formant mode reported below.", options.pitch, rust_low_latency_voice_changer::pitch::pitch_ratio(options.pitch)?, LATENCY as f64 * 1000.0 / RATE as f64);
+        println!(
+            "Pitch={} semitones; spectral wet DSP delay={LATENCY} samples ({:.3} ms).",
+            options.pitch,
+            LATENCY as f64 * 1000.0 / RATE as f64
+        );
     }
     println!(
         "Noise gate: {}; threshold={:?}; attack={} ms; release={} ms (pre-pitch soft expander, no lookahead).",

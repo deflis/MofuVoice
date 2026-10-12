@@ -9,6 +9,7 @@ pub struct Options {
     pub pitch: f64,
     pub preserve_formants: bool,
     pub formant_shift: f64,
+    pub level: crate::level::LevelSettings,
     pub gate: bool,
     pub gate_threshold: GateThreshold,
     pub gate_attack_ms: f64,
@@ -27,6 +28,7 @@ impl Options {
             pitch: 0.0,
             preserve_formants: true,
             formant_shift: 0.0,
+            level: crate::level::LevelSettings::default(),
             gate: false,
             gate_threshold: GateThreshold::Auto,
             gate_attack_ms: 5.0,
@@ -41,6 +43,8 @@ impl Options {
         let mut pitch_given = false;
         let mut formant_given = false;
         let mut shift_given = false;
+        let mut level_given = false;
+        let mut level_fields = [false; 8];
         let mut gate_given = false;
         let mut gate_threshold_given = false;
         let mut gate_attack_given = false;
@@ -68,6 +72,26 @@ impl Options {
                     options.pitch = args.next().ok_or("--pitch requires semitones")?.parse()?;
                     crate::pitch::pitch_ratio(options.pitch)?;
                     pitch_given = true;
+                }
+                "--auto-level" if !level_given => {
+                    options.level.enabled = match args.next().as_deref() {
+                        Some("on") => true,
+                        Some("off") => false,
+                        _ => return Err("--auto-level requires on or off".into()),
+                    };
+                    level_given = true;
+                }
+                flag if crate::level::FLAGS.contains(&flag) => {
+                    let index = crate::level::FLAGS.iter().position(|f| *f == flag).unwrap();
+                    if level_fields[index] {
+                        return Err(format!("Repeated argument {flag}").into());
+                    }
+                    let value = args
+                        .next()
+                        .ok_or_else(|| format!("{flag} requires a value"))?
+                        .parse()?;
+                    options.level.set(index, value);
+                    level_fields[index] = true;
                 }
                 "--gate" if !gate_given => {
                     options.gate = match args.next().as_deref() {
@@ -139,6 +163,7 @@ impl Options {
         if !options.preserve_formants && options.formant_shift != 0.0 {
             return Err(crate::pitch::InvalidFormant.to_string().into());
         }
+        options.level.validate()?;
         let gate_tuned = gate_threshold_given || gate_attack_given || gate_release_given;
         let modes =
             usize::from(options.list) + usize::from(options.inspect) + usize::from(options.help);
@@ -148,18 +173,20 @@ impl Options {
                     || pitch_given
                     || formant_given
                     || shift_given
+                    || level_given
+                    || level_fields.iter().any(|given| *given)
                     || gate_given
                     || gate_tuned))
             || ((options.list || options.help) && (device_given || frames_given))
         {
-            return Err("Choose one CLI mode: --help, --list-devices, --inspect [--device NAME] [--frames N], or [--device NAME] [--frames N] [--seconds N] [--pitch SEMITONES] [--formant preserve|off] [--formant-shift SEMITONES] [--gate on|off] [--gate-threshold auto|DB] [--gate-attack MS] [--gate-release MS]".into());
+            return Err("Choose one CLI mode: --help, --list-devices, --inspect [--device NAME] [--frames N], or [--device NAME] [--frames N] [--seconds N] [--pitch SEMITONES] [--formant preserve|off] [--formant-shift SEMITONES] [--auto-level on|off] [--level-target DB] [--level-max-gain DB] [--level-floor DB] [--level-response MS] [--compress-threshold DB] [--compress-ratio N] [--compress-attack MS] [--compress-release MS] [--gate on|off] [--gate-threshold auto|DB] [--gate-attack MS] [--gate-release MS]".into());
         }
         Ok(options)
     }
     pub fn parse_gui(args: impl IntoIterator<Item = String>) -> Result<Self, Box<dyn Error>> {
         let options = Self::parse(args)?;
         if options.seconds.is_some() || options.inspect || options.list {
-            return Err("GUI accepts only --device NAME, --frames N, --pitch SEMITONES, --formant preserve|off, --formant-shift SEMITONES, --gate on|off, --gate-threshold auto|DB, --gate-attack MS, --gate-release MS, or --help".into());
+            return Err("GUI accepts device, buffer, pitch, formant, gate and auto-level settings, or --help. Use the CLI for timed runs, inspection or device listing.".into());
         }
         Ok(options)
     }
@@ -170,6 +197,41 @@ mod tests {
     use super::*;
     fn parse(args: &[&str]) -> Result<Options, Box<dyn Error>> {
         Options::parse(args.iter().map(|s| (*s).into()))
+    }
+    #[test]
+    fn automatic_level_and_custom_parameters_are_validated() {
+        assert!(!parse(&[]).unwrap().level.enabled);
+        let options = parse(&[
+            "--auto-level",
+            "on",
+            "--level-target",
+            "-18",
+            "--compress-ratio",
+            "4",
+        ])
+        .unwrap();
+        assert!(options.level.enabled);
+        assert_eq!(options.level.target_db, -18.0);
+        assert_eq!(options.level.ratio, 4.0);
+        for args in [
+            vec!["--auto-level"],
+            vec!["--auto-level", "maybe"],
+            vec!["--auto-level", "on", "--auto-level", "off"],
+            vec!["--compress-ratio", "3", "--compress-ratio", "4"],
+            vec!["--level-target", "NaN"],
+            vec!["--compress-attack", "0"],
+            vec!["--level-floor", "-30", "--level-target", "-36"],
+            vec!["--auto-level", "off", "--inspect"],
+            vec!["--level-max-gain", "6", "--help"],
+        ] {
+            assert!(parse(&args).is_err(), "{args:?}");
+        }
+        assert!(
+            Options::parse_gui(["--auto-level", "on"].map(String::from))
+                .unwrap()
+                .level
+                .enabled
+        );
     }
     #[test]
     fn validates_independent_formant_shift() {

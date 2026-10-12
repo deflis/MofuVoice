@@ -1,5 +1,17 @@
 import { invoke } from "@tauri-apps/api/core";
+export type LevelSettings = {
+  enabled: boolean;
+  targetDb: string;
+  maxGainDb: string;
+  floorDb: string;
+  responseMs: string;
+  thresholdDb: string;
+  ratio: string;
+  attackMs: string;
+  releaseMs: string;
+};
 export type Settings = {
+  level: LevelSettings;
   device: string;
   frames: string;
   pitch: string;
@@ -12,7 +24,8 @@ export type Settings = {
 };
 export type Snapshot = { busy: boolean; status: string };
 export const api = {
-  bootstrap: () => invoke<{ settings: Settings; devices: string[] }>("bootstrap"),
+  bootstrap: () =>
+    invoke<{ settings: Settings; devices: string[]; levelDefaults: LevelSettings }>("bootstrap"),
   status: () => invoke<Snapshot>("audio_status"),
   start: (settings: Settings, inspect: boolean) =>
     invoke<void>("start_audio", { settings, inspect }),

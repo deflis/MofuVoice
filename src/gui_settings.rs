@@ -44,6 +44,13 @@ fn arguments(options: &Options) -> Vec<String> {
         "--gate-release".into(),
         options.gate_release_ms.to_string(),
     ];
+    args.extend([
+        "--auto-level".into(),
+        if options.level.enabled { "on" } else { "off" }.into(),
+    ]);
+    for (flag, value) in crate::level::FLAGS.iter().zip(options.level.values()) {
+        args.extend([(*flag).into(), value.to_string()]);
+    }
     if !options.device.is_empty() {
         args.extend(["--device".into(), options.device.clone()]);
     }
@@ -79,6 +86,8 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
             "gate_release_ms",
         ]
         .contains(&key)
+            && key != "auto_level"
+            && !crate::level::KEYS.contains(&key)
             || values.insert(key, value.trim()).is_some()
         {
             return Err(format!("Unknown or repeated GUI setting '{key}'").into());
@@ -122,6 +131,15 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
         "--gate-release",
         value("gate_release_ms")?,
     ];
+    let level = match value("auto_level")? {
+        "true" => "on",
+        "false" => "off",
+        _ => return Err("auto_level must be true or false".into()),
+    };
+    args.extend(["--auto-level", level]);
+    for (flag, key) in crate::level::FLAGS.iter().zip(crate::level::KEYS) {
+        args.extend([*flag, value(key)?]);
+    }
     if !device.is_empty() {
         args.extend(["--device", device]);
     }
@@ -157,6 +175,8 @@ pub(crate) fn merge(saved: &Options, args: Vec<String>) -> Result<Options, Box<d
             "--gate-release",
         ]
         .contains(&flag.as_str())
+            && flag != "--auto-level"
+            && !crate::level::FLAGS.contains(&flag.as_str())
             || !seen.insert(flag.clone())
         {
             return Err(format!("Unknown or repeated GUI argument {flag}; use --help").into());
@@ -178,7 +198,7 @@ pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>>
     if options.device.contains(['\r', '\n', '\0']) {
         return Err("Device name cannot contain line breaks or NUL".into());
     }
-    let text = format!(
+    let mut text = format!(
         "[gui]\ndevice={}\nframes={}\npitch={}\nformant_shift={}\npreserve_formants={}\ngate={}\ngate_threshold={}\ngate_attack_ms={}\ngate_release_ms={}\n",
         options.device,
         options.frames,
@@ -190,6 +210,10 @@ pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>>
         options.gate_attack_ms,
         options.gate_release_ms
     );
+    text.push_str(&format!("auto_level={}\n", options.level.enabled));
+    for (key, value) in crate::level::KEYS.iter().zip(options.level.values()) {
+        text.push_str(&format!("{key}={value}\n"));
+    }
     let temporary = path.with_extension(format!("{}.tmp", std::process::id()));
     let result = (|| -> std::io::Result<()> {
         fs::create_dir_all(
@@ -216,12 +240,12 @@ mod tests {
             .join("settings.ini");
         let defaults = load(&path).unwrap();
         assert!(defaults.device.is_empty());
-        let options = decode("[gui]\ndevice=日本語 ASIO = Device\nframes=256\npitch=-2.5\nformant_shift=3.25\npreserve_formants=true\ngate=true\ngate_threshold=-35\ngate_attack_ms=3\ngate_release_ms=120\n").unwrap();
+        let options = decode("[gui]\ndevice=日本語 ASIO = Device\nframes=256\npitch=-2.5\nformant_shift=3.25\npreserve_formants=true\ngate=true\ngate_threshold=-35\ngate_attack_ms=3\ngate_release_ms=120\nauto_level=true\nlevel_target_db=-18\nlevel_max_gain_db=6\nlevel_floor_db=-55\nlevel_response_ms=1200\ncompress_threshold_db=-10\ncompress_ratio=4\ncompress_attack_ms=3\ncompress_release_ms=100\n").unwrap();
         save(&path, &options).unwrap();
         assert_eq!(load(&path).unwrap(), options);
         let invalid = Options {
             frames: 0,
-            ..decode("[gui]\ndevice=Other\nframes=512\npitch=0\nformant_shift=0\npreserve_formants=true\ngate=false\ngate_threshold=auto\ngate_attack_ms=5\ngate_release_ms=80\n").unwrap()
+            ..decode("[gui]\ndevice=Other\nframes=512\npitch=0\nformant_shift=0\npreserve_formants=true\ngate=false\ngate_threshold=auto\ngate_attack_ms=5\ngate_release_ms=80\nauto_level=false\nlevel_target_db=-20\nlevel_max_gain_db=9\nlevel_floor_db=-50\nlevel_response_ms=1500\ncompress_threshold_db=-12\ncompress_ratio=3\ncompress_attack_ms=5\ncompress_release_ms=150\n").unwrap()
         };
         assert!(save(&path, &invalid).is_err());
         assert_eq!(load(&path).unwrap(), options);
@@ -254,13 +278,27 @@ mod tests {
     }
     #[test]
     fn explicit_values_override_only_their_fields() {
-        let saved = decode("[gui]\ndevice=ASIO Device\nframes=256\npitch=-3\nformant_shift=2\npreserve_formants=true\ngate=true\ngate_threshold=auto\ngate_attack_ms=5\ngate_release_ms=80\n").unwrap();
+        let saved = decode("[gui]\ndevice=ASIO Device\nframes=256\npitch=-3\nformant_shift=2\npreserve_formants=true\ngate=true\ngate_threshold=auto\ngate_attack_ms=5\ngate_release_ms=80\nauto_level=false\nlevel_target_db=-20\nlevel_max_gain_db=9\nlevel_floor_db=-50\nlevel_response_ms=1500\ncompress_threshold_db=-12\ncompress_ratio=3\ncompress_attack_ms=5\ncompress_release_ms=150\n").unwrap();
         let result = merge(&saved, vec!["--pitch".into(), "4.5".into()]).unwrap();
         assert_eq!(result.pitch, 4.5);
         assert_eq!(result.device, saved.device);
         assert_eq!(result.frames, 256);
         assert_eq!(result.formant_shift, 2.0);
         assert!(result.gate);
+        let customized = merge(
+            &saved,
+            vec![
+                "--auto-level".into(),
+                "on".into(),
+                "--compress-ratio".into(),
+                "5".into(),
+            ],
+        )
+        .unwrap();
+        assert!(customized.level.enabled);
+        assert_eq!(customized.level.ratio, 5.0);
+        assert_eq!(customized.level.target_db, saved.level.target_db);
+        assert!(merge(&saved, vec!["--compress-attack".into(), "NaN".into()]).is_err());
         assert!(merge(&saved, vec!["--formant".into(), "off".into()]).is_err());
         assert!(merge(
             &saved,
@@ -271,7 +309,7 @@ mod tests {
     }
     #[test]
     fn ini_comments_order_and_invalid_entries() {
-        let text = "\u{feff}; preferences\r\n[gui]\r\n# voice\r\npreserve_formants = false\r\nformant_shift=0\r\npitch = -2.5\r\nframes=256\r\ndevice=日本語 ASIO = Device\r\ngate=false\r\ngate_threshold=auto\r\ngate_attack_ms=5\r\ngate_release_ms=80\r\n";
+        let text = "\u{feff}; preferences\r\n[gui]\r\n# voice\r\npreserve_formants = false\r\nformant_shift=0\r\npitch = -2.5\r\nframes=256\r\ndevice=日本語 ASIO = Device\r\ngate=false\r\ngate_threshold=auto\r\ngate_attack_ms=5\r\ngate_release_ms=80\r\nauto_level=false\r\nlevel_target_db=-20\r\nlevel_max_gain_db=9\r\nlevel_floor_db=-50\r\nlevel_response_ms=1500\r\ncompress_threshold_db=-12\r\ncompress_ratio=3\r\ncompress_attack_ms=5\r\ncompress_release_ms=150\r\n";
         let options = decode(text).unwrap();
         assert_eq!(options.device, "日本語 ASIO = Device");
         assert_eq!(options.frames, 256);

@@ -97,3 +97,9 @@ pre {
   white-space: pre-wrap;
   font-size: 12px;
 }
+
+.level-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 12px;
+}

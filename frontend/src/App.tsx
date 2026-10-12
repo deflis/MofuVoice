@@ -2,6 +2,22 @@ import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { api, type Settings, type Snapshot } from "./api";
 
+const levelFields: {
+  key: Exclude<keyof Settings["level"], "enabled">;
+  label: string;
+  min: number;
+  max: number;
+}[] = [
+  { key: "targetDb", label: "Target RMS (dBFS)", min: -36, max: -6 },
+  { key: "maxGainDb", label: "Max gain (dB)", min: 0, max: 18 },
+  { key: "floorDb", label: "Activity floor (dBFS)", min: -90, max: -30 },
+  { key: "responseMs", label: "Level response (ms)", min: 100, max: 10000 },
+  { key: "thresholdDb", label: "Comp. threshold (dBFS)", min: -36, max: 0 },
+  { key: "ratio", label: "Ratio", min: 1, max: 20 },
+  { key: "attackMs", label: "Attack (ms)", min: 0.1, max: 100 },
+  { key: "releaseMs", label: "Release (ms)", min: 10, max: 2000 },
+];
+
 function Semitones({
   label,
   value,
@@ -44,6 +60,7 @@ function Semitones({
 
 export function App() {
   const [settings, setSettings] = useState<Settings>();
+  const [levelDefaults, setLevelDefaults] = useState<Settings["level"]>();
   const [devices, setDevices] = useState<string[]>([]);
   const [snapshot, setSnapshot] = useState<Snapshot>({
     busy: false,
@@ -90,6 +107,7 @@ export function App() {
       .then((result) => {
         if (!disposed) {
           setSettings(result.settings);
+          setLevelDefaults(result.levelDefaults);
           setDevices(result.devices);
         }
       })
@@ -276,6 +294,49 @@ export function App() {
                   />
                 </label>
               </div>
+            </section>
+            <section>
+              <h2>Auto level</h2>
+              <label className="check">
+                <input
+                  type="checkbox"
+                  checked={settings.level.enabled}
+                  onChange={(event) =>
+                    update("level", { ...settings.level, enabled: event.target.checked })
+                  }
+                />
+                有効
+              </label>
+              <details>
+                <summary>詳細設定</summary>
+                <div className="level-fields">
+                  {levelFields.map((field) => (
+                    <label key={field.key}>
+                      {field.label}
+                      <input
+                        type="number"
+                        step="any"
+                        required
+                        min={field.min}
+                        max={field.max}
+                        value={settings.level[field.key]}
+                        onChange={(event) =>
+                          update("level", { ...settings.level, [field.key]: event.target.value })
+                        }
+                      />
+                    </label>
+                  ))}
+                </div>
+                <button
+                  disabled={!levelDefaults}
+                  onClick={() => {
+                    if (levelDefaults)
+                      update("level", { ...levelDefaults, enabled: settings.level.enabled });
+                  }}
+                >
+                  既定値に戻す
+                </button>
+              </details>
             </section>
           </fieldset>
           <footer>

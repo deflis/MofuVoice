@@ -146,14 +146,17 @@ fn run_audio(
         driver,
         config,
         options.frames,
-        options.pitch,
-        options.preserve_formants,
-        options.formant_shift,
-        crate::gate::GateSettings {
-            enabled: options.gate,
-            threshold: options.gate_threshold,
-            attack_ms: options.gate_attack_ms,
-            release_ms: options.gate_release_ms,
+        asio::DspSettings {
+            semitones: options.pitch,
+            preserve_formants: options.preserve_formants,
+            formant_shift: options.formant_shift,
+            level: options.level,
+            gate: crate::gate::GateSettings {
+                enabled: options.gate,
+                threshold: options.gate_threshold,
+                attack_ms: options.gate_attack_ms,
+                release_ms: options.gate_release_ms,
+            },
         },
     )?;
     if stop.load(Ordering::Acquire) {
@@ -176,11 +179,12 @@ fn run_audio(
                 return Err("No ASIO callbacks for 2 seconds".into());
             }
             set_status(status, format!(
-                "Running: {:.1} s | pitch {} semitones | formant {} | shift {} semitones | gate {}\n{details}\nPeriod: {:.3} ms | Input 1 -> output 1\n{}\n\n{}\n\nNonzero input counts indicate signal arrival, not listening quality.\nTimestamp blocks=0 means gap detection is unavailable.",
+                "Running: {:.1} s | pitch {} semitones | formant {} | shift {} semitones | gate {} | auto level {}\n{details}\nPeriod: {:.3} ms | Input 1 -> output 1\n{}\n\n{}\n\nNonzero input counts indicate signal arrival, not listening quality.\nTimestamp blocks=0 means gap detection is unavailable.",
                 started.elapsed().as_secs_f64(), options.pitch,
                 if options.preserve_formants { "preserve" } else { "off" },
                 options.formant_shift,
                 if options.gate { "on" } else { "off" },
+                if options.level.enabled { "on" } else { "off" },
                 options.frames as f64 * 1000.0 / crate::RATE as f64,
                 engine.latency_summary()?, engine.summary()
             ));
