@@ -550,6 +550,8 @@ impl PitchShifter {
         let bin_scale = WINDOW as f64 / (std::f64::consts::TAU * HOP as f64);
         let ratio_delta = self.ratio - 1.0;
         let preserve = self.preserve_formants;
+        let mut rotation_peak = BINS;
+        let mut rotation = Complex { re: 1.0, im: 0.0 };
         for i in 1..BINS - 1 {
             if dc_lobe && i == 1 {
                 continue;
@@ -558,6 +560,13 @@ impl PitchShifter {
                 region += 1;
             }
             let peak = if count == 0 { i } else { self.peaks[region] };
+            if count != 0 && peak != rotation_peak {
+                rotation = Complex::polar(
+                    1.0,
+                    self.synthesis_phase[peak] - self.phase[peak] - centre_step * peak as f64,
+                );
+                rotation_peak = peak;
+            }
             // Translate each peak's entire main lobe together. Scaling its bin offsets
             // would broaden the lobe and recreate low-frequency modulation products.
             let frequency_bin = self.phase_advance[peak] * bin_scale;
@@ -576,14 +585,37 @@ impl PitchShifter {
             } else {
                 1.0
             };
-            let locked_phase = if count == 0 {
-                self.phase[peak] + centre_step * peak as f64
-            } else {
-                self.synthesis_phase[peak]
-            };
-            let phase = locked_phase
-                + wrap(self.phase[i] - self.phase[peak] + centre_step * (i as f64 - peak as f64));
-            let phasor = Complex::polar(self.magnitude[i] * gain, phase);
+            // Phase locking is a shared rotation of the original complex bins.
+            // Reuse it across the peak's lobe instead of reconstructing every bin
+            // with sin/cos. Conjugating the centre phasor moves to the analysis centre.
+            let centre = self.centre_phasor[i];
+            let phasor = self.spectrum[i]
+                .mul(Complex {
+                    re: centre.re,
+                    im: -centre.im,
+                })
+                .mul(rotation)
+                .scale(gain);
+            #[cfg(test)]
+            {
+                // Independent polar reference, including the no-peak path.
+                let locked = if count == 0 {
+                    self.phase[peak] + centre_step * peak as f64
+                } else {
+                    self.synthesis_phase[peak]
+                };
+                let reference = Complex::polar(
+                    self.magnitude[i] * gain,
+                    locked
+                        + wrap(
+                            self.phase[i] - self.phase[peak]
+                                + centre_step * (i as f64 - peak as f64),
+                        ),
+                );
+                let tolerance = 1e-10 * (self.magnitude[i] * gain).max(1.0);
+                assert!((phasor.re - reference.re).abs() < tolerance);
+                assert!((phasor.im - reference.im).abs() < tolerance);
+            }
             for (bin, weight) in [(lower, 1.0 - fraction), (lower + 1, fraction)] {
                 if bin <= 0 || bin >= (BINS - 1) as isize || weight == 0.0 {
                     continue;
@@ -652,6 +684,34 @@ impl PitchShifter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_phase_rotation_matches_polar_reference_across_retargeting() {
+        let input: Vec<f32> = (0..8192)
+            .map(|i| {
+                let phase = 0.013 * i as f64 + 0.000002 * (i * i) as f64;
+                (0.12 * phase.sin() + 0.07 * (phase * 3.0).cos()) as f32
+            })
+            .collect();
+        let mut output = vec![0.0; input.len()];
+        for preserve in [false, true] {
+            for formant in if preserve {
+                &[-12.0, 0.0, 12.0][..]
+            } else {
+                &[0.0][..]
+            } {
+                let mut dsp = PitchShifter::new(-12.0, preserve, *formant).unwrap();
+                // Silence exercises the spectrum with no detected peaks.
+                dsp.process_block(&vec![0.0_f32; WINDOW], &mut output[..WINDOW]);
+                for pitch in [-12.0, -3.0, 0.0, 3.0, 7.0, 12.0] {
+                    dsp.set_semitones(pitch).unwrap();
+                    for (chunk, out) in input.chunks(127).zip(output.chunks_mut(127)) {
+                        dsp.process_block(chunk, out);
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn fft_round_trip_preserves_real_and_imaginary_samples() {
