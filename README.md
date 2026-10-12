@@ -2,11 +2,11 @@
 
 Windows向けのリアルタイムボイスチェンジャーです。GUIで音声デバイスを選び、声の高さとフォルマントの移動量を個別に設定できます。通常の操作はGUIで行い、CLIは設定確認や自動実行に利用できます。
 
-音声変換には、自前のFFTと位相同期を使うスペクトル方式を使用します。低い声を上げたときの不要な低域成分を抑えることを検証した実験的な方式です。変換時のDSP遅延は512サンプル（48 kHzで約10.67 ms）です。解析窓は2048サンプルのまま、右寄せの短い合成窓で遅延を抑えます。マイクからヘッドホンまでの総遅延10 ms以下を今後の目標とし、現在は品質検証を優先しています。実際の会話音声の自然さは聴取で確認する必要があります。
+変換時のDSP遅延は512サンプル（48 kHzで約10.67 ms）です。マイクからヘッドホンまでの総遅延10 ms以下を今後の目標とし、現在は品質検証を優先しています。実際の会話音声の自然さは聴取で確認する必要があります。
 
 ## はじめに
 
-Windows x64と、48 kHzのフルデュプレックス入出力に対応したASIOドライバが必要です。実行ファイルを用意してから、次の手順で音声処理を開始します。操作画面はReact + TypeScript / Tauri 2、スペアナはWin32の別ウィンドウです。WindowsではWebView2 Runtimeが必要です。ソースコードから実行ファイルを作成する場合は、末尾の「ビルド」を参照してください。
+Windows x64と、48 kHzのフルデュプレックス入出力に対応したASIOドライバが必要です。実行ファイルを用意してから、次の手順で音声処理を開始します。WebView2 Runtimeが必要です。ソースコードから実行ファイルを作成する場合は、末尾の「ビルド」を参照してください。
 
 ### 1. 起動する
 
@@ -154,9 +154,9 @@ GUIにも `--device`、`--frames`、`--pitch`、`--formant`、`--formant-shift` 
 
 ## ビルド
 
-ソースコードからビルドするには、RustのWindows x64 MSVCツールチェーン、Visual C++ Build ToolsとWindows SDK、libclang、ASIO SDK、Node.js 26とWebView2 Runtimeが必要です。Rust、Node.js、pnpmのバージョンは `mise.toml` で固定しています。oxlintとoxfmtは開発依存としてpnpmでインストールします。
+ソースコードからビルドするには、RustのWindows x64 MSVCツールチェーン、Visual C++ Build ToolsとWindows SDK、libclang、ASIO SDK、WebView2 Runtimeとmiseが必要です。
 
-ASIO SDK は `.tools/asiosdk` に置きます（`common/asio.h` があること）。`.cargo/config.toml` と `mise.toml` の `CPAL_ASIO_DIR` がこのパスを指します。次のスクリプトで Steinberg から取得できます（SDK 自体は再配布しないでください）。libclang が PATH にない場合は `mise.local.toml` か環境変数で `LIBCLANG_PATH` を指定してください。
+ASIO SDK は `.tools/asiosdk` に置きます（`common/asio.h` があること）。次のスクリプトで Steinberg から取得できます（SDK 自体は再配布しないでください）。libclang が PATH にない場合は `mise.local.toml` か環境変数で `LIBCLANG_PATH` を指定してください。
 
 ```powershell
 mise trust
@@ -166,39 +166,6 @@ pnpm install --frozen-lockfile
 pnpm desktop:build
 ```
 
-Pull request と `master` への push では、GitHub Actions が `mise run check`、`cargo test`、Release の `spectral_quality` を実行します。`master` への push では、加えて GUI / CLI の Release バイナリを成果物としてアップロードします。
+`target/release/` に実行ファイルが生成されます。React画面の開発には `pnpm desktop:dev`、CLIだけのビルドには `cargo build --release --locked` を使います。
 
-`target/release/` にGUIとCLIの実行ファイルが生成されます。配布するGUIにはReactの静的ファイルが埋め込まれます。
-
-検証コマンドは `mise.toml` のタスクで管理します。`mise run check` でRustとフロントエンドの整形・lint・型を検証し、`mise run fmt` で整形、`mise run fmt:check` で整形チェック、`mise run lint` でClippyとoxlintを実行します。フロントエンドだけなら `mise run check:web`、型チェックだけなら `mise run typecheck` を使います。Clippyに必要なReactのビルドはタスクの依存関係で先に実行します。
-
-React画面の開発には `pnpm desktop:dev` を使います。音声処理を含む動作確認はTauriで行い、`pnpm dev` は画面側の開発サーバーだけを起動します。CLIだけなら `cargo build --release --locked` でビルドできます。
-
-操作画面は `frontend/src/App.tsx`、IPCの型と呼び出しは `frontend/src/api.ts`、Tauriのコマンドは `src/gui.rs`、ASIOセッションの管理は `src/session.rs` にあります。スペアナの描画は `native/spectrum.cpp`、Rustとの接続は `src/native_spectrum.rs`、解析は `src/spectrum.rs` に分離しています。音声サンプルとスペアナ画像をWebViewへ転送しません。
-
-<details>
-<summary>開発者向けの検証</summary>
-
-GUIとCLIのDSPは `src/pitch.rs` です。2048サンプルの解析窓と512サンプルの右寄せ合成窓（積がHann）、128サンプルのホップ、スペクトルピークに対する位相同期を使い、各ピークの周囲の成分をまとめて移動します。前のフレームの近接ピークから位相を引き継ぎ、ピーク位置が変わっても発振の位相を連続させます。移動量には位相差から測定した周波数を使い、隣接する周波数ビンへ補間して丸めによる変化を抑えます。フォルマントは実ケプストラムの平滑化で包絡を推定し、指定した包絡に近づくよう補正します。包絡補正のゲインを制限し、最終出力は正規化範囲に制限します。大きな変換、高い入力レベル、子音や声の急変では歪みや不自然さが生じる可能性があります。解析・合成用領域とFFTの表は起動前に確保します。
-
-`tests/spectral_quality.rs` は低域の不要成分、ピッチ精度、共鳴の移動、連続的なピッチ変化時の音量・位相の揺れ、ブロック分割、引数検証、バイパスを検証します。単音の結果は会話音声の品質保証ではありません。DSPの速度は `spectral` ベンチマークで測定します。
-
-```powershell
-cargo check --features desktop --locked
-cargo test --features desktop --locked
-cargo test --release --locked --test spectral_quality
-mise run check
-cargo bench --locked --bench spectral
-```
-
-実機の音声品質と総遅延は聴取・録音で確認し、ログはバージョン管理に含めません。
-
-実声の比較には、48 kHz・モノラル・PCM16のWAVを用意し、次の例を実行します。既存の出力ファイルは上書きしません。
-
-```powershell
-cargo run --release --locked --example pitch_render -- voice.wav logs/listening-01 7 3
-```
-
-`input.wav` と変換後の `processed.wav` を出力します。変換後の音声は既知のDSP遅延を除いて書き出します。音量は自動調整しません。母音、サ行、息、低い発声から高い発声への変化を同じ箇所で比較し、入力レベルと変換量、クリッピング、聴取結果を記録してください。
-
-</details>
+整形は `mise run fmt`、チェックは `mise run check` で実行します。
