@@ -10,6 +10,24 @@ fn tone(frequency: f64, count: usize) -> Vec<f32> {
 }
 
 #[test]
+fn pitch_lobes_above_nyquist_are_discarded_without_aliasing() {
+    for pitch in [7.0, 12.0] {
+        for preserve in [false, true] {
+            let input = tone(18_000.0, 24_000);
+            let mut output = vec![0.0; input.len()];
+            PitchShifter::new(pitch, preserve, 0.0)
+                .unwrap()
+                .process_block(&input, &mut output);
+            let settled = &output[8192..];
+            let rms = (settled.iter().map(|&x| (x as f64).powi(2)).sum::<f64>()
+                / settled.len() as f64)
+                .sqrt();
+            assert!(rms < 0.002, "pitch={pitch}, preserve={preserve}, RMS={rms}");
+        }
+    }
+}
+
+#[test]
 fn moving_pitch_keeps_amplitude_and_phase_continuous() {
     let count = 96_000;
     let mut phase = 0.0_f64;

@@ -203,18 +203,20 @@ impl Fft {
         while size <= N {
             let half = size / 2;
             let stride = N / size;
-            for start in (0..N).step_by(size) {
-                for j in 0..half {
-                    let root = roots[j * stride];
-                    let a = data[start + j];
-                    let b = data[start + j + half];
+            for block in data.chunks_exact_mut(size) {
+                let (left, right) = block.split_at_mut(half);
+                for ((left, right), root) in
+                    left.iter_mut().zip(right).zip(roots.iter().step_by(stride))
+                {
+                    let a = *left;
+                    let b = *right;
                     let re = b.re * root.re - b.im * root.im;
                     let im = b.re * root.im + b.im * root.re;
-                    data[start + j] = Complex {
+                    *left = Complex {
                         re: a.re + re,
                         im: a.im + im,
                     };
-                    data[start + j + half] = Complex {
+                    *right = Complex {
                         re: a.re - re,
                         im: a.im - im,
                     };
@@ -550,6 +552,8 @@ impl PitchShifter {
         let bin_scale = WINDOW as f64 / (std::f64::consts::TAU * HOP as f64);
         let ratio_delta = self.ratio - 1.0;
         let preserve = self.preserve_formants;
+        let mut rotation_peak = BINS;
+        let mut rotation = Complex { re: 1.0, im: 0.0 };
         for i in 1..BINS - 1 {
             if dc_lobe && i == 1 {
                 continue;
@@ -565,6 +569,18 @@ impl PitchShifter {
             let destination = i as f64 + frequency_bin * ratio_delta;
             let lower = destination.floor() as isize;
             let fraction = destination - lower as f64;
+            // Both interpolation destinations are discarded by synthesis outside
+            // the positive-frequency range. Avoid envelope and phase work there.
+            if lower >= (BINS - 1) as isize || lower < 0 {
+                continue;
+            }
+            if count != 0 && peak != rotation_peak {
+                rotation = Complex::polar(
+                    1.0,
+                    self.synthesis_phase[peak] - self.phase[peak] - centre_step * peak as f64,
+                );
+                rotation_peak = peak;
+            }
             let gain = if preserve {
                 let position = (destination / self.formant_ratio).clamp(0.0, (BINS - 1) as f64);
                 let env_lower = position.floor() as usize;
@@ -576,14 +592,37 @@ impl PitchShifter {
             } else {
                 1.0
             };
-            let locked_phase = if count == 0 {
-                self.phase[peak] + centre_step * peak as f64
-            } else {
-                self.synthesis_phase[peak]
-            };
-            let phase = locked_phase
-                + wrap(self.phase[i] - self.phase[peak] + centre_step * (i as f64 - peak as f64));
-            let phasor = Complex::polar(self.magnitude[i] * gain, phase);
+            // Phase locking is a shared rotation of the original complex bins.
+            // Reuse it across the peak's lobe instead of reconstructing every bin
+            // with sin/cos. Conjugating the centre phasor moves to the analysis centre.
+            let centre = self.centre_phasor[i];
+            let phasor = self.spectrum[i]
+                .mul(Complex {
+                    re: centre.re,
+                    im: -centre.im,
+                })
+                .mul(rotation)
+                .scale(gain);
+            #[cfg(test)]
+            {
+                // Independent polar reference, including the no-peak path.
+                let locked = if count == 0 {
+                    self.phase[peak] + centre_step * peak as f64
+                } else {
+                    self.synthesis_phase[peak]
+                };
+                let reference = Complex::polar(
+                    self.magnitude[i] * gain,
+                    locked
+                        + wrap(
+                            self.phase[i] - self.phase[peak]
+                                + centre_step * (i as f64 - peak as f64),
+                        ),
+                );
+                let tolerance = 1e-10 * (self.magnitude[i] * gain).max(1.0);
+                assert!((phasor.re - reference.re).abs() < tolerance);
+                assert!((phasor.im - reference.im).abs() < tolerance);
+            }
             for (bin, weight) in [(lower, 1.0 - fraction), (lower + 1, fraction)] {
                 if bin <= 0 || bin >= (BINS - 1) as isize || weight == 0.0 {
                     continue;
@@ -652,6 +691,90 @@ impl PitchShifter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_phase_rotation_matches_polar_reference_across_retargeting() {
+        let input: Vec<f32> = (0..8192)
+            .map(|i| {
+                let phase = 0.013 * i as f64 + 0.000002 * (i * i) as f64;
+                (0.12 * phase.sin() + 0.07 * (phase * 3.0).cos()) as f32
+            })
+            .collect();
+        let mut output = vec![0.0; input.len()];
+        for preserve in [false, true] {
+            for formant in if preserve {
+                &[-12.0, 0.0, 12.0][..]
+            } else {
+                &[0.0][..]
+            } {
+                let mut dsp = PitchShifter::new(-12.0, preserve, *formant).unwrap();
+                // Silence exercises the spectrum with no detected peaks.
+                dsp.process_block(&vec![0.0_f32; WINDOW], &mut output[..WINDOW]);
+                for pitch in [-12.0, -3.0, 0.0, 3.0, 7.0, 12.0] {
+                    dsp.set_semitones(pitch).unwrap();
+                    for (chunk, out) in input.chunks(127).zip(output.chunks_mut(127)) {
+                        dsp.process_block(chunk, out);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fft_slice_butterflies_match_indexed_reference_bits() {
+        let fft = Fft::new();
+        let input = std::array::from_fn(|i| Complex {
+            re: (i as f64 * 0.31).sin(),
+            im: (i as f64 * 0.17).cos(),
+        });
+        for inverse in [false, true] {
+            let mut reference = input;
+            for (i, &j) in fft.reverse.iter().enumerate() {
+                if i < j {
+                    reference.swap(i, j);
+                }
+            }
+            let roots = if inverse {
+                &fft.inverse_roots
+            } else {
+                &fft.forward_roots
+            };
+            let mut size = 2;
+            while size <= WINDOW {
+                let half = size / 2;
+                for start in (0..WINDOW).step_by(size) {
+                    for j in 0..half {
+                        let a = reference[start + j];
+                        let b = reference[start + j + half];
+                        let root = roots[j * WINDOW / size];
+                        let re = b.re * root.re - b.im * root.im;
+                        let im = b.re * root.im + b.im * root.re;
+                        reference[start + j] = Complex {
+                            re: a.re + re,
+                            im: a.im + im,
+                        };
+                        reference[start + j + half] = Complex {
+                            re: a.re - re,
+                            im: a.im - im,
+                        };
+                    }
+                }
+                size *= 2;
+            }
+            if inverse {
+                for value in &mut reference {
+                    value.re *= 1.0 / WINDOW as f64;
+                    value.im *= 1.0 / WINDOW as f64;
+                }
+            }
+            let mut actual = input;
+            fft.transform(&mut actual, inverse);
+            for (a, b) in actual.iter().zip(reference) {
+                assert_eq!(a.re.to_bits(), b.re.to_bits());
+                assert_eq!(a.im.to_bits(), b.im.to_bits());
+            }
+        }
+    }
 
     #[test]
     fn fft_round_trip_preserves_real_and_imaginary_samples() {
