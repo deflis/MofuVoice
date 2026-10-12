@@ -186,6 +186,7 @@ impl CallbackState {
                 // SAFETY: only the callback holding the processing guard accesses DSP.
                 // The control thread never reads or mutates it during streaming.
                 nonzero = unsafe { &mut *self.pitch.get() }.process_block(input, output);
+                crate::spectrum::push_output_samples(output);
             } else {
                 output.fill(T::default());
             }
