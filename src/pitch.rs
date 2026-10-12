@@ -583,9 +583,7 @@ impl PitchShifter {
                 self.synthesis_phase[peak]
             };
             let phase = locked_phase
-                + wrap(
-                    self.phase[i] - self.phase[peak] + centre_step * (i as f64 - peak as f64),
-                );
+                + wrap(self.phase[i] - self.phase[peak] + centre_step * (i as f64 - peak as f64));
             let phasor = Complex::polar(self.magnitude[i] * gain, phase);
             for (bin, weight) in [(lower, 1.0 - fraction), (lower + 1, fraction)] {
                 if bin <= 0 || bin >= (BINS - 1) as isize || weight == 0.0 {
@@ -603,8 +601,7 @@ impl PitchShifter {
                 im: -self.shifted[i].im,
             };
         }
-        self.fft
-            .inverse_real(&mut self.shifted, &mut self.fft_work);
+        self.fft.inverse_real(&mut self.shifted, &mut self.fft_work);
         let start = WINDOW - SYNTHESIS;
         for i in start..WINDOW {
             self.output[(clock + i - start) % QUEUE] +=
