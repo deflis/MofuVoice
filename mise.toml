@@ -51,3 +51,105 @@ depends = ["fmt:check", "lint", "typecheck"]
 [tasks."check:web"]
 description = "Check frontend formatting, lint and types"
 depends = ["fmt:web:check", "lint:web", "typecheck"]
+
+[tasks."setup:ci"]
+description = "Install LLVM and ASIO SDK for GitHub Actions"
+depends = ["setup:ci:llvm", "setup:asio"]
+
+[tasks."setup:asio"]
+description = "Fetch the ASIO SDK"
+shell = "pwsh -NoProfile -Command"
+run = '''
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+
+$Url = 'https://download.steinberg.net/sdk_downloads/ASIO-SDK_2.3.4_2025-10-15.zip'
+$Destination = Join-Path '{{config_root}}' '.tools/asiosdk'
+
+$asioHeader = Join-Path $Destination 'common\asio.h'
+if (Test-Path -LiteralPath $asioHeader -PathType Leaf) {
+    Write-Host "ASIO SDK already present at $Destination"
+    exit 0
+}
+
+$toolsDir = Split-Path -Parent $Destination
+if (-not (Test-Path -LiteralPath $toolsDir)) {
+    New-Item -ItemType Directory -Path $toolsDir | Out-Null
+}
+if (Test-Path -LiteralPath $Destination) {
+    Remove-Item -LiteralPath $Destination -Recurse -Force
+}
+
+$tempZip = Join-Path ([System.IO.Path]::GetTempPath()) ("asio-sdk-" + [Guid]::NewGuid().ToString('N') + '.zip')
+$tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("asio-sdk-" + [Guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $tempDir | Out-Null
+try {
+    Write-Host "Downloading ASIO SDK from $Url"
+    Invoke-WebRequest -Uri $Url -OutFile $tempZip
+    Expand-Archive -LiteralPath $tempZip -DestinationPath $tempDir -Force
+
+    $topLevel = @(Get-ChildItem -LiteralPath $tempDir)
+    if ($topLevel.Count -eq 0) {
+        throw "ASIO SDK zip from $Url extracted to an empty directory"
+    }
+    if ($topLevel.Count -eq 1 -and $topLevel[0].PSIsContainer) {
+        Move-Item -LiteralPath $topLevel[0].FullName -Destination $Destination
+    } else {
+        New-Item -ItemType Directory -Path $Destination | Out-Null
+        Move-Item -Path (Join-Path $tempDir '*') -Destination $Destination
+    }
+
+    if (-not (Test-Path -LiteralPath $asioHeader -PathType Leaf)) {
+        throw "ASIO SDK incomplete at ${Destination}: missing common\asio.h"
+    }
+    Write-Host "ASIO SDK installed at $Destination"
+}
+finally {
+    if (Test-Path -LiteralPath $tempZip) { Remove-Item -LiteralPath $tempZip -Force }
+    if (Test-Path -LiteralPath $tempDir) { Remove-Item -LiteralPath $tempDir -Recurse -Force }
+}
+'''
+
+[tasks."setup:ci:llvm"]
+description = "Install LLVM 23.1.3 and export libclang for GitHub Actions"
+shell = "pwsh -NoProfile -Command"
+run = '''
+# Install the official Windows x64 LLVM distribution for GitHub Actions.
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+
+if (-not $env:GITHUB_ENV -or -not $env:GITHUB_PATH -or -not $env:RUNNER_TEMP) {
+    throw 'setup:ci:llvm must run in GitHub Actions'
+}
+
+$version = '23.1.3'
+$sha256 = '9ee6a2192fbb30c776415af529927f76ca6b5d1d55699bb1315f9878e610b5b8'
+$destination = Join-Path '{{config_root}}' '.tools/llvm'
+$bin = Join-Path $destination 'bin'
+$libclang = Join-Path $bin 'libclang.dll'
+
+if (-not (Test-Path -LiteralPath $libclang -PathType Leaf)) {
+    $archive = Join-Path $env:RUNNER_TEMP "llvm-$version.tar.xz"
+    try {
+        $url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-$version/clang%2Bllvm-$version-x86_64-pc-windows-msvc.tar.xz"
+        Invoke-WebRequest -Uri $url -OutFile $archive
+        if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $sha256) {
+            throw "LLVM $version archive checksum mismatch"
+        }
+        New-Item -ItemType Directory -Path $destination -Force | Out-Null
+        tar -xf $archive -C $destination --strip-components=1
+        if ($LASTEXITCODE -ne 0) { throw "LLVM extraction failed with exit code $LASTEXITCODE" }
+    }
+    finally {
+        if (Test-Path -LiteralPath $archive) { Remove-Item -LiteralPath $archive -Force }
+    }
+}
+
+if (-not (Test-Path -LiteralPath $libclang -PathType Leaf)) {
+    throw "LLVM installation is missing $libclang"
+}
+& (Join-Path $bin 'clang.exe') --version
+if ($LASTEXITCODE -ne 0) { throw "clang failed with exit code $LASTEXITCODE" }
+"LIBCLANG_PATH=$bin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+$bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+'''
