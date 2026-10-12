@@ -1,5 +1,5 @@
 use rust_low_latency_voice_changer::pitch::LATENCY;
-use rust_low_latency_voice_changer::{asio, cli};
+use rust_low_latency_voice_changer::{audio::DspSettings, backend, cli};
 use rust_low_latency_voice_changer::{RATE, TARGET_FRAMES};
 use std::{
     error::Error,
@@ -12,35 +12,36 @@ use std::{
 fn main() -> Result<(), Box<dyn Error>> {
     let options = cli::Options::parse(std::env::args().skip(1))?;
     if options.help {
-        println!("Usage: rust-low-latency-voice-changer-cli --device NAME [--frames N] [--seconds N] [--pitch SEMITONES] [--formant preserve|off] [--formant-shift SEMITONES] [--auto-level on|off] [--level-target DB] [--level-max-gain DB] [--level-floor DB] [--level-response MS] [--compress-threshold DB] [--compress-ratio N] [--compress-attack MS] [--compress-release MS] [--gate on|off] [--gate-threshold auto|DB] [--gate-attack MS] [--gate-release MS]\n       rust-low-latency-voice-changer-cli --inspect --device NAME [--frames N]\n       rust-low-latency-voice-changer-cli --list-devices\nSelect a device with --device NAME; use --list-devices to see registered names.\nDefault: 512 frames / pitch 0 / gate off / auto level off. Pitch and formant shift range: -12..12 (fractional allowed). Formant shift defaults to 0; nonzero shift requires preserve.\nAuto level is a post-pitch RMS leveler and soft-knee compressor with a -1 dBFS peak guard. Defaults: target -20 dBFS RMS, max gain +9 dB, activity floor -50 dBFS, response 1500 ms; compression -12 dBFS / 3:1 / attack 5 ms / release 150 ms. All parameters are customizable. No added sample delay.\nGate is a soft pre-pitch expander; threshold defaults to auto noise-floor tracking; attack/release default to 5/80 ms.\nInput 1 -> output 1; other outputs silent. Pitch 0, formant shift 0, gate off, and auto level off: bit-preserving zero-delay bypass.\nWet DSP: spectral phase locking, fixed {LATENCY} samples of delay. Formant correction: cepstral envelope, default preserve; --formant off disables it.\nEnter stops interactive mode.");
+        println!("Usage: rust-low-latency-voice-changer-cli [--backend auto|cpal|asio] [--device NAME] [--output-device NAME] [--frames N] [--seconds N] [--pitch SEMITONES] [--formant preserve|off] [--formant-shift SEMITONES] [--auto-level on|off] [--level-target DB] [--level-max-gain DB] [--level-floor DB] [--level-response MS] [--compress-threshold DB] [--compress-ratio N] [--compress-attack MS] [--compress-release MS] [--gate on|off] [--gate-threshold auto|DB] [--gate-attack MS] [--gate-release MS]\n       rust-low-latency-voice-changer-cli --inspect --device NAME [--frames N]\n       rust-low-latency-voice-changer-cli --list-devices\nBackend: --backend auto|cpal|asio (default auto, ASIO preferred on Windows when a registered driver is available); CPAL uses the default input/output unless selected with --device INPUT and --output-device OUTPUT.\nSelect a device with --device NAME; use --list-devices to see registered names.\nDefault: 512 frames / pitch 0 / gate off / auto level off. Pitch and formant shift range: -12..12 (fractional allowed). Formant shift defaults to 0; nonzero shift requires preserve.\nAuto level is a post-pitch RMS leveler and soft-knee compressor with a -1 dBFS peak guard. Defaults: target -20 dBFS RMS, max gain +9 dB, activity floor -50 dBFS, response 1500 ms; compression -12 dBFS / 3:1 / attack 5 ms / release 150 ms. All parameters are customizable. No added sample delay.\nGate is a soft pre-pitch expander; threshold defaults to auto noise-floor tracking; attack/release default to 5/80 ms.\nInput 1 -> output 1; other outputs silent. Pitch 0, formant shift 0, gate off, and auto level off: bit-preserving zero-DSP-delay bypass; backend queue and hardware latency are separate.\nWet DSP: spectral phase locking, fixed {LATENCY} samples of delay. Formant correction: cepstral envelope, default preserve; --formant off disables it.\nEnter stops interactive mode.");
         return Ok(());
     }
-    if !options.list && options.device.is_empty() {
-        return Err("--device requires an exact ASIO device name; use --list-devices".into());
+    if !options.list
+        && backend::resolve(options.backend) == backend::BackendKind::Asio
+        && options.device.is_empty()
+    {
+        return Err("--device requires an exact audio device name; use --list-devices".into());
     }
-    let host = asio_sys::Asio::new();
-    let names = host.driver_names();
+    let backend = backend::select(options.backend, &options.output_device)?;
     if options.list {
-        println!("Registered ASIO drivers (not opened):");
-        for name in names {
+        println!("Available audio devices (not opened):");
+        for name in backend.device_names()? {
+            println!("  {name}");
+        }
+        println!("Available output devices (CPAL only):");
+        for name in backend.output_device_names()? {
             println!("  {name}");
         }
         return Ok(());
     }
-    let name = names
-        .into_iter()
-        .find(|name| name.eq_ignore_ascii_case(&options.device))
-        .ok_or_else(|| {
-            format!(
-                "Requested ASIO device {} not found; use --list-devices",
-                options.device
-            )
-        })?;
-    let driver = host.load_driver(&name)?;
-    println!("Selected: {}", driver.name());
-    let config = asio::Configuration::query(&driver)?;
-    config.print();
-    config.validate(options.frames)?;
+    let details = backend.inspect(&options.device, options.frames)?;
+    println!(
+        "Selected: {}\n{details}",
+        if options.device.is_empty() {
+            "OS default"
+        } else {
+            &options.device
+        }
+    );
     if options.inspect {
         println!(
             "Requested 48 kHz / {} frames supported. No audio buffers created.",
@@ -48,30 +49,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         );
         return Ok(());
     }
-    let mut engine = asio::Engine::open(
-        driver,
-        config,
-        options.frames,
-        asio::DspSettings {
-            semitones: options.pitch,
-            preserve_formants: options.preserve_formants,
-            formant_shift: options.formant_shift,
-            level: options.level,
-            gate: rust_low_latency_voice_changer::gate::GateSettings {
-                enabled: options.gate,
-                threshold: options.gate_threshold,
-                attack_ms: options.gate_attack_ms,
-                release_ms: options.gate_release_ms,
-            },
-        },
-    )?;
+    let mut engine = backend.open(&options.device, options.frames, DspSettings::from(&options))?;
     engine.print_latencies()?;
     println!(
         "Auto level: {}; added DSP delay=0 samples.",
         if options.level.enabled { "on" } else { "off" }
     );
     if options.pitch == 0.0 && options.formant_shift == 0.0 {
-        println!("Pitch/formant DSP=0 samples; gate and auto level add 0 samples; FIFO=0 samples. Input 1 -> output 1.");
+        println!("Pitch/formant DSP=0 samples; gate and auto level add 0 samples; backend queue latency is reported separately. Input 1 -> output 1.");
     } else {
         println!(
             "Pitch={} semitones; spectral wet DSP delay={LATENCY} samples ({:.3} ms).",
@@ -87,7 +72,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         options.gate_release_ms
     );
     println!(
-        "ASIO period: {:.3} ms; target {} samples / {:.3} ms. Total latency remains unmeasured.",
+        "Requested audio period: {:.3} ms; target {} samples / {:.3} ms. Total latency remains unmeasured.",
         options.frames as f64 * 1000.0 / RATE as f64,
         TARGET_FRAMES,
         TARGET_FRAMES as f64 * 1000.0 / RATE as f64
@@ -98,7 +83,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "Formant shift: {} semitones (independent of pitch).",
         options.formant_shift
     );
-    println!("Running single full-duplex callback. Press Enter to stop.");
+    println!("Audio running. Press Enter to stop.");
     let (stop_tx, stop_rx) = mpsc::channel();
     if options.seconds.is_none() {
         thread::spawn(move || {
@@ -125,7 +110,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 last_blocks = blocks;
             }
             if last_progress.elapsed() > Duration::from_secs(2) {
-                return Err("No ASIO callbacks for 2 seconds".into());
+                return Err("No audio callbacks for 2 seconds".into());
             }
             let elapsed = start.elapsed();
             if elapsed >= next_report {

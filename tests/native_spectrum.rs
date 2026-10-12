@@ -1,3 +1,4 @@
+#![cfg(windows)]
 //! Separate process from spectrum unit tests, so the singleton analyzer cannot race.
 use rust_low_latency_voice_changer::native_spectrum;
 #[test]

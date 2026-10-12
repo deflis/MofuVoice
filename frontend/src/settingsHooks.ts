@@ -19,6 +19,12 @@ export function useDeviceSettings() {
       const settings = requireSettings(state.settings);
       return {
         device: settings.device,
+        outputDevice: settings.outputDevice,
+        backend: settings.backend,
+        resolvedBackend: state.resolvedBackend,
+        backends: state.backends,
+        outputDevices: state.outputDevices,
+        updateBackend: state.updateBackend,
         frames: settings.frames,
         devices: state.devices,
         update: state.update,
@@ -73,9 +79,13 @@ export function useAudioControls() {
       const operating = state.pending || state.closing;
       const busy = state.snapshot.busy;
       return {
-        startDisabled: operating || busy || !requireSettings(state.settings).device,
+        startDisabled:
+          operating ||
+          busy ||
+          !state.audioAvailable ||
+          (state.resolvedBackend === "asio" && !requireSettings(state.settings).device),
         stopDisabled: operating || !busy,
-        spectrumDisabled: operating,
+        spectrumDisabled: operating || !state.spectrumAvailable,
         firstLine: state.snapshot.status.split("\n")[0],
         start: state.start,
         stop: state.stop,
@@ -107,7 +117,9 @@ export function useHeaderStatus() {
 }
 
 export function useNotifications() {
-  return useSettingsStore(useShallow((state) => ({ error: state.error, notice: state.notice })));
+  return useSettingsStore(
+    useShallow((state) => ({ error: state.error || state.deviceError, notice: state.notice })),
+  );
 }
 
 export function useStatusDetails() {

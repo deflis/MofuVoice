@@ -1,12 +1,25 @@
 # Rust Low-Latency Voice Changer
 
-Windows向けのリアルタイムボイスチェンジャーです。GUIで音声デバイスを選び、声の高さとフォルマントの移動量を個別に設定できます。通常の操作はGUIで行い、CLIは設定確認や自動実行に利用できます。
+Windows・macOS・Linuxの音声入出力に対応するリアルタイムボイスチェンジャーです。GUIで音声デバイスを選び、声の高さとフォルマントの移動量を個別に設定できます。通常の操作はGUIで行い、CLIは設定確認や自動実行に利用できます。
 
 変換時のDSP遅延は512サンプル（48 kHzで約10.67 ms）です。マイクからヘッドホンまでの総遅延10 ms以下を今後の目標とし、現在は品質検証を優先しています。実際の会話音声の自然さは聴取で確認する必要があります。
 
+## 音声バックエンドとDSPの方針
+
+DSP（ピッチ・フォルマント・FFT・ゲート・自動レベル）は既存ライブラリを使わず自前で実装します。音声入出力にはCPALを使用し、既定は自動選択で、Windowsに登録ASIOドライバがある場合は直接ASIOを優先します。それ以外はCPAL経由でWindowsのWASAPI、macOSのCoreAudio、LinuxのALSAを使います。スペアナのウィンドウはWindows専用です。LinuxのビルドにはALSA開発パッケージ（Debian/Ubuntuでは`libasound2-dev`）が必要です。
+
+CPALでは48 kHzの共通f32/i32/i16形式を検査し、入力と出力の間に事前確保キューを使います。キュー遅延はDSP遅延とは別に表示します。別デバイスのクロック差は補正せず、キュー不足・満杯やデバイス異常を検出して停止します。実機の往復遅延と聴取品質は個別に確認してください。
+
+```sh
+cargo run --bin rust-low-latency-voice-changer-cli -- --list-devices
+cargo run --bin rust-low-latency-voice-changer-cli -- --backend cpal --device "INPUT" --output-device "OUTPUT" --frames 512
+```
+
+CPALではデバイスを省略するとOSの既定入力・出力を使います。ASIOではドライバ名を指定してください。`--backend cpal` / `--backend asio`で明示選択できます。ASIOは既定のビルド機能に含まれ、WindowsのビルドにはASIO SDKが必要です。SDKなしのCPAL専用ビルドには`--no-default-features --features cpal-backend`（GUIはさらに`desktop`）、共通DSPだけのビルドには`--no-default-features`を使います。
+
 ## はじめに
 
-Windows x64と、48 kHzのフルデュプレックス入出力に対応したASIOドライバが必要です。実行ファイルを用意してから、次の手順で音声処理を開始します。WebView2 Runtimeが必要です。ソースコードから実行ファイルを作成する場合は、末尾の「ビルド」を参照してください。
+48 kHzの音声入出力に対応したデバイスが必要です。実行ファイルを用意してから、次の手順で音声処理を開始します。WindowsのGUIにはWebView2 Runtimeが必要です。ソースコードから実行ファイルを作成する場合は、末尾の「ビルド」を参照してください。
 
 ### 1. 起動する
 
@@ -14,7 +27,7 @@ Windows x64と、48 kHzのフルデュプレックス入出力に対応したASI
 
 ### 2. デバイスと音声の接続を準備する
 
-**ASIO device** の一覧から使用するASIOデバイスを選びます。初回起動時は未選択です。次回からは前回保存した設定を復元します。
+**音声API** は自動（ASIO優先）が既定です。ASIOが選ばれた場合は **ASIO device** を指定します。CPALでは **入力デバイス** と **出力デバイス** を選び、省略するとOSの既定デバイスを使います。次回からは前回保存した設定を復元します。
 
 デバイス側の設定でサンプルレートを **48 kHz** にし、マイクの信号を **入力1** に接続してください。アプリは入力1を処理して **出力1** へ送り、その他の出力は無音にします。
 
@@ -48,7 +61,7 @@ Voicemeeter（Banana / Potato）や VB-Audio Matrix でルーティングする�
 
 | 項目 | 使い方 |
 | --- | --- |
-| **Device** | 使用するASIOデバイスを選択します |
+| **音声API / Device** | 自動（ASIO優先）、CPAL、ASIOと、使用する入力・出力デバイスを選択します |
 | **Frames** | 音声バッファのサイズ。既定512。デバイスが対応する値を指定します |
 | **Pitch** | 声の高さ。−12〜+12半音、小数可。既定0 |
 | **Preserve formants** | オンにすると、ピッチ変更時に元の声の響きを保つ補正を行います。既定オン |
@@ -78,8 +91,8 @@ Framesを小さくすると音声処理の周期が短くなりますが、処�
 GUIの詳細値は保存・復元され、CLI指定は各項目だけを上書きします。設定変更はStop → 変更 → Startの順です。GUI設定INIには `auto_level` と、表の順に `level_target_db`、`level_max_gain_db`、`level_floor_db`、`level_response_ms`、`compress_threshold_db`、`compress_ratio`、`compress_attack_ms`、`compress_release_ms` を保存します。既存のINIにはこれらのキーが必要です。起動エラーが出た場合はキーを追加するか、INIを削除して既定値で起動してください。
 
 ```powershell
-.\target\release\rust-low-latency-voice-changer-cli.exe --device "ASIOデバイス名" --auto-level on
-.\target\release\rust-low-latency-voice-changer-cli.exe --device "ASIOデバイス名" --auto-level on --level-target -18 --level-max-gain 6 --compress-ratio 4
+.\target\release\rust-low-latency-voice-changer-cli.exe --backend asio --device "ASIOデバイス名" --auto-level on
+.\target\release\rust-low-latency-voice-changer-cli.exe --backend asio --device "ASIOデバイス名" --auto-level on --level-target -18 --level-max-gain 6 --compress-ratio 4
 ```
 
 無音では補正量を保持し、下限を超えるノイズも声として扱うため、発話判定の下限と最大増幅量を環境に合わせて調整してください。前段のゲートとも併用できます。音量補正の減衰は最大18 dB、後段のピーク保護は−1 dBFSで固定です。突発ピークは即時にゲインを下げるため、強い過渡音では波形に影響があります。入力やピッチ変換ですでにクリップした波形は復元しません。
@@ -98,6 +111,8 @@ INIファイルはUTF-8で、次の形式です。`device` は未選択の場合
 
 ```ini
 [gui]
+backend=asio
+output_device=
 device=Example ASIO Device
 frames=512
 pitch=0
@@ -124,7 +139,7 @@ compress_release_ms=150
 
 | 状況 | 確認すること |
 | --- | --- |
-| Deviceの一覧にデバイスがない | 使用するデバイスのASIOドライバがインストールされているか確認し、アプリを起動し直します |
+| Deviceの一覧にデバイスがない | 音声APIの選択とOSのデバイス接続を確認し、ASIOの場合は対応ドライバをインストールします |
 | Inspectでレートのエラーが出る | デバイス側を48 kHzに設定し直します。アプリはレートを変更しません |
 | Framesが非対応と表示される | 下部に表示されるバッファ範囲・推奨値を確認し、対応するサイズを指定します |
 | 形式が非対応と表示される | 全入出力チャンネルが同じlittle-endian f32、i32、またはi16形式に対応するデバイスが必要です |
@@ -143,18 +158,18 @@ PitchとFormant shiftが両方0で、Noise gateとAuto levelがオフならDSP�
 
 ```powershell
 .\target\release\rust-low-latency-voice-changer-cli.exe --list-devices
-.\target\release\rust-low-latency-voice-changer-cli.exe --device "ASIOデバイス名" --inspect
-.\target\release\rust-low-latency-voice-changer-cli.exe --device "ASIOデバイス名" --pitch 3 --seconds 60
-.\target\release\rust-low-latency-voice-changer-cli.exe --device "ASIOデバイス名" --pitch 0 --formant-shift -3
+.\target\release\rust-low-latency-voice-changer-cli.exe --backend asio --device "ASIOデバイス名" --inspect
+.\target\release\rust-low-latency-voice-changer-cli.exe --backend asio --device "ASIOデバイス名" --pitch 3 --seconds 60
+.\target\release\rust-low-latency-voice-changer-cli.exe --backend asio --device "ASIOデバイス名" --pitch 0 --formant-shift -3
 ```
 
 `--seconds` を省略するとEnterで停止します。`--frames`、`--pitch`、`--formant preserve` または `--formant off`、`--formant-shift` で設定を指定できます。フォルマントシフトは−12〜+12半音、小数可、既定0です。詳細は `--help` を参照してください。
 
-GUIにも `--device`、`--frames`、`--pitch`、`--formant`、`--formant-shift` で起動時の値を渡せます。指定した項目は保存済みの値より優先し、指定しない項目は復元します。通常はウィンドウ内で設定できます。CLIはGUIの保存設定を使用・変更しません。
+GUIにも `--backend`、`--output-device`、`--device`、`--frames`、`--pitch`、`--formant`、`--formant-shift` で起動時の値を渡せます。指定した項目は保存済みの値より優先し、指定しない項目は復元します。通常はウィンドウ内で設定できます。CLIはGUIの保存設定を使用・変更しません。
 
 ## ビルド
 
-ソースコードからビルドするには、RustのWindows x64 MSVCツールチェーン、Visual C++ Build ToolsとWindows SDK、libclang、ASIO SDK、WebView2 Runtimeとmiseが必要です。
+Windowsで既定のASIO対応ビルドを作るには、RustのWindows x64 MSVCツールチェーン、Visual C++ Build ToolsとWindows SDK、libclang、ASIO SDK、WebView2 Runtimeとmiseが必要です。
 
 ASIO SDK は `.tools/asiosdk` に置きます（`common/asio.h` があること）。次のmiseタスクで Steinberg から取得できます（SDK 自体は再配布しないでください）。libclang が PATH にない場合は `mise.local.toml` か環境変数で `LIBCLANG_PATH` を指定してください。
 

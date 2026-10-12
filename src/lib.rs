@@ -1,12 +1,20 @@
 //! Shared audio engine and application support. DSP modules are audio-API-independent.
+#[cfg(all(windows, feature = "asio"))]
 pub mod asio;
+pub mod audio;
+#[cfg(feature = "cpal-backend")]
+mod audio_queue;
+pub mod backend;
 pub mod cli;
+#[cfg(feature = "cpal-backend")]
+mod cpal_backend;
 pub mod gate;
 #[cfg(feature = "desktop")]
 pub mod gui;
-#[cfg(feature = "desktop")]
+#[cfg(any(feature = "desktop", test))]
 mod gui_settings;
 pub mod level;
+#[cfg(windows)]
 pub mod native_spectrum;
 pub mod pitch;
 pub mod session;

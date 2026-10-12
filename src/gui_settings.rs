@@ -1,12 +1,10 @@
 //! GUI preferences only; never read or written from an audio callback.
 use crate::{cli::Options, gate::GateThreshold};
-use std::{
-    error::Error,
-    fs,
-    io::ErrorKind,
-    path::{Path, PathBuf},
-};
+#[cfg(feature = "desktop")]
+use std::path::PathBuf;
+use std::{error::Error, fs, io::ErrorKind, path::Path};
 
+#[cfg(feature = "desktop")]
 pub(crate) fn path() -> Result<PathBuf, Box<dyn Error>> {
     Ok(std::env::current_exe()
         .map_err(|error| format!("Cannot locate GUI executable: {error}"))?
@@ -22,6 +20,8 @@ fn threshold_text(threshold: GateThreshold) -> String {
 
 fn arguments(options: &Options) -> Vec<String> {
     let mut args = vec![
+        "--backend".into(),
+        options.backend.name().into(),
         "--frames".into(),
         options.frames.to_string(),
         "--pitch".into(),
@@ -54,6 +54,9 @@ fn arguments(options: &Options) -> Vec<String> {
     if !options.device.is_empty() {
         args.extend(["--device".into(), options.device.clone()]);
     }
+    if !options.output_device.is_empty() {
+        args.extend(["--output-device".into(), options.output_device.clone()]);
+    }
     args
 }
 
@@ -76,6 +79,8 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
         let key = key.trim();
         if ![
             "device",
+            "backend",
+            "output_device",
             "frames",
             "pitch",
             "formant_shift",
@@ -114,6 +119,8 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
         _ => return Err("gate must be true or false".into()),
     };
     let mut args = vec![
+        "--backend",
+        values.get("backend").copied().unwrap_or("asio"),
         "--frames",
         value("frames")?,
         "--pitch",
@@ -143,6 +150,9 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
     if !device.is_empty() {
         args.extend(["--device", device]);
     }
+    if let Some(output) = values.get("output_device").filter(|name| !name.is_empty()) {
+        args.extend(["--output-device", output]);
+    }
     Options::parse_gui(args.into_iter().map(String::from))
 }
 
@@ -165,6 +175,8 @@ pub(crate) fn merge(saved: &Options, args: Vec<String>) -> Result<Options, Box<d
     while let Some(flag) = input.next() {
         if ![
             "--device",
+            "--backend",
+            "--output-device",
             "--frames",
             "--pitch",
             "--formant-shift",
@@ -195,7 +207,9 @@ pub(crate) fn merge(saved: &Options, args: Vec<String>) -> Result<Options, Box<d
 
 pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>> {
     Options::parse_gui(arguments(options))?;
-    if options.device.contains(['\r', '\n', '\0']) {
+    if options.device.contains(['\r', '\n', '\0'])
+        || options.output_device.contains(['\r', '\n', '\0'])
+    {
         return Err("Device name cannot contain line breaks or NUL".into());
     }
     let mut text = format!(
@@ -210,7 +224,12 @@ pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>>
         options.gate_attack_ms,
         options.gate_release_ms
     );
-    text.push_str(&format!("auto_level={}\n", options.level.enabled));
+    text.push_str(&format!(
+        "backend={}\noutput_device={}\nauto_level={}\n",
+        options.backend.name(),
+        options.output_device,
+        options.level.enabled
+    ));
     for (key, value) in crate::level::KEYS.iter().zip(options.level.values()) {
         text.push_str(&format!("{key}={value}\n"));
     }
@@ -233,6 +252,38 @@ pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>>
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn backend_and_output_round_trip_with_legacy_asio_settings() {
+        let path =
+            std::env::temp_dir().join(format!("voice-backend-settings-{}.ini", std::process::id()));
+        let options = Options::parse_gui(
+            [
+                "--backend",
+                "cpal",
+                "--device",
+                "入力 [id:1]",
+                "--output-device",
+                "出力 = Headphones [id:2]",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        save(&path, &options).unwrap();
+        assert_eq!(load(&path).unwrap(), options);
+        let asio =
+            Options::parse_gui(["--backend", "asio", "--device", "ASIO Device"].map(String::from))
+                .unwrap();
+        save(&path, &asio).unwrap();
+        let legacy = fs::read_to_string(&path)
+            .unwrap()
+            .replace("backend=asio\n", "")
+            .replace("output_device=\n", "");
+        assert_eq!(decode(&legacy).unwrap(), asio);
+        let auto = Options::parse_gui(Vec::<String>::new()).unwrap();
+        save(&path, &auto).unwrap();
+        assert_eq!(load(&path).unwrap(), auto);
+        fs::remove_file(path).unwrap();
+    }
     #[test]
     fn round_trip_and_replace_without_audio() {
         let path = std::env::temp_dir()

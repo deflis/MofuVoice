@@ -4,6 +4,8 @@ import { afterEach, beforeEach, mock, test } from "node:test";
 
 const settings = {
   device: "ASIO",
+  backend: "auto",
+  outputDevice: "",
   frames: "64",
   pitch: "0",
   formantShift: "0",
@@ -24,7 +26,17 @@ const settings = {
     releaseMs: "100",
   },
 };
-const bootstrap = { settings, devices: ["ASIO"], levelDefaults: settings.level };
+const bootstrap = {
+  settings,
+  devices: ["ASIO"],
+  outputDevices: [],
+  backends: ["auto", "cpal", "asio"],
+  levelDefaults: settings.level,
+  spectrumAvailable: true,
+  audioAvailable: true,
+  deviceError: "",
+  resolvedBackend: "asio",
+};
 const commands = {};
 const listen = mock.fn();
 mock.module("@tauri-apps/api/core", {
@@ -47,6 +59,13 @@ function deferred() {
 beforeEach(() => {
   store.setState(store.getInitialState(), true);
   commands.bootstrap = mock.fn(async () => bootstrap);
+  commands.device_choices = mock.fn(async () => ({
+    devices: ["Mic"],
+    outputDevices: ["Headphones"],
+    audioAvailable: true,
+    deviceError: "",
+    resolvedBackend: "cpal",
+  }));
   commands.audio_status = mock.fn(async () => ({ busy: false, status: "idle" }));
   for (const action of [
     "start_audio",
@@ -206,4 +225,29 @@ test("audio commands send the merged Tauri command names and payloads", async ()
   assert.deepEqual(commands.open_spectrum.mock.calls[0].arguments, [undefined]);
   assert.deepEqual(commands.save_settings.mock.calls[0].arguments, [{ settings }]);
   assert.equal(store.getState().notice, "設定を保存しました。");
+});
+
+test("backend switching refreshes device choices and resets both endpoints", async () => {
+  store.setState(bootstrap);
+  const loading = deferred();
+  commands.device_choices.mock.mockImplementation(() => loading.promise);
+  const switching = store.getState().updateBackend("cpal");
+  assert.equal(store.getState().pending, true);
+  assert.equal(store.getState().settings.backend, "cpal");
+  assert.equal(store.getState().settings.device, "");
+  assert.equal(store.getState().settings.outputDevice, "");
+  assert.equal(store.getState().audioAvailable, false);
+  loading.resolve({
+    devices: ["Mic"],
+    outputDevices: ["Headphones"],
+    audioAvailable: true,
+    deviceError: "",
+    resolvedBackend: "cpal",
+  });
+  await switching;
+  assert.deepEqual(store.getState().devices, ["Mic"]);
+  assert.deepEqual(store.getState().outputDevices, ["Headphones"]);
+  assert.equal(store.getState().resolvedBackend, "cpal");
+  assert.equal(store.getState().pending, false);
+  assert.deepEqual(commands.device_choices.mock.calls[0].arguments, [{ backend: "cpal" }]);
 });

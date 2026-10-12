@@ -1,5 +1,7 @@
-//! React commands control the ASIO session; no WebView messages enter audio callbacks.
-use crate::{cli::Options, gate::GateThreshold, gui_settings, native_spectrum, session::Session};
+//! React commands control the audio session; no WebView messages enter audio callbacks.
+#[cfg(windows)]
+use crate::native_spectrum;
+use crate::{backend, cli::Options, gate::GateThreshold, gui_settings, session::Session};
 use serde::{Deserialize, Serialize};
 use std::{error::Error, path::PathBuf, sync::Mutex};
 use tauri::{Emitter, Manager, State};
@@ -50,6 +52,8 @@ impl LevelControls {
 pub struct Settings {
     level: LevelControls,
     device: String,
+    output_device: String,
+    backend: String,
     frames: String,
     pitch: String,
     formant_shift: String,
@@ -64,6 +68,8 @@ impl Settings {
         Self {
             level: LevelControls::from_settings(options.level),
             device: options.device.clone(),
+            output_device: options.output_device.clone(),
+            backend: options.backend.name().into(),
             frames: options.frames.to_string(),
             pitch: options.pitch.to_string(),
             formant_shift: options.formant_shift.to_string(),
@@ -79,6 +85,8 @@ impl Settings {
     }
     fn options(&self) -> Result<Options, String> {
         let mut args = vec![
+            "--backend".into(),
+            self.backend.clone(),
             "--frames".into(),
             self.frames.clone(),
             "--pitch".into(),
@@ -111,7 +119,12 @@ impl Settings {
         if !self.device.is_empty() {
             args.extend(["--device".into(), self.device.clone()]);
         }
-        if self.device.contains(['\r', '\n', '\0']) {
+        if !self.output_device.is_empty() {
+            args.extend(["--output-device".into(), self.output_device.clone()]);
+        }
+        if self.device.contains(['\r', '\n', '\0'])
+            || self.output_device.contains(['\r', '\n', '\0'])
+        {
             return Err("Invalid device name".into());
         }
         Options::parse_gui(args).map_err(|error| error.to_string())
@@ -135,17 +148,70 @@ struct Snapshot {
 struct Bootstrap {
     level_defaults: LevelControls,
     settings: Settings,
-    devices: Vec<String>,
+    #[serde(flatten)]
+    choices: DeviceChoices,
+    backends: Vec<String>,
+    spectrum_available: bool,
 }
-
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeviceChoices {
+    devices: Vec<String>,
+    output_devices: Vec<String>,
+    audio_available: bool,
+    device_error: String,
+    resolved_backend: String,
+}
+fn choices(kind: backend::BackendKind) -> DeviceChoices {
+    let kind = backend::resolve(kind);
+    let result = (|| -> backend::Result<_> {
+        let selected = backend::select(kind, "")?;
+        Ok((selected.device_names()?, selected.output_device_names()?))
+    })();
+    match result {
+        Ok((devices, output_devices)) => DeviceChoices {
+            devices,
+            output_devices,
+            audio_available: true,
+            device_error: String::new(),
+            resolved_backend: backend::resolve(kind).name().into(),
+        },
+        Err(error) => DeviceChoices {
+            devices: Vec::new(),
+            output_devices: Vec::new(),
+            audio_available: false,
+            device_error: error.to_string(),
+            resolved_backend: backend::resolve(kind).name().into(),
+        },
+    }
+}
 #[tauri::command]
 fn bootstrap(state: State<'_, DesktopState>) -> Result<Bootstrap, String> {
     let desktop = state.lock().map_err(|error| error.to_string())?;
+    let kind = backend::BackendKind::parse(&desktop.settings.backend)
+        .map_err(|error| error.to_string())?;
     Ok(Bootstrap {
         level_defaults: LevelControls::from_settings(crate::level::LevelSettings::default()),
         settings: desktop.settings.clone(),
-        devices: asio_sys::Asio::new().driver_names(),
+        choices: choices(kind),
+        backends: [
+            backend::BackendKind::Auto,
+            backend::BackendKind::Cpal,
+            backend::BackendKind::Asio,
+        ]
+        .into_iter()
+        .filter(|kind| kind.available())
+        .map(|kind| kind.name().into())
+        .collect(),
+        spectrum_available: cfg!(windows),
     })
+}
+#[tauri::command]
+async fn device_choices(backend: String) -> Result<DeviceChoices, String> {
+    let kind = crate::backend::BackendKind::parse(&backend).map_err(|error| error.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || choices(kind))
+        .await
+        .map_err(|error| error.to_string())
 }
 #[tauri::command]
 fn audio_status(state: State<'_, DesktopState>) -> Result<Snapshot, String> {
@@ -162,8 +228,10 @@ fn start_audio(
     state: State<'_, DesktopState>,
 ) -> Result<(), String> {
     let mut options = settings.options()?;
-    if options.device.is_empty() {
-        return Err("Select an ASIO device first".into());
+    backend::select(options.backend, &options.output_device).map_err(|error| error.to_string())?;
+    if backend::resolve(options.backend) == backend::BackendKind::Asio && options.device.is_empty()
+    {
+        return Err("Select an audio device first".into());
     }
     let mut desktop = state.lock().map_err(|error| error.to_string())?;
     if desktop.closing {
@@ -195,6 +263,7 @@ fn save_settings(settings: Settings, state: State<'_, DesktopState>) -> Result<(
     Ok(())
 }
 #[tauri::command]
+#[cfg(windows)]
 async fn open_spectrum(app: tauri::AppHandle) -> Result<(), String> {
     let (sender, receiver) = std::sync::mpsc::channel();
     app.run_on_main_thread(move || {
@@ -206,6 +275,11 @@ async fn open_spectrum(app: tauri::AppHandle) -> Result<(), String> {
         .await
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())?
+}
+#[tauri::command]
+#[cfg(not(windows))]
+async fn open_spectrum() -> Result<(), String> {
+    Err("Spectrum window is available only on Windows".into())
 }
 #[tauri::command]
 async fn close_application(settings: Settings, app: tauri::AppHandle) -> Result<(), String> {
@@ -232,7 +306,10 @@ async fn close_application(settings: Settings, app: tauri::AppHandle) -> Result<
     let exit_app = app.clone();
     app.run_on_main_thread(move || {
         // SAFETY: window destruction runs on its owning thread, after ASIO stops.
-        unsafe { native_spectrum::shutdown() };
+        #[cfg(windows)]
+        unsafe {
+            native_spectrum::shutdown()
+        };
         exit_app.exit(0);
     })
     .map_err(|error| error.to_string())?;
@@ -255,6 +332,7 @@ pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
         }))
         .invoke_handler(tauri::generate_handler![
             bootstrap,
+            device_choices,
             audio_status,
             start_audio,
             stop_audio,
@@ -273,6 +351,7 @@ pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
         .run(tauri::generate_context!())?;
     Ok(())
 }
+#[cfg(windows)]
 pub fn show_message(message: &str, error: bool) {
     use windows::{
         core::PCWSTR,
@@ -365,4 +444,9 @@ mod tests {
         settings.frames = "0".into();
         assert!(settings.options().is_err());
     }
+}
+
+#[cfg(not(windows))]
+pub fn show_message(message: &str, _error: bool) {
+    eprintln!("{message}");
 }

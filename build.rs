@@ -1,6 +1,14 @@
 fn main() {
     #[cfg(feature = "desktop")]
     tauri_build::build();
+    #[cfg(feature = "asio")]
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        check_asio_sdk();
+    }
+}
+
+#[cfg(feature = "asio")]
+fn check_asio_sdk() {
     println!("cargo:rerun-if-env-changed=CPAL_ASIO_DIR");
     let sdk = std::path::PathBuf::from(std::env::var_os("CPAL_ASIO_DIR").unwrap_or_else(|| {
         panic!(
