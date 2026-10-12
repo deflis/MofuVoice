@@ -14,6 +14,12 @@ Use adjacent unit tests and integration tests. Cover formats, mapping, transitio
 
 Record hardware settings, overruns, sample-position discontinuities, and listening results locally. Distinguish DSP delay, reported driver latency, and measured round-trip latency.
 
+## Documentation Guidelines
+
+The `docs/` directory is for documentation intended for general users, such as setup instructions, usage guides, and troubleshooting. Do not place developer notes, implementation reports, work logs, or validation results there.
+
 ## Commit Guidelines
 
 After each algorithm improvement, run the relevant validation and commit the changes.
+
+Do not commit incidental reports, work logs, validation summaries, benchmark outputs, or listening notes. Keep these records locally. Commit documentation only when it is necessary for maintaining or using the project, or when explicitly requested by the user.
