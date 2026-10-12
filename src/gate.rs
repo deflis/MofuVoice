@@ -51,6 +51,25 @@ pub fn validate_time_ms(ms: f64) -> Result<f64, InvalidGate> {
     Ok(ms)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GateSettings {
+    pub enabled: bool,
+    pub threshold: GateThreshold,
+    pub attack_ms: f64,
+    pub release_ms: f64,
+}
+
+impl GateSettings {
+    pub fn build(self) -> Result<NoiseGate, InvalidGate> {
+        NoiseGate::new(
+            self.enabled,
+            self.threshold,
+            self.attack_ms,
+            self.release_ms,
+        )
+    }
+}
+
 fn coef(ms: f64) -> f64 {
     (-1.0 / (ms * 0.001 * RATE as f64)).exp()
 }

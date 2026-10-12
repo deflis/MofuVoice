@@ -1,6 +1,6 @@
 //! Direct ASIO buffer callbacks. asio-sys is used only to load/unload the driver.
 use crate::{
-    gate::{GateThreshold, NoiseGate},
+    gate::{GateSettings, NoiseGate},
     pitch::{PitchShifter, Sample, LATENCY},
     RATE,
 };
@@ -446,14 +446,11 @@ impl Engine {
         semitones: f64,
         preserve_formants: bool,
         formant_shift: f64,
-        gate: bool,
-        gate_threshold: GateThreshold,
-        gate_attack_ms: f64,
-        gate_release_ms: f64,
+        gate: GateSettings,
     ) -> Result<Self> {
         config.validate(frames)?;
         let pitch = PitchShifter::new(semitones, preserve_formants, formant_shift)?;
-        let gate = NoiseGate::new(gate, gate_threshold, gate_attack_ms, gate_release_ms)?;
+        let gate = gate.build()?;
         let mut buffers = Vec::with_capacity(config.inputs + config.outputs);
         for (input, channels) in [(true, config.inputs), (false, config.outputs)] {
             for channel in 0..channels {
@@ -653,7 +650,16 @@ mod tests {
             output_ready: AtomicBool::new(false),
             last_position: AtomicU64::new(u64::MAX),
             metrics: Metrics::default(),
-            gate: UnsafeCell::new(NoiseGate::new(false, GateThreshold::Auto, 5.0, 80.0).unwrap()),
+            gate: UnsafeCell::new(
+                GateSettings {
+                    enabled: false,
+                    threshold: crate::gate::GateThreshold::Auto,
+                    attack_ms: 5.0,
+                    release_ms: 80.0,
+                }
+                .build()
+                .unwrap(),
+            ),
             scratch: UnsafeCell::new(vec![0.0; 4]),
             pitch: UnsafeCell::new(PitchShifter::new(0.0, true, 0.0).unwrap()),
         };

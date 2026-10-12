@@ -186,10 +186,12 @@ fn run_audio(
         options.pitch,
         options.preserve_formants,
         options.formant_shift,
-        options.gate,
-        options.gate_threshold,
-        options.gate_attack_ms,
-        options.gate_release_ms,
+        crate::gate::GateSettings {
+            enabled: options.gate,
+            threshold: options.gate_threshold,
+            attack_ms: options.gate_attack_ms,
+            release_ms: options.gate_release_ms,
+        },
     )?;
     if stop.load(Ordering::Acquire) {
         set_status(status, format!("Stopped before playback.\n{details}"));

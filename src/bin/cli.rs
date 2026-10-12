@@ -55,10 +55,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         options.pitch,
         options.preserve_formants,
         options.formant_shift,
-        options.gate,
-        options.gate_threshold,
-        options.gate_attack_ms,
-        options.gate_release_ms,
+        rust_low_latency_voice_changer::gate::GateSettings {
+            enabled: options.gate,
+            threshold: options.gate_threshold,
+            attack_ms: options.gate_attack_ms,
+            release_ms: options.gate_release_ms,
+        },
     )?;
     engine.print_latencies()?;
     if options.pitch == 0.0 && options.formant_shift == 0.0 && !options.gate {
