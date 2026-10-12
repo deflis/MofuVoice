@@ -1,5 +1,13 @@
 # Repository Guidelines
 
+## Product Goals & Development Priorities
+
+- Build a voice changer for streamers, primarily targeting male-to-female voice conversion.
+- Target a total monitoring latency of 10 ms or less from microphone input to headphone output, including input/output buffering, DSP algorithmic delay, and hardware conversion. Verify through actual conversation that monitoring the processed voice does not disrupt the user's thinking or speech.
+- Consider implementing DSP features needed for streaming.
+- Prioritize voice quality first. Improve processing speed after improving quality, while preserving the achieved quality.
+- Do not consider using existing libraries.
+
 ## Project Structure & Module Organization
 
 This Windows Rust 2021 voice changer uses direct full-duplex ASIO, pitch shifting, and LPC formant preservation. Defaults: 48 kHz, 512 frames. Select an ASIO device explicitly.
@@ -52,5 +60,7 @@ Use adjacent unit tests and integration tests. Cover formats, mapping, transitio
 Record hardware settings, overruns, sample-position discontinuities, and listening results locally. Distinguish DSP delay, reported driver latency, and measured round-trip latency.
 
 ## Commit & Pull Request Guidelines
+
+After each algorithm improvement, run the relevant validation and commit the changes.
 
 For commits, follow commit skills: Japanese noun-ending messages without type prefixes. PRs should explain behavior, relevant issues, checks, and hardware evidence or untested conditions. Update README when behavior changes; unit tests alone do not establish audio quality.
