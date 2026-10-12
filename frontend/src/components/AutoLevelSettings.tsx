@@ -1,4 +1,4 @@
-import type { LevelSettings } from "../api";
+import type { LevelSettings } from "../settingsStore";
 import { useAutoLevelSettings } from "../settingsHooks";
 const levelFields: {
   key: Exclude<keyof LevelSettings, "enabled">;
