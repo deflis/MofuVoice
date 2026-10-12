@@ -25,6 +25,10 @@ unsafe extern "C" {
         pitch: *const u16,
         formant_shift: *const u16,
         preserve: i32,
+        gate: i32,
+        gate_threshold: *const u16,
+        gate_attack: *const u16,
+        gate_release: *const u16,
         save: extern "C" fn(
             *mut c_void,
             *const u16,
@@ -32,8 +36,24 @@ unsafe extern "C" {
             *const u16,
             *const u16,
             i32,
+            i32,
+            *const u16,
+            *const u16,
+            *const u16,
         ) -> i32,
-        start: extern "C" fn(*mut c_void, *const u16, *const u16, *const u16, *const u16, i32, i32),
+        start: extern "C" fn(
+            *mut c_void,
+            *const u16,
+            *const u16,
+            *const u16,
+            *const u16,
+            i32,
+            i32,
+            *const u16,
+            *const u16,
+            *const u16,
+            i32,
+        ),
         stop: extern "C" fn(*mut c_void),
         poll: extern "C" fn(*mut c_void, *mut u16, usize) -> i32,
         spectrum_open: extern "C" fn(*mut c_void) -> i32,
@@ -166,6 +186,10 @@ fn run_audio(
         options.pitch,
         options.preserve_formants,
         options.formant_shift,
+        options.gate,
+        options.gate_threshold,
+        options.gate_attack_ms,
+        options.gate_release_ms,
     )?;
     if stop.load(Ordering::Acquire) {
         set_status(status, format!("Stopped before playback.\n{details}"));
@@ -187,10 +211,11 @@ fn run_audio(
                 return Err("No ASIO callbacks for 2 seconds".into());
             }
             set_status(status, format!(
-                "Running: {:.1} s | pitch {} semitones | formant {} | shift {} semitones\n{details}\nPeriod: {:.3} ms | Input 1 -> output 1\n{}\n\n{}\n\nNonzero input counts indicate signal arrival, not listening quality.\nTimestamp blocks=0 means gap detection is unavailable.",
+                "Running: {:.1} s | pitch {} semitones | formant {} | shift {} semitones | gate {}\n{details}\nPeriod: {:.3} ms | Input 1 -> output 1\n{}\n\n{}\n\nNonzero input counts indicate signal arrival, not listening quality.\nTimestamp blocks=0 means gap detection is unavailable.",
                 started.elapsed().as_secs_f64(), options.pitch,
                 if options.preserve_formants { "preserve" } else { "off" },
                 options.formant_shift,
+                if options.gate { "on" } else { "off" },
                 options.frames as f64 * 1000.0 / crate::RATE as f64,
                 engine.latency_summary()?, engine.summary()
             ));
@@ -235,6 +260,10 @@ extern "C" fn start(
     pitch: *const u16,
     formant_shift: *const u16,
     preserve: i32,
+    gate: i32,
+    gate_threshold: *const u16,
+    gate_attack: *const u16,
+    gate_release: *const u16,
     inspect: i32,
 ) {
     // SAFETY: see the native callback contract above. No worker accesses Session.
@@ -251,6 +280,14 @@ extern "C" fn start(
             read_wide(formant_shift),
             "--formant".into(),
             if preserve != 0 { "preserve" } else { "off" }.into(),
+            "--gate".into(),
+            if gate != 0 { "on" } else { "off" }.into(),
+            "--gate-threshold".into(),
+            read_wide(gate_threshold),
+            "--gate-attack".into(),
+            read_wide(gate_attack),
+            "--gate-release".into(),
+            read_wide(gate_release),
         ]
     };
     match Options::parse(args) {
@@ -273,6 +310,10 @@ extern "C" fn save(
     pitch: *const u16,
     formant_shift: *const u16,
     preserve: i32,
+    gate: i32,
+    gate_threshold: *const u16,
+    gate_attack: *const u16,
+    gate_release: *const u16,
 ) -> i32 {
     // SAFETY: the UI supplies live UTF-16 text and exclusively owns Session.
     let session = unsafe { &mut *context.cast::<Session>() };
@@ -287,6 +328,14 @@ extern "C" fn save(
                 read_wide(formant_shift),
                 "--formant".into(),
                 if preserve != 0 { "preserve" } else { "off" }.into(),
+                "--gate".into(),
+                if gate != 0 { "on" } else { "off" }.into(),
+                "--gate-threshold".into(),
+                read_wide(gate_threshold),
+                "--gate-attack".into(),
+                read_wide(gate_attack),
+                "--gate-release".into(),
+                read_wide(gate_release),
             ]
         };
         let device = unsafe { read_wide(device) };
@@ -406,6 +455,12 @@ pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
     let frames = wide(&options.frames.to_string());
     let pitch = wide(&options.pitch.to_string());
     let formant_shift = wide(&options.formant_shift.to_string());
+    let gate_threshold = wide(&match options.gate_threshold {
+        crate::gate::GateThreshold::Auto => "auto".to_string(),
+        crate::gate::GateThreshold::Db(db) => db.to_string(),
+    });
+    let gate_attack = wide(&options.gate_attack_ms.to_string());
+    let gate_release = wide(&options.gate_release_ms.to_string());
     // SAFETY: buffers and Session remain live during this synchronous native UI loop.
     let error = unsafe {
         voice_gui_run(
@@ -416,6 +471,10 @@ pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
             pitch.as_ptr(),
             formant_shift.as_ptr(),
             i32::from(options.preserve_formants),
+            i32::from(options.gate),
+            gate_threshold.as_ptr(),
+            gate_attack.as_ptr(),
+            gate_release.as_ptr(),
             save,
             start,
             stop,
@@ -453,6 +512,9 @@ mod tests {
         let frames = wide("256");
         let pitch = wide("2.5");
         let shift = wide("-3");
+        let threshold = wide("auto");
+        let attack = wide("5");
+        let release = wide("80");
         assert_eq!(
             save(
                 (&mut session as *mut Session).cast(),
@@ -460,7 +522,11 @@ mod tests {
                 frames.as_ptr(),
                 pitch.as_ptr(),
                 shift.as_ptr(),
-                1
+                1,
+                1,
+                threshold.as_ptr(),
+                attack.as_ptr(),
+                release.as_ptr(),
             ),
             1
         );
@@ -471,6 +537,8 @@ mod tests {
         assert_eq!(saved.pitch, 2.5);
         assert_eq!(saved.formant_shift, -3.0);
         assert!(saved.preserve_formants);
+        assert!(saved.gate);
+        assert_eq!(saved.gate_threshold, crate::gate::GateThreshold::Auto);
         std::fs::remove_file(path).unwrap();
     }
     #[test]
@@ -496,6 +564,9 @@ mod tests {
         let frames = wide("0");
         let pitch = wide("0");
         let context = (&mut session as *mut Session).cast();
+        let threshold = wide("auto");
+        let attack = wide("5");
+        let release = wide("80");
         start(
             context,
             device.as_ptr(),
@@ -503,6 +574,10 @@ mod tests {
             pitch.as_ptr(),
             pitch.as_ptr(),
             1,
+            0,
+            threshold.as_ptr(),
+            attack.as_ptr(),
+            release.as_ptr(),
             0,
         );
         assert!(session.worker.is_none());

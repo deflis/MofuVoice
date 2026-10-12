@@ -6,10 +6,12 @@
 #include <string>
 #include <vector>
 
-using Start = void (*)(void *, const wchar_t *, const wchar_t *, const wchar_t *, const wchar_t *, int, int);
+using Start = void (*)(void *, const wchar_t *, const wchar_t *, const wchar_t *, const wchar_t *,
+                       int, int, const wchar_t *, const wchar_t *, const wchar_t *, int);
 using Stop = void (*)(void *);
 using Poll = int (*)(void *, wchar_t *, size_t);
-using Save = int (*)(void *, const wchar_t *, const wchar_t *, const wchar_t *, const wchar_t *, int);
+using Save = int (*)(void *, const wchar_t *, const wchar_t *, const wchar_t *, const wchar_t *,
+                     int, int, const wchar_t *, const wchar_t *, const wchar_t *);
 using SpectrumOpen = int (*)(void *);
 using SpectrumClose = void (*)(void *);
 using SpectrumSetWideband = void (*)(void *, int);
@@ -33,7 +35,10 @@ struct Gui {
     SpectrumPoll spectrum_poll;
     const wchar_t *device_text, *devices, *frames_text, *pitch_text, *shift_text;
     int preserve;
+    int gate;
+    const wchar_t *gate_threshold_text, *gate_attack_text, *gate_release_text;
     HWND device = nullptr, frames = nullptr, pitch = nullptr, formant = nullptr, shift = nullptr;
+    HWND gate_enabled = nullptr, gate_threshold = nullptr, gate_attack = nullptr, gate_release = nullptr;
     HWND start_button = nullptr, stop_button = nullptr, inspect_button = nullptr;
     HWND spectrum_button = nullptr;
     HWND status = nullptr;
@@ -89,6 +94,7 @@ static void refresh(HWND window, Gui &gui) {
         SetWindowTextW(gui.status, status);
     }
     for (HWND item : {gui.device, gui.frames, gui.pitch, gui.formant, gui.shift,
+                      gui.gate_enabled, gui.gate_threshold, gui.gate_attack, gui.gate_release,
                       gui.start_button, gui.inspect_button}) {
         EnableWindow(item, !busy && !gui.closing);
     }
@@ -290,19 +296,35 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM
             WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 140, 212, 100, 28, 206);
         SendMessageW(gui->shift, EM_SETLIMITTEXT, 32, 0);
         control(window, *gui, L"STATIC", L"-12 to +12 semitones (0 = preserve)", 0, 260, 216, 360, 24);
+        gui->gate_enabled = control(window, *gui, L"BUTTON", L"Noise gate",
+            BS_AUTOCHECKBOX | WS_TABSTOP, 140, 252, 160, 28, 207);
+        SendMessageW(gui->gate_enabled, BM_SETCHECK, gui->gate ? BST_CHECKED : BST_UNCHECKED, 0);
+        control(window, *gui, L"STATIC", L"Threshold", 0, 20, 292, 110, 24);
+        gui->gate_threshold = control(window, *gui, L"EDIT", gui->gate_threshold_text,
+            WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 140, 288, 100, 28, 208);
+        SendMessageW(gui->gate_threshold, EM_SETLIMITTEXT, 32, 0);
+        control(window, *gui, L"STATIC", L"auto or dB (-90..0)", 0, 260, 292, 360, 24);
+        control(window, *gui, L"STATIC", L"Attack ms", 0, 20, 332, 110, 24);
+        gui->gate_attack = control(window, *gui, L"EDIT", gui->gate_attack_text,
+            WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 140, 328, 100, 28, 209);
+        SendMessageW(gui->gate_attack, EM_SETLIMITTEXT, 32, 0);
+        control(window, *gui, L"STATIC", L"Release ms", 0, 260, 332, 100, 24);
+        gui->gate_release = control(window, *gui, L"EDIT", gui->gate_release_text,
+            WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 370, 328, 100, 28, 210);
+        SendMessageW(gui->gate_release, EM_SETLIMITTEXT, 32, 0);
         gui->inspect_button = control(window, *gui, L"BUTTON", L"Inspect",
-            WS_TABSTOP, 20, 258, 120, 34, INSPECT);
+            WS_TABSTOP, 20, 378, 120, 34, INSPECT);
         gui->start_button = control(window, *gui, L"BUTTON", L"Start",
-            WS_TABSTOP, 154, 258, 120, 34, START);
+            WS_TABSTOP, 154, 378, 120, 34, START);
         gui->stop_button = control(window, *gui, L"BUTTON", L"Stop",
-            WS_TABSTOP, 288, 258, 120, 34, STOP);
+            WS_TABSTOP, 288, 378, 120, 34, STOP);
         gui->spectrum_button = control(window, *gui, L"BUTTON", L"Spectrum",
-            WS_TABSTOP, 422, 258, 120, 34, SPECTRUM);
+            WS_TABSTOP, 422, 378, 120, 34, SPECTRUM);
         control(window, *gui, L"STATIC", L"Stop before changing settings. Inspect opens the driver without audio buffers.",
-            0, 20, 308, 600, 40);
+            0, 20, 428, 600, 40);
         gui->status = control(window, *gui, L"EDIT", L"",
             WS_BORDER | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL | WS_TABSTOP,
-            20, 356, 600, 270, 205);
+            20, 476, 600, 250, 205);
         if (gui->error) return -1;
         if (!SetTimer(window, 1, 100, nullptr)) { gui->error = GetLastError(); return -1; }
         refresh(window, *gui);
@@ -313,8 +335,13 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM
         if (LOWORD(wp) == START || LOWORD(wp) == INSPECT) {
             auto device = text(gui->device), frames = text(gui->frames), pitch = text(gui->pitch);
             auto shift = text(gui->shift);
+            auto threshold = text(gui->gate_threshold);
+            auto attack = text(gui->gate_attack);
+            auto release = text(gui->gate_release);
             gui->start(gui->context, device.c_str(), frames.c_str(), pitch.c_str(), shift.c_str(),
                 SendMessageW(gui->formant, BM_GETCHECK, 0, 0) == BST_CHECKED,
+                SendMessageW(gui->gate_enabled, BM_GETCHECK, 0, 0) == BST_CHECKED,
+                threshold.c_str(), attack.c_str(), release.c_str(),
                 LOWORD(wp) == INSPECT);
             refresh(window, *gui);
         } else if (LOWORD(wp) == STOP) {
@@ -332,8 +359,13 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM
         {
             auto device = text(gui->device), frames = text(gui->frames), pitch = text(gui->pitch);
             auto shift = text(gui->shift);
+            auto threshold = text(gui->gate_threshold);
+            auto attack = text(gui->gate_attack);
+            auto release = text(gui->gate_release);
             if (!gui->save(gui->context, device.c_str(), frames.c_str(), pitch.c_str(), shift.c_str(),
-                SendMessageW(gui->formant, BM_GETCHECK, 0, 0) == BST_CHECKED)) return 0;
+                SendMessageW(gui->formant, BM_GETCHECK, 0, 0) == BST_CHECKED,
+                SendMessageW(gui->gate_enabled, BM_GETCHECK, 0, 0) == BST_CHECKED,
+                threshold.c_str(), attack.c_str(), release.c_str())) return 0;
         }
         if (gui->spectrum_window) DestroyWindow(gui->spectrum_window);
         gui->closing = true;
@@ -351,13 +383,15 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM
 
 extern "C" unsigned long voice_gui_run(void *context, const wchar_t *device,
     const wchar_t *devices, const wchar_t *frames, const wchar_t *pitch, const wchar_t *shift, int preserve,
+    int gate, const wchar_t *gate_threshold, const wchar_t *gate_attack, const wchar_t *gate_release,
     Save save, Start start, Stop stop, Poll poll,
     SpectrumOpen spectrum_open, SpectrumClose spectrum_close,
     SpectrumSetWideband spectrum_set_wideband, SpectrumSetFrozen spectrum_set_frozen,
     SpectrumPoll spectrum_poll) {
     Gui gui{context, start, stop, poll, save, spectrum_open, spectrum_close,
         spectrum_set_wideband, spectrum_set_frozen, spectrum_poll,
-        device, devices, frames, pitch, shift, preserve};
+        device, devices, frames, pitch, shift, preserve, gate,
+        gate_threshold, gate_attack, gate_release};
     HINSTANCE instance = GetModuleHandleW(nullptr);
     const wchar_t *class_name = L"RustLowLatencyVoiceChangerWindow";
     WNDCLASSW wc{};
@@ -368,7 +402,7 @@ extern "C" unsigned long voice_gui_run(void *context, const wchar_t *device,
     wc.lpszClassName = class_name;
     if (!RegisterClassW(&wc)) return GetLastError();
     // DPI virtualization keeps native controls readable at the user's display scale.
-    RECT bounds{0, 0, 640, 650};
+    RECT bounds{0, 0, 640, 760};
     DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
     AdjustWindowRect(&bounds, style, FALSE);
     HWND window = CreateWindowExW(0, class_name, L"Rust Low-Latency Voice Changer", style,

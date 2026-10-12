@@ -1,6 +1,7 @@
 //! Shared audio engine and application support. DSP modules are audio-API-independent.
 pub mod asio;
 pub mod cli;
+pub mod gate;
 pub mod gui;
 mod gui_settings;
 pub mod pitch;

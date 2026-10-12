@@ -12,7 +12,7 @@ use std::{
 fn main() -> Result<(), Box<dyn Error>> {
     let options = cli::Options::parse(std::env::args().skip(1))?;
     if options.help {
-        println!("Usage: rust-low-latency-voice-changer-cli --device NAME [--frames N] [--seconds N] [--pitch SEMITONES] [--formant preserve|off] [--formant-shift SEMITONES]\n       rust-low-latency-voice-changer-cli --inspect --device NAME [--frames N]\n       rust-low-latency-voice-changer-cli --list-devices\nSelect a device with --device NAME; use --list-devices to see registered names.\nDefault: 512 frames / pitch 0. Pitch and formant shift range: -12..12 (fractional allowed). Formant shift defaults to 0; nonzero shift requires preserve.\nInput 1 -> output 1; other outputs silent. Pitch 0 and formant shift 0: bit-preserving zero-delay bypass.\nWet DSP: spectral phase locking, fixed {LATENCY} samples of delay. Formant correction: cepstral envelope, default preserve; --formant off disables it.\nEnter stops interactive mode.");
+        println!("Usage: rust-low-latency-voice-changer-cli --device NAME [--frames N] [--seconds N] [--pitch SEMITONES] [--formant preserve|off] [--formant-shift SEMITONES] [--gate on|off] [--gate-threshold auto|DB] [--gate-attack MS] [--gate-release MS]\n       rust-low-latency-voice-changer-cli --inspect --device NAME [--frames N]\n       rust-low-latency-voice-changer-cli --list-devices\nSelect a device with --device NAME; use --list-devices to see registered names.\nDefault: 512 frames / pitch 0 / gate off. Pitch and formant shift range: -12..12 (fractional allowed). Formant shift defaults to 0; nonzero shift requires preserve.\nGate is a soft pre-pitch expander; threshold defaults to auto noise-floor tracking; attack/release default to 5/80 ms.\nInput 1 -> output 1; other outputs silent. Pitch 0, formant shift 0, and gate off: bit-preserving zero-delay bypass.\nWet DSP: spectral phase locking, fixed {LATENCY} samples of delay. Formant correction: cepstral envelope, default preserve; --formant off disables it.\nEnter stops interactive mode.");
         return Ok(());
     }
     if !options.list && options.device.is_empty() {
@@ -55,13 +55,24 @@ fn main() -> Result<(), Box<dyn Error>> {
         options.pitch,
         options.preserve_formants,
         options.formant_shift,
+        options.gate,
+        options.gate_threshold,
+        options.gate_attack_ms,
+        options.gate_release_ms,
     )?;
     engine.print_latencies()?;
-    if options.pitch == 0.0 && options.formant_shift == 0.0 {
-        println!("Pitch=0; DSP=0 samples; FIFO=0 samples. Input 1 -> output 1.");
+    if options.pitch == 0.0 && options.formant_shift == 0.0 && !options.gate {
+        println!("Pitch=0; gate off; DSP=0 samples; FIFO=0 samples. Input 1 -> output 1.");
     } else {
         println!("Pitch={} semitones; ratio={:.6}; spectral wet DSP delay={LATENCY} samples ({:.3} ms). Formant mode reported below.", options.pitch, rust_low_latency_voice_changer::pitch::pitch_ratio(options.pitch)?, LATENCY as f64 * 1000.0 / RATE as f64);
     }
+    println!(
+        "Noise gate: {}; threshold={:?}; attack={} ms; release={} ms (pre-pitch soft expander, no lookahead).",
+        if options.gate { "on" } else { "off" },
+        options.gate_threshold,
+        options.gate_attack_ms,
+        options.gate_release_ms
+    );
     println!(
         "ASIO period: {:.3} ms; target {} samples / {:.3} ms. Total latency remains unmeasured.",
         options.frames as f64 * 1000.0 / RATE as f64,

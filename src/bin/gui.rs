@@ -7,7 +7,7 @@ fn main() -> ExitCode {
     let result = gui::initial_options(std::env::args().skip(1)).and_then(|options| {
         if options.help {
             gui::show_message(
-                "rust-low-latency-voice-changer-gui [--device NAME] [--frames N] [--pitch SEMITONES] [--formant preserve|off] [--formant-shift SEMITONES]\n\nSelect an ASIO device in the window or with --device NAME.\nDefault: 512 frames / pitch 0 / preserve formants.\nPitch and formant shift range: -12..12 (fractional allowed). Formant shift defaults to 0; nonzero shift requires preserve.\nUse Inspect, Start and Stop in the window. Stop before changing settings.",
+                "rust-low-latency-voice-changer-gui [--device NAME] [--frames N] [--pitch SEMITONES] [--formant preserve|off] [--formant-shift SEMITONES] [--gate on|off] [--gate-threshold auto|DB] [--gate-attack MS] [--gate-release MS]\n\nSelect an ASIO device in the window or with --device NAME.\nDefault: 512 frames / pitch 0 / preserve formants / gate off.\nPitch and formant shift range: -12..12 (fractional allowed). Formant shift defaults to 0; nonzero shift requires preserve.\nGate is a soft pre-pitch expander; threshold defaults to auto.\nUse Inspect, Start and Stop in the window. Stop before changing settings.",
                 false,
             );
             Ok(())
