@@ -7,6 +7,7 @@ pub struct Options {
     pub frames: u32,
     pub pitch: f64,
     pub preserve_formants: bool,
+    pub formant_shift: f64,
     pub list: bool,
     pub inspect: bool,
     pub help: bool,
@@ -20,6 +21,7 @@ impl Options {
             frames: crate::DEFAULT_FRAMES,
             pitch: 0.0,
             preserve_formants: true,
+            formant_shift: 0.0,
             list: false,
             inspect: false,
             help: false,
@@ -29,8 +31,18 @@ impl Options {
         let mut frames_given = false;
         let mut pitch_given = false;
         let mut formant_given = false;
+        let mut shift_given = false;
         while let Some(arg) = args.next() {
             match arg.as_str() {
+                "--formant-shift" if !shift_given => {
+                    options.formant_shift = args
+                        .next()
+                        .ok_or("--formant-shift requires semitones")?
+                        .parse()?;
+                    crate::pitch::formant_ratio(options.formant_shift)
+                        .map_err(|error| error.to_string())?;
+                    shift_given = true;
+                }
                 "--formant" if !formant_given => {
                     options.preserve_formants = match args.next().as_deref() {
                         Some("preserve") => true,
@@ -80,20 +92,24 @@ impl Options {
                 _ => return Err(format!("Unknown or repeated argument {arg}; use --help").into()),
             }
         }
+        if !options.preserve_formants && options.formant_shift != 0.0 {
+            return Err(crate::pitch::InvalidFormant.to_string().into());
+        }
         let modes =
             usize::from(options.list) + usize::from(options.inspect) + usize::from(options.help);
         if modes > 1
-            || (modes > 0 && (options.seconds.is_some() || pitch_given || formant_given))
+            || (modes > 0
+                && (options.seconds.is_some() || pitch_given || formant_given || shift_given))
             || ((options.list || options.help) && (device_given || frames_given))
         {
-            return Err("Choose one CLI mode: --help, --list-devices, --inspect [--device NAME] [--frames N], or [--device NAME] [--frames N] [--seconds N] [--pitch SEMITONES] [--formant preserve|off]".into());
+            return Err("Choose one CLI mode: --help, --list-devices, --inspect [--device NAME] [--frames N], or [--device NAME] [--frames N] [--seconds N] [--pitch SEMITONES] [--formant preserve|off] [--formant-shift SEMITONES]".into());
         }
         Ok(options)
     }
     pub fn parse_gui(args: impl IntoIterator<Item = String>) -> Result<Self, Box<dyn Error>> {
         let options = Self::parse(args)?;
         if options.seconds.is_some() || options.inspect || options.list {
-            return Err("GUI accepts only --device NAME, --frames N, --pitch SEMITONES, --formant preserve|off, or --help".into());
+            return Err("GUI accepts only --device NAME, --frames N, --pitch SEMITONES, --formant preserve|off, --formant-shift SEMITONES, or --help".into());
         }
         Ok(options)
     }
@@ -105,6 +121,35 @@ mod tests {
     fn parse(args: &[&str]) -> Result<Options, Box<dyn Error>> {
         Options::parse(args.iter().map(|s| (*s).into()))
     }
+    #[test]
+    fn validates_independent_formant_shift() {
+        for shift in ["-12", "-2.5", "0", "+3", "12"] {
+            let options = parse(&["--formant-shift", shift]).unwrap();
+            assert_eq!(options.formant_shift, shift.parse::<f64>().unwrap());
+            assert_eq!(options.pitch, 0.0);
+            assert!(
+                Options::parse_gui(["--formant-shift", shift].into_iter().map(String::from))
+                    .is_ok()
+            );
+        }
+        for args in [
+            vec!["--formant-shift"],
+            vec!["--formant-shift", "NaN"],
+            vec!["--formant-shift", "inf"],
+            vec!["--formant-shift", "12.1"],
+            vec!["--formant-shift", "-12.1"],
+            vec!["--formant-shift", "3", "--formant", "off"],
+            vec!["--formant", "off", "--formant-shift", "3"],
+            vec!["--formant-shift", "3", "--formant-shift", "2"],
+            vec!["--formant-shift", "0", "--help"],
+            vec!["--formant-shift", "0", "--inspect"],
+            vec!["--formant-shift", "0", "--list-devices"],
+        ] {
+            assert!(parse(&args).is_err(), "{args:?}");
+        }
+        assert!(parse(&["--formant", "off", "--formant-shift", "0"]).is_ok());
+    }
+
     #[test]
     fn explicit_device_name_and_timed_run() {
         let options = parse(&["--seconds", "60", "--device", "Example ASIO Device"]).unwrap();

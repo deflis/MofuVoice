@@ -39,7 +39,7 @@ fn main() {
                 )
             };
             let new = || {
-                let mut dsp = PitchShifter::new(pitch, true).unwrap();
+                let mut dsp = PitchShifter::new(pitch, true, 0.0).unwrap();
                 measure(
                     |a, b| {
                         black_box(dsp.process_block(a, b));

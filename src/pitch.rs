@@ -21,6 +21,22 @@ impl fmt::Display for InvalidPitch {
 }
 impl Error for InvalidPitch {}
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InvalidFormant;
+impl fmt::Display for InvalidFormant {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("formant shift must be finite and between -12 and 12 semitones; a nonzero shift requires --formant preserve")
+    }
+}
+impl Error for InvalidFormant {}
+
+pub fn formant_ratio(semitones: f64) -> Result<f64, InvalidFormant> {
+    if !semitones.is_finite() || !(-12.0..=12.0).contains(&semitones) {
+        return Err(InvalidFormant);
+    }
+    Ok(2.0_f64.powf(semitones / 12.0))
+}
+
 pub fn pitch_ratio(semitones: f64) -> Result<f64, InvalidPitch> {
     if !semitones.is_finite() || !(-12.0..=12.0).contains(&semitones) {
         return Err(InvalidPitch);
@@ -65,6 +81,7 @@ pub struct PitchShifter {
     write: usize,
     phase: f64,
     semitones: f64,
+    formant_shift: f64,
     ratio: f64,
     target_ratio: f64,
     ratio_step: f64,
@@ -75,15 +92,24 @@ pub struct PitchShifter {
     wet_remaining: usize,
 }
 impl PitchShifter {
-    pub fn new(semitones: f64, preserve_formants: bool) -> Result<Self, InvalidPitch> {
+    pub fn new(
+        semitones: f64,
+        preserve_formants: bool,
+        formant_shift: f64,
+    ) -> Result<Self, Box<dyn Error>> {
         let ratio = pitch_ratio(semitones)?;
-        let wet = f64::from(semitones != 0.0);
+        let shift_ratio = formant_ratio(formant_shift)?;
+        if !preserve_formants && formant_shift != 0.0 {
+            return Err(InvalidFormant.into());
+        }
+        let wet = f64::from(semitones != 0.0 || formant_shift != 0.0);
         Ok(Self {
             history: Box::new([0.0; HISTORY]),
-            formant: preserve_formants.then(FormantCorrector::default),
+            formant: preserve_formants.then(|| FormantCorrector::new(shift_ratio)),
             write: 0,
             phase: 0.0,
             semitones,
+            formant_shift,
             ratio,
             target_ratio: ratio,
             ratio_step: 0.0,
@@ -105,7 +131,7 @@ impl PitchShifter {
         self.target_ratio = ratio;
         self.ratio_step = (ratio - self.ratio) / SMOOTH_SAMPLES as f64;
         self.ratio_remaining = SMOOTH_SAMPLES;
-        let target_wet = f64::from(semitones != 0.0);
+        let target_wet = f64::from(semitones != 0.0 || self.formant_shift != 0.0);
         if self.target_wet != target_wet {
             self.target_wet = target_wet;
             self.wet_step = (target_wet - self.wet) / FADE_SAMPLES as f64;
@@ -211,6 +237,128 @@ mod tests {
     }
 
     #[test]
+    fn independent_formant_shift_moves_resonance() {
+        let input = resonant_noise(40_960);
+        for (pitch, shift) in [
+            (0.0, -12.0),
+            (0.0, -3.0),
+            (0.0, 3.0),
+            (0.0, 12.0),
+            (-3.0, -3.0),
+            (-3.0, 3.0),
+            (3.0, -3.0),
+            (3.0, 3.0),
+        ] {
+            let mut output = vec![0.0; input.len()];
+            PitchShifter::new(pitch, true, shift)
+                .unwrap()
+                .process_block(&input, &mut output);
+            let expected = 1500.0 * formant_ratio(shift).unwrap();
+            let peak = (500..=3500)
+                .step_by(10)
+                .map(|frequency| {
+                    let power: f64 = output[8192..]
+                        .as_chunks::<4096>()
+                        .0
+                        .iter()
+                        .map(|chunk| spectral_power(chunk, frequency as f64))
+                        .sum();
+                    (frequency as f64, power)
+                })
+                .max_by(|a, b| a.1.total_cmp(&b.1))
+                .unwrap()
+                .0;
+            assert!(
+                (peak - expected).abs() < 150.0,
+                "pitch={pitch}, shift={shift}: peak={peak}, expected={expected}"
+            );
+            assert!(output
+                .iter()
+                .all(|sample| sample.is_finite() && sample.abs() <= 1.0));
+        }
+    }
+
+    #[test]
+    fn shifted_formants_recover_from_overloads_and_silence_in_all_formats() {
+        for shift in [-12.0, -3.0, 3.0, 12.0] {
+            let mut dsp = PitchShifter::new(0.0, true, shift).unwrap();
+            let mut input = vec![0.0_f32; 48_000];
+            input[..5].copy_from_slice(&[
+                f32::NAN,
+                f32::INFINITY,
+                f32::NEG_INFINITY,
+                f32::MAX,
+                -f32::MAX,
+            ]);
+            input[512..4096].copy_from_slice(&tone(3584, 730.0));
+            let mut output = vec![0.0; input.len()];
+            dsp.process_block(&input, &mut output);
+            assert!(output.iter().all(|x| x.is_finite() && x.abs() <= 1.0));
+            assert!(output[47_000..].iter().all(|x| x.abs() < 1e-5));
+            let mut output = [0_i32; 4096];
+            dsp.process_block(&[i32::MAX; 4096], &mut output);
+            let mut output = [0_i16; 4096];
+            dsp.process_block(&[i16::MIN; 4096], &mut output);
+            let mut recovery = vec![0.0_f32; 48_000];
+            dsp.process_block(&vec![0.0; 48_000], &mut recovery);
+            assert!(recovery.iter().all(|x| x.is_finite() && x.abs() <= 1.0));
+            assert!(recovery[47_000..].iter().all(|x| x.abs() < 1e-5));
+            // A fresh silence-only stream must produce exact silence at every shift.
+            let mut silence = [1.0_f32; 4096];
+            PitchShifter::new(0.0, true, shift)
+                .unwrap()
+                .process_block(&[0.0; 4096], &mut silence);
+            assert!(silence.iter().all(|x| *x == 0.0));
+        }
+    }
+
+    #[test]
+    fn formant_shift_keeps_pitch_and_survives_pitch_retargeting() {
+        let input = tone(24_000, RATE as f64 / 238.0);
+        for shift in [-12.0, -3.0, 3.0, 12.0] {
+            let mut dsp = PitchShifter::new(3.0, true, shift).unwrap();
+            dsp.set_semitones(0.0).unwrap();
+            let mut output = vec![0.0; input.len()];
+            dsp.process_block(&input, &mut output);
+            assert_eq!(dsp.wet, 1.0);
+            let signal = &output[8192..];
+            let measured = signal
+                .windows(2)
+                .filter(|w| w[0] <= 0.0 && w[1] > 0.0)
+                .count() as f64
+                * RATE as f64
+                / signal.len() as f64;
+            assert!(
+                (measured - RATE as f64 / 238.0).abs() < 4.0,
+                "shift={shift}: {measured}"
+            );
+        }
+    }
+
+    #[test]
+    fn shifted_formants_are_independent_of_block_boundaries() {
+        let input = resonant_noise(4096);
+        for shift in [-12.0, -2.5, 2.5, 12.0] {
+            let mut whole = vec![0.0; input.len()];
+            PitchShifter::new(0.0, true, shift)
+                .unwrap()
+                .process_block(&input, &mut whole);
+            for size in [1, 7, 64, 512] {
+                let mut dsp = PitchShifter::new(0.0, true, shift).unwrap();
+                let mut output = vec![0.0; input.len()];
+                for (a, b) in input.chunks(size).zip(output.chunks_mut(size)) {
+                    dsp.process_block(a, b);
+                }
+                assert_eq!(whole, output);
+            }
+        }
+        assert!(PitchShifter::new(0.0, false, 3.0).is_err());
+        for shift in [f64::NAN, f64::INFINITY, -12.1, 12.1] {
+            assert!(PitchShifter::new(0.0, true, shift).is_err());
+        }
+    }
+
+    #[test]
     fn correction_keeps_resonance_nearer_original_in_both_pitch_directions() {
         // Broadband excitation through a known 1500 Hz all-pole vocal-tract model.
         // Average independent spectral windows to avoid selecting a random noise bin.
@@ -236,10 +384,10 @@ mod tests {
         for pitch in [-3.0, 3.0] {
             let mut corrected = vec![0.0; input.len()];
             let mut uncorrected = vec![0.0; input.len()];
-            PitchShifter::new(pitch, true)
+            PitchShifter::new(pitch, true, 0.0)
                 .unwrap()
                 .process_block(&input, &mut corrected);
-            PitchShifter::new(pitch, false)
+            PitchShifter::new(pitch, false, 0.0)
                 .unwrap()
                 .process_block(&input, &mut uncorrected);
             let restored = peak(&corrected);
@@ -258,7 +406,7 @@ mod tests {
         let input = tone(24_000, RATE as f64 / 238.0);
         for pitch in [-12.0, -3.0, 3.0, 12.0] {
             let mut output = vec![0.0; input.len()];
-            PitchShifter::new(pitch, true)
+            PitchShifter::new(pitch, true, 0.0)
                 .unwrap()
                 .process_block(&input, &mut output);
             let expected = RATE as f64 / 238.0 * pitch_ratio(pitch).unwrap();
@@ -281,11 +429,11 @@ mod tests {
         let input = resonant_noise(4096);
         for pitch in [-12.0, -3.0, 0.0, 3.0, 12.0] {
             let mut whole = vec![0.0; input.len()];
-            PitchShifter::new(pitch, true)
+            PitchShifter::new(pitch, true, 0.0)
                 .unwrap()
                 .process_block(&input, &mut whole);
             for size in [1, 7, 64, 512, 8192] {
-                let mut dsp = PitchShifter::new(pitch, true).unwrap();
+                let mut dsp = PitchShifter::new(pitch, true, 0.0).unwrap();
                 let mut output = vec![0.0; input.len()];
                 for (a, b) in input.chunks(size).zip(output.chunks_mut(size)) {
                     dsp.process_block(a, b);
@@ -305,25 +453,25 @@ mod tests {
             f32::INFINITY,
         ];
         let mut output = [0.0; 5];
-        PitchShifter::new(0.0, true)
+        PitchShifter::new(0.0, true, 0.0)
             .unwrap()
             .process_block(&floats, &mut output);
         assert_eq!(floats.map(f32::to_bits), output.map(f32::to_bits));
         let integers = [i32::MIN, -1, 0, 1, i32::MAX];
         let mut output = [0; 5];
-        PitchShifter::new(0.0, true)
+        PitchShifter::new(0.0, true, 0.0)
             .unwrap()
             .process_block(&integers, &mut output);
         assert_eq!(integers, output);
         let shorts = [i16::MIN, -1, 0, 1, i16::MAX];
         let mut output = [0; 5];
-        PitchShifter::new(0.0, true)
+        PitchShifter::new(0.0, true, 0.0)
             .unwrap()
             .process_block(&shorts, &mut output);
         assert_eq!(shorts, output);
         let input = resonant_noise(4096);
         let mut output = vec![0.0; input.len()];
-        let mut dsp = PitchShifter::new(0.0, true).unwrap();
+        let mut dsp = PitchShifter::new(0.0, true, 0.0).unwrap();
         for pitch in [3.0, -3.0, 12.0, -12.0, 0.0] {
             dsp.set_semitones(pitch).unwrap();
             dsp.process_block(&input[..100], &mut output[..100]);
@@ -337,7 +485,7 @@ mod tests {
     #[test]
     fn corrected_silence_nonfinite_input_and_integer_overloads_are_bounded() {
         for pitch in [-12.0, -3.0, 3.0, 12.0] {
-            let mut dsp = PitchShifter::new(pitch, true).unwrap();
+            let mut dsp = PitchShifter::new(pitch, true, 0.0).unwrap();
             let mut input = vec![0.0_f32; 8192];
             input[..3].copy_from_slice(&[f32::NAN, f32::INFINITY, f32::NEG_INFINITY]);
             let mut output = vec![1.0; input.len()];
@@ -359,7 +507,7 @@ mod tests {
     #[test]
     fn corrected_impulses_extreme_floats_and_changing_envelopes_recover() {
         for pitch in [-12.0, -3.0, 3.0, 12.0] {
-            let mut dsp = PitchShifter::new(pitch, true).unwrap();
+            let mut dsp = PitchShifter::new(pitch, true, 0.0).unwrap();
             let mut input = vec![0.0_f32; 48_000];
             input[0] = 1.0;
             for (n, sample) in input[1024..24_000].iter_mut().enumerate() {
@@ -407,8 +555,8 @@ mod tests {
         assert_eq!(pitch_ratio(0.0), Ok(1.0));
         assert_eq!(pitch_ratio(12.0), Ok(2.0));
         for invalid in [-12.01, 12.01, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-            assert!(PitchShifter::new(invalid, false).is_err());
-            let mut dsp = PitchShifter::new(3.0, false).unwrap();
+            assert!(PitchShifter::new(invalid, false, 0.0).is_err());
+            let mut dsp = PitchShifter::new(3.0, false, 0.0).unwrap();
             assert!(dsp.set_semitones(invalid).is_err());
             assert_eq!(dsp.target_ratio, pitch_ratio(3.0).unwrap());
         }
@@ -424,13 +572,13 @@ mod tests {
             -1.0,
         ];
         let mut out = [0.0; 5];
-        PitchShifter::new(0.0, false)
+        PitchShifter::new(0.0, false, 0.0)
             .unwrap()
             .process_block(&input, &mut out);
         assert_eq!(input.map(f32::to_bits), out.map(f32::to_bits));
         let integers = [i32::MIN, -1, 0, 1, i32::MAX];
         let mut out = [0; 5];
-        PitchShifter::new(0.0, false)
+        PitchShifter::new(0.0, false, 0.0)
             .unwrap()
             .process_block(&integers, &mut out);
         assert_eq!(integers, out);
@@ -439,13 +587,13 @@ mod tests {
     #[test]
     fn silence_and_impulse_stay_inside_wet_delay_bounds() {
         for pitch in [-12.0, -3.0, 3.0, 12.0] {
-            let mut dsp = PitchShifter::new(pitch, false).unwrap();
+            let mut dsp = PitchShifter::new(pitch, false, 0.0).unwrap();
             let mut out = vec![1.0; 2048];
             dsp.process_block(&vec![0.0_f32; 2048], &mut out);
             assert!(out.iter().all(|&s| s == 0.0));
             // Several initial phases, including immediately before a wrap.
             for phase in [0.0, 0.25, 0.499, 0.75, 0.999] {
-                let mut dsp = PitchShifter::new(pitch, false).unwrap();
+                let mut dsp = PitchShifter::new(pitch, false, 0.0).unwrap();
                 dsp.phase = phase;
                 let mut input = vec![0.0_f32; MAX_DELAY + 16];
                 input[0] = 1.0;
@@ -464,11 +612,11 @@ mod tests {
         let input = tone(20_000, 337.0);
         for pitch in [-12.0, -3.0, 0.0, 3.0, 12.0] {
             let mut whole = vec![0.0; input.len()];
-            PitchShifter::new(pitch, false)
+            PitchShifter::new(pitch, false, 0.0)
                 .unwrap()
                 .process_block(&input, &mut whole);
             for size in [1, 7, 64, 512, 8192] {
-                let mut dsp = PitchShifter::new(pitch, false).unwrap();
+                let mut dsp = PitchShifter::new(pitch, false, 0.0).unwrap();
                 let mut out = vec![0.0; input.len()];
                 for (a, b) in input.chunks(size).zip(out.chunks_mut(size)) {
                     dsp.process_block(a, b);
@@ -486,7 +634,7 @@ mod tests {
             let input = tone(48_000, frequency);
             for pitch in [-12.0, -3.0, 3.0, 12.0] {
                 let mut out = vec![0.0; input.len()];
-                PitchShifter::new(pitch, false)
+                PitchShifter::new(pitch, false, 0.0)
                     .unwrap()
                     .process_block(&input, &mut out);
                 let signal = &out[2000..];
@@ -527,7 +675,7 @@ mod tests {
             // Repeated two-grain crossfades produce sidebands spaced by this rate.
             let grain_rate = 2.0 * (1.0 - ratio).abs() * RATE as f64 / DELAY_SPAN as f64;
             let mut out = vec![0.0; input.len()];
-            PitchShifter::new(pitch, false)
+            PitchShifter::new(pitch, false, 0.0)
                 .unwrap()
                 .process_block(&input, &mut out);
             let signal = &out[2000..];
@@ -546,7 +694,7 @@ mod tests {
 
     #[test]
     fn retargeting_mid_ramp_keeps_current_ratio_and_mix() {
-        let mut dsp = PitchShifter::new(0.0, false).unwrap();
+        let mut dsp = PitchShifter::new(0.0, false, 0.0).unwrap();
         dsp.set_semitones(12.0).unwrap();
         let mut out = [0.0; 100];
         dsp.process_block(&[0.5_f32; 100], &mut out);
@@ -564,7 +712,7 @@ mod tests {
     #[test]
     fn parameter_ramps_and_bypass_return_are_bounded_and_exact() {
         let input = tone(4760, 201.6806722689);
-        let mut dsp = PitchShifter::new(0.0, false).unwrap();
+        let mut dsp = PitchShifter::new(0.0, false, 0.0).unwrap();
         let mut out = vec![0.0; input.len()];
         dsp.process_block(&input, &mut out);
         for pitch in [3.0, -3.0, 12.0, -12.0, 0.0] {
@@ -596,11 +744,11 @@ mod tests {
         for value in [i32::MIN, -1, 0, 1, i32::MAX] {
             assert_eq!(i32::from_normalized(value.normalized()), value);
         }
-        let mut dsp = PitchShifter::new(3.0, false).unwrap();
+        let mut dsp = PitchShifter::new(3.0, false, 0.0).unwrap();
         let mut out = [0_i32; 1024];
         dsp.process_block(&[i32::MAX; 1024], &mut out);
         assert_eq!(out[600..], [i32::MAX; 424]);
-        let mut dsp = PitchShifter::new(3.0, false).unwrap();
+        let mut dsp = PitchShifter::new(3.0, false, 0.0).unwrap();
         let mut input = [0.0_f32; 1024];
         input[0] = f32::NAN;
         input[1] = f32::INFINITY;

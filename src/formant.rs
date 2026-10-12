@@ -11,7 +11,7 @@ pub struct FormantCorrector {
     history: Box<[f64; WINDOW]>,
     window: Box<[f64; WINDOW]>,
     scratch: Box<[f64; WINDOW]>,
-    lag_taper: [f64; ORDER + 1],
+    lag_taper: [f64; ORDER * 2 + 1],
     write: usize,
     until_update: usize,
     reflection: [f64; ORDER],
@@ -19,6 +19,10 @@ pub struct FormantCorrector {
     step: [f64; ORDER],
     analysis: [f64; ORDER + 1],
     synthesis: [f64; ORDER + 1],
+    shift_ratio: f64,
+    synthesis_reflection: [f64; ORDER],
+    synthesis_target: [f64; ORDER],
+    synthesis_step: [f64; ORDER],
 }
 
 impl Default for FormantCorrector {
@@ -42,11 +46,24 @@ impl Default for FormantCorrector {
             step: [0.0; ORDER],
             analysis: [0.0; ORDER + 1],
             synthesis: [0.0; ORDER + 1],
+            shift_ratio: 1.0,
+            synthesis_reflection: [0.0; ORDER],
+            synthesis_target: [0.0; ORDER],
+            synthesis_step: [0.0; ORDER],
         }
     }
 }
 
 impl FormantCorrector {
+    /// Ratio is validated on the control side, before starting audio.
+    pub fn new(shift_ratio: f64) -> Self {
+        assert!(shift_ratio.is_finite() && (0.5..=2.0).contains(&shift_ratio));
+        Self {
+            shift_ratio,
+            ..Self::default()
+        }
+    }
+
     fn estimate(&mut self) {
         for n in 0..WINDOW {
             self.scratch[n] = self.history[(self.write + n) % WINDOW] * self.window[n];
@@ -85,6 +102,37 @@ impl FormantCorrector {
         for n in 0..ORDER {
             self.step[n] = (self.target[n] - self.reflection[n]) / HOP as f64;
         }
+        if self.shift_ratio != 1.0 {
+            // Stretch the autocorrelation's lag axis to move the spectral envelope.
+            // Only the synthesis filter changes; excitation and pitch stay independent.
+            // All scratch storage is fixed-size, including the extra octave of lags.
+            let mut extended = [0.0; ORDER * 2 + 1];
+            extended[..=ORDER].copy_from_slice(&correlation);
+            let last_lag = (ORDER as f64 * self.shift_ratio).ceil() as usize;
+            for (lag, value) in extended
+                .iter_mut()
+                .enumerate()
+                .take(last_lag + 1)
+                .skip(ORDER + 1)
+            {
+                *value = self.scratch[lag..]
+                    .iter()
+                    .zip(&self.scratch[..WINDOW - lag])
+                    .fold(0.0, |sum, (&a, &b)| sum + a * b);
+                *value *= self.lag_taper[lag];
+            }
+            let shifted = std::array::from_fn::<_, { ORDER + 1 }, _>(|lag| {
+                let position = lag as f64 * self.shift_ratio;
+                let whole = position.floor() as usize;
+                let fraction = position - whole as f64;
+                extended[whole] * (1.0 - fraction) + extended[(whole + 1).min(ORDER * 2)] * fraction
+            });
+            self.synthesis_target = reflection_from_correlation(&shifted);
+            for n in 0..ORDER {
+                self.synthesis_step[n] =
+                    (self.synthesis_target[n] - self.synthesis_reflection[n]) / HOP as f64;
+            }
+        }
     }
 
     /// Input must already be finite and normalized. Called once per input sample.
@@ -94,11 +142,13 @@ impl FormantCorrector {
         self.until_update -= 1;
         if self.until_update == 0 {
             self.reflection = self.target;
+            self.synthesis_reflection = self.synthesis_target;
             self.estimate();
             self.until_update = HOP;
         }
         for n in 0..ORDER {
             self.reflection[n] += self.step[n];
+            self.synthesis_reflection[n] += self.synthesis_step[n];
         }
         let mut forward = sample;
         // A copy preserves every previous-sample backward error during ascending updates.
@@ -111,11 +161,15 @@ impl FormantCorrector {
         forward
     }
 
-    /// Restore the original envelope after the excitation's pitch has changed.
+    /// Restore the envelope at the requested formant ratio after pitch processing.
     pub fn synthesize(&mut self, residual: f64) -> f64 {
         let mut forward = residual;
         for n in (0..ORDER).rev() {
-            let k = self.reflection[n];
+            let k = if self.shift_ratio == 1.0 {
+                self.reflection[n]
+            } else {
+                self.synthesis_reflection[n]
+            };
             forward -= k * self.synthesis[n];
             self.synthesis[n + 1] = self.synthesis[n] + k * forward;
         }
@@ -124,6 +178,34 @@ impl FormantCorrector {
         // Keep internal state unclipped so analysis/synthesis remain inverse.
         forward.clamp(-1.0, 1.0)
     }
+}
+
+fn reflection_from_correlation(correlation: &[f64; ORDER + 1]) -> [f64; ORDER] {
+    let mut reflection = [0.0; ORDER];
+    if correlation[0] <= WINDOW as f64 * 1e-12 {
+        return reflection;
+    }
+    let mut coefficients = [0.0; ORDER + 1];
+    coefficients[0] = 1.0;
+    let mut error = correlation[0];
+    for order in 1..=ORDER {
+        let mut sum = correlation[order];
+        for j in 1..order {
+            sum += coefficients[j] * correlation[order - j];
+        }
+        let k = (-sum / error).clamp(-REFLECTION_LIMIT, REFLECTION_LIMIT);
+        reflection[order - 1] = k;
+        let previous = coefficients;
+        for j in 1..order {
+            coefficients[j] = previous[j] + k * previous[order - j];
+        }
+        coefficients[order] = k;
+        error *= 1.0 - k * k;
+        if error <= correlation[0] * 1e-9 {
+            break;
+        }
+    }
+    reflection
 }
 
 /// Accumulate four lags together so their independent dependency chains can run

@@ -422,9 +422,10 @@ impl Engine {
         frames: u32,
         semitones: f64,
         preserve_formants: bool,
+        formant_shift: f64,
     ) -> Result<Self> {
         config.validate(frames)?;
-        let pitch = PitchShifter::new(semitones, preserve_formants)?;
+        let pitch = PitchShifter::new(semitones, preserve_formants, formant_shift)?;
         let mut buffers = Vec::with_capacity(config.inputs + config.outputs);
         for (input, channels) in [(true, config.inputs), (false, config.outputs)] {
             for channel in 0..channels {
@@ -622,7 +623,7 @@ mod tests {
             output_ready: AtomicBool::new(false),
             last_position: AtomicU64::new(u64::MAX),
             metrics: Metrics::default(),
-            pitch: UnsafeCell::new(PitchShifter::new(0.0, true).unwrap()),
+            pitch: UnsafeCell::new(PitchShifter::new(0.0, true, 0.0).unwrap()),
         };
         state.validate_pointers().unwrap();
         assert_eq!(unsafe { state.process::<f32>(0) }, 3);
@@ -637,7 +638,7 @@ mod tests {
 
         // Exercise the wet route through the raw ASIO descriptors, including ring wraps.
         state.buffers[1].buffers[0] = output_a.as_mut_ptr().cast();
-        *state.pitch.get_mut() = PitchShifter::new(3.0, true).unwrap();
+        *state.pitch.get_mut() = PitchShifter::new(3.0, true, 0.0).unwrap();
         for _ in 0..256 {
             assert_eq!(unsafe { state.process::<f32>(0) }, 3);
         }

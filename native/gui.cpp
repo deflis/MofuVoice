@@ -4,7 +4,7 @@
 #include <windows.h>
 #include <string>
 
-using Start = void (*)(void *, const wchar_t *, const wchar_t *, const wchar_t *, int, int);
+using Start = void (*)(void *, const wchar_t *, const wchar_t *, const wchar_t *, const wchar_t *, int, int);
 using Stop = void (*)(void *);
 using Poll = int (*)(void *, wchar_t *, size_t);
 extern "C" void voice_gui_message(const wchar_t *title, const wchar_t *message, int error) {
@@ -16,9 +16,9 @@ struct Gui {
     Start start;
     Stop stop;
     Poll poll;
-    const wchar_t *device_text, *devices, *frames_text, *pitch_text;
+    const wchar_t *device_text, *devices, *frames_text, *pitch_text, *shift_text;
     int preserve;
-    HWND device = nullptr, frames = nullptr, pitch = nullptr, formant = nullptr;
+    HWND device = nullptr, frames = nullptr, pitch = nullptr, formant = nullptr, shift = nullptr;
     HWND start_button = nullptr, stop_button = nullptr, inspect_button = nullptr;
     HWND status = nullptr;
     HFONT font = nullptr;
@@ -50,7 +50,7 @@ static void refresh(HWND window, Gui &gui) {
         gui.last_status = status;
         SetWindowTextW(gui.status, status);
     }
-    for (HWND item : {gui.device, gui.frames, gui.pitch, gui.formant,
+    for (HWND item : {gui.device, gui.frames, gui.pitch, gui.formant, gui.shift,
                       gui.start_button, gui.inspect_button}) {
         EnableWindow(item, !busy && !gui.closing);
     }
@@ -88,21 +88,26 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM
         gui->pitch = control(window, *gui, L"EDIT", gui->pitch_text,
             WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 140, 132, 100, 28, 203);
         SendMessageW(gui->pitch, EM_SETLIMITTEXT, 32, 0);
-        control(window, *gui, L"STATIC", L"-12 to +12 semitones (0 = bypass)", 0, 260, 136, 360, 24);
+        control(window, *gui, L"STATIC", L"-12 to +12 semitones", 0, 260, 136, 360, 24);
         gui->formant = control(window, *gui, L"BUTTON", L"Preserve formants",
             BS_AUTOCHECKBOX | WS_TABSTOP, 140, 172, 300, 28, 204);
         SendMessageW(gui->formant, BM_SETCHECK, gui->preserve ? BST_CHECKED : BST_UNCHECKED, 0);
+        control(window, *gui, L"STATIC", L"Formant shift", 0, 20, 216, 110, 24);
+        gui->shift = control(window, *gui, L"EDIT", gui->shift_text,
+            WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 140, 212, 100, 28, 206);
+        SendMessageW(gui->shift, EM_SETLIMITTEXT, 32, 0);
+        control(window, *gui, L"STATIC", L"-12 to +12 semitones (0 = preserve)", 0, 260, 216, 360, 24);
         gui->inspect_button = control(window, *gui, L"BUTTON", L"Inspect",
-            WS_TABSTOP, 20, 218, 120, 34, INSPECT);
+            WS_TABSTOP, 20, 258, 120, 34, INSPECT);
         gui->start_button = control(window, *gui, L"BUTTON", L"Start",
-            WS_TABSTOP, 154, 218, 120, 34, START);
+            WS_TABSTOP, 154, 258, 120, 34, START);
         gui->stop_button = control(window, *gui, L"BUTTON", L"Stop",
-            WS_TABSTOP, 288, 218, 120, 34, STOP);
+            WS_TABSTOP, 288, 258, 120, 34, STOP);
         control(window, *gui, L"STATIC", L"Stop before changing settings. Inspect opens the driver without audio buffers.",
-            0, 20, 268, 600, 40);
+            0, 20, 308, 600, 40);
         gui->status = control(window, *gui, L"EDIT", L"",
             WS_BORDER | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL | WS_TABSTOP,
-            20, 316, 600, 270, 205);
+            20, 356, 600, 270, 205);
         if (gui->error) return -1;
         if (!SetTimer(window, 1, 100, nullptr)) { gui->error = GetLastError(); return -1; }
         refresh(window, *gui);
@@ -112,7 +117,8 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM
         if (HIWORD(wp) != BN_CLICKED || gui->closing) break;
         if (LOWORD(wp) == START || LOWORD(wp) == INSPECT) {
             auto device = text(gui->device), frames = text(gui->frames), pitch = text(gui->pitch);
-            gui->start(gui->context, device.c_str(), frames.c_str(), pitch.c_str(),
+            auto shift = text(gui->shift);
+            gui->start(gui->context, device.c_str(), frames.c_str(), pitch.c_str(), shift.c_str(),
                 SendMessageW(gui->formant, BM_GETCHECK, 0, 0) == BST_CHECKED,
                 LOWORD(wp) == INSPECT);
             refresh(window, *gui);
@@ -139,9 +145,9 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM
 }
 
 extern "C" unsigned long voice_gui_run(void *context, const wchar_t *device,
-    const wchar_t *devices, const wchar_t *frames, const wchar_t *pitch, int preserve,
+    const wchar_t *devices, const wchar_t *frames, const wchar_t *pitch, const wchar_t *shift, int preserve,
     Start start, Stop stop, Poll poll) {
-    Gui gui{context, start, stop, poll, device, devices, frames, pitch, preserve};
+    Gui gui{context, start, stop, poll, device, devices, frames, pitch, shift, preserve};
     HINSTANCE instance = GetModuleHandleW(nullptr);
     const wchar_t *class_name = L"RustLowLatencyVoiceChangerWindow";
     WNDCLASSW wc{};
@@ -152,7 +158,7 @@ extern "C" unsigned long voice_gui_run(void *context, const wchar_t *device,
     wc.lpszClassName = class_name;
     if (!RegisterClassW(&wc)) return GetLastError();
     // DPI virtualization keeps native controls readable at the user's display scale.
-    RECT bounds{0, 0, 640, 610};
+    RECT bounds{0, 0, 640, 650};
     DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
     AdjustWindowRect(&bounds, style, FALSE);
     HWND window = CreateWindowExW(0, class_name, L"Rust Low-Latency Voice Changer", style,

@@ -22,8 +22,9 @@ unsafe extern "C" {
         devices: *const u16,
         frames: *const u16,
         pitch: *const u16,
+        formant_shift: *const u16,
         preserve: i32,
-        start: extern "C" fn(*mut c_void, *const u16, *const u16, *const u16, i32, i32),
+        start: extern "C" fn(*mut c_void, *const u16, *const u16, *const u16, *const u16, i32, i32),
         stop: extern "C" fn(*mut c_void),
         poll: extern "C" fn(*mut c_void, *mut u16, usize) -> i32,
     ) -> u32;
@@ -144,6 +145,7 @@ fn run_audio(
         options.frames,
         options.pitch,
         options.preserve_formants,
+        options.formant_shift,
     )?;
     if stop.load(Ordering::Acquire) {
         set_status(status, format!("Stopped before playback.\n{details}"));
@@ -165,9 +167,10 @@ fn run_audio(
                 return Err("No ASIO callbacks for 2 seconds".into());
             }
             set_status(status, format!(
-                "Running: {:.1} s | pitch {} semitones | formant {}\n{details}\nPeriod: {:.3} ms | Input 1 -> output 1\n{}\n\n{}\n\nNonzero input counts indicate signal arrival, not listening quality.\nTimestamp blocks=0 means gap detection is unavailable.",
+                "Running: {:.1} s | pitch {} semitones | formant {} | shift {} semitones\n{details}\nPeriod: {:.3} ms | Input 1 -> output 1\n{}\n\n{}\n\nNonzero input counts indicate signal arrival, not listening quality.\nTimestamp blocks=0 means gap detection is unavailable.",
                 started.elapsed().as_secs_f64(), options.pitch,
                 if options.preserve_formants { "preserve" } else { "off" },
+                options.formant_shift,
                 options.frames as f64 * 1000.0 / crate::RATE as f64,
                 engine.latency_summary()?, engine.summary()
             ));
@@ -210,6 +213,7 @@ extern "C" fn start(
     device: *const u16,
     frames: *const u16,
     pitch: *const u16,
+    formant_shift: *const u16,
     preserve: i32,
     inspect: i32,
 ) {
@@ -223,6 +227,8 @@ extern "C" fn start(
             read_wide(frames),
             "--pitch".into(),
             read_wide(pitch),
+            "--formant-shift".into(),
+            read_wide(formant_shift),
             "--formant".into(),
             if preserve != 0 { "preserve" } else { "off" }.into(),
         ]
@@ -262,6 +268,7 @@ pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
     let devices = [devices, vec![0]].concat();
     let frames = wide(&options.frames.to_string());
     let pitch = wide(&options.pitch.to_string());
+    let formant_shift = wide(&options.formant_shift.to_string());
     // SAFETY: buffers and Session remain live during this synchronous native UI loop.
     let error = unsafe {
         voice_gui_run(
@@ -270,6 +277,7 @@ pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
             devices.as_ptr(),
             frames.as_ptr(),
             pitch.as_ptr(),
+            formant_shift.as_ptr(),
             i32::from(options.preserve_formants),
             start,
             stop,
@@ -320,6 +328,7 @@ mod tests {
             context,
             device.as_ptr(),
             frames.as_ptr(),
+            pitch.as_ptr(),
             pitch.as_ptr(),
             1,
             0,

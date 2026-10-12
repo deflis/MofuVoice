@@ -17,7 +17,7 @@ fn optimized_dsp_matches_original_bits_including_transitions_and_formats() {
     for preserve in [false, true] {
         for size in [1, 7, 64, 512] {
             let mut original = reference::pitch::PitchShifter::new(3.0, preserve).unwrap();
-            let mut optimized = PitchShifter::new(3.0, preserve).unwrap();
+            let mut optimized = PitchShifter::new(3.0, preserve, 0.0).unwrap();
             for pitch in [3.0, -3.0, 12.0, -12.0, 0.0, 3.0] {
                 original.set_semitones(pitch).unwrap();
                 optimized.set_semitones(pitch).unwrap();
