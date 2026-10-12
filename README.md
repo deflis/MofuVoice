@@ -20,6 +20,8 @@ Windows x64と、48 kHzのフルデュプレックス入出力に対応したASI
 
 出力1をヘッドホンなどのモニター先、または録音・通話・配信に使う音声入力へ接続します。接続方法はデバイスや音声ルーティング機能によって異なります。アプリは外部の接続設定を自動変更しません。出力を入力へ戻す接続は避けてください。
 
+Voicemeeter（Banana / Potato）や VB-Audio Matrix でルーティングする場合は、[設定ガイド（docs/）](docs/README.md) を参照してください（[Voicemeeter](docs/voicemeeter.md) / [VB-Matrix](docs/vbmatrix.md)）。
+
 ### 3. 設定を確認する
 
 最初は **Frames = 512**、**Pitch = 0**、**Preserve formants = オン**、**Formant shift = 0** のままで **Inspect** を押します。
