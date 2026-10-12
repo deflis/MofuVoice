@@ -1,0 +1,5 @@
+[tools]
+rust = "1.99.0"
+
+[env]
+CPAL_ASIO_DIR = "{{config_root}}/.tools/asiosdk"

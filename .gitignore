@@ -1,3 +1,5 @@
 /target/
 /.tools/
 /logs/
+/mise.local.toml
+

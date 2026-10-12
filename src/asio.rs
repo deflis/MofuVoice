@@ -519,7 +519,7 @@ impl Engine {
     }
     pub fn summary(&self) -> String {
         let metrics = &self.state.metrics;
-        format!("duplex blocks={}; frames={}; spectral wet DSP={LATENCY} samples (42.67 ms), neutral bypass=0; nonzero input samples={}; max callback={:.3} us; deadline misses={}; timestamp blocks={}; sample-position gaps={}; fault flags=0x{:x}", self.blocks(), self.state.frames, metrics.nonzero.load(Ordering::Relaxed), metrics.max_ns.load(Ordering::Relaxed) as f64 / 1000.0, metrics.late.load(Ordering::Relaxed), metrics.timestamp_blocks.load(Ordering::Relaxed), metrics.gaps.load(Ordering::Relaxed), metrics.faults.load(Ordering::Relaxed))
+        format!("duplex blocks={}; frames={}; spectral wet DSP={LATENCY} samples ({:.2} ms), neutral bypass=0; nonzero input samples={}; max callback={:.3} us; deadline misses={}; timestamp blocks={}; sample-position gaps={}; fault flags=0x{:x}", self.blocks(), self.state.frames, LATENCY as f64 * 1000.0 / RATE as f64, metrics.nonzero.load(Ordering::Relaxed), metrics.max_ns.load(Ordering::Relaxed) as f64 / 1000.0, metrics.late.load(Ordering::Relaxed), metrics.timestamp_blocks.load(Ordering::Relaxed), metrics.gaps.load(Ordering::Relaxed), metrics.faults.load(Ordering::Relaxed))
     }
     pub fn print_latencies(&self) -> Result<()> {
         println!("{}", self.latency_summary()?);

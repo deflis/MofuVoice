@@ -1,6 +1,7 @@
 //! Monophonic spectral pitch shifting with identity phase locking.
 //! All FFT tables, windows, and overlap storage are allocated before streaming.
-//! Wet audio has a fixed WINDOW-sample delay; the neutral setting bypasses exactly.
+//! Wet audio uses a long analysis window and a short right-aligned synthesis window,
+//! so the fixed delay is SYNTHESIS samples; the neutral setting bypasses exactly.
 use std::{error::Error, fmt};
 
 pub const SMOOTH_SAMPLES: usize = 960;
@@ -71,10 +72,43 @@ impl Sample for i16 {
 
 pub const WINDOW: usize = 2048;
 pub const HOP: usize = 128;
-pub const LATENCY: usize = WINDOW;
+/// Right-aligned synthesis / COLA length (`2M`); wet delay equals this many samples.
+pub const SYNTHESIS: usize = 512;
+const M: usize = SYNTHESIS / 2;
+pub const LATENCY: usize = SYNTHESIS;
 const BINS: usize = WINDOW / 2 + 1;
 const QUEUE: usize = WINDOW * 2;
 const CEPSTRUM: usize = 80;
+
+fn hann(index: usize, length: usize) -> f64 {
+    0.5 - 0.5 * (std::f64::consts::TAU * index as f64 / length as f64).cos()
+}
+
+fn asymmetric_windows() -> (Box<[f64; WINDOW]>, Box<[f64; WINDOW]>, f64) {
+    let mut analysis = Box::new([0.0; WINDOW]);
+    let mut synthesis = Box::new([0.0; WINDOW]);
+    let left_length = 2 * (WINDOW - M);
+    for i in 0..WINDOW - M {
+        analysis[i] = hann(i, left_length).sqrt();
+    }
+    for i in WINDOW - M..WINDOW {
+        let short = hann(i - (WINDOW - SYNTHESIS), SYNTHESIS).sqrt();
+        analysis[i] = short;
+        synthesis[i] = short;
+    }
+    for i in WINDOW - SYNTHESIS..WINDOW - M {
+        let short = hann(i - (WINDOW - SYNTHESIS), SYNTHESIS);
+        // Product hA*hS is the right-aligned Hann of length SYNTHESIS.
+        synthesis[i] = short / analysis[i];
+    }
+    let (mut moment, mut energy) = (0.0, 0.0);
+    for (i, &weight) in analysis.iter().enumerate() {
+        let power = weight * weight;
+        moment += i as f64 * power;
+        energy += power;
+    }
+    (analysis, synthesis, moment / energy)
+}
 
 #[derive(Clone, Copy, Default)]
 struct Complex {
@@ -151,7 +185,9 @@ fn wrap(phase: f64) -> f64 {
 
 pub struct PitchShifter {
     fft: Fft,
-    window: Box<[f64; WINDOW]>,
+    analysis_window: Box<[f64; WINDOW]>,
+    synthesis_window: Box<[f64; WINDOW]>,
+    phase_center: f64,
     input: Box<[f64; WINDOW]>,
     output: Box<[f64; QUEUE]>,
     spectrum: Box<[Complex; WINDOW]>,
@@ -182,6 +218,10 @@ pub struct PitchShifter {
 }
 
 impl PitchShifter {
+    fn centre_phase(&self, bin: f64) -> f64 {
+        std::f64::consts::TAU * bin * self.phase_center / WINDOW as f64
+    }
+
     pub fn new(
         semitones: f64,
         preserve_formants: bool,
@@ -193,11 +233,12 @@ impl PitchShifter {
             return Err(InvalidFormant.into());
         }
         let wet = f64::from(semitones != 0.0 || formant_shift != 0.0);
+        let (analysis_window, synthesis_window, phase_center) = asymmetric_windows();
         Ok(Self {
             fft: Fft::new(),
-            window: Box::new(std::array::from_fn(|i| {
-                0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / WINDOW as f64).cos()
-            })),
+            analysis_window,
+            synthesis_window,
+            phase_center,
             input: Box::new([0.0; WINDOW]),
             output: Box::new([0.0; QUEUE]),
             spectrum: Box::new([Complex::default(); WINDOW]),
@@ -244,7 +285,7 @@ impl PitchShifter {
     fn frame(&mut self) {
         for i in 0..WINDOW {
             self.spectrum[i] = Complex {
-                re: self.input[(self.clock + i) % WINDOW] * self.window[i],
+                re: self.input[(self.clock + i) % WINDOW] * self.analysis_window[i],
                 im: 0.0,
             };
         }
@@ -287,10 +328,9 @@ impl PitchShifter {
             .copy_from_slice(self.synthesis_phase.as_slice());
         let mut previous = 0;
         for &peak in &self.peaks[..count] {
-            // Store phase at the window centre, removing the alternating pi phase
-            // of adjacent FFT bins. A moving peak must retain its oscillator phase,
-            // rather than adopt the unrelated accumulator of its new bin.
-            let input_phase = wrap(self.phase[peak] + std::f64::consts::PI * peak as f64);
+            // Store phase at the product-Hann centre. A moving peak must retain its
+            // oscillator phase, rather than adopt the unrelated accumulator of its new bin.
+            let input_phase = wrap(self.phase[peak] + self.centre_phase(peak as f64));
             while previous + 1 < self.previous_peak_count
                 && self.previous_peaks[previous + 1].abs_diff(peak)
                     < self.previous_peaks[previous].abs_diff(peak)
@@ -348,15 +388,15 @@ impl PitchShifter {
             } else {
                 1.0
             };
-            let centre_phase = if count == 0 {
-                self.phase[peak] + std::f64::consts::PI * peak as f64
+            let locked_phase = if count == 0 {
+                self.phase[peak] + self.centre_phase(peak as f64)
             } else {
                 self.synthesis_phase[peak]
             };
-            let phase = centre_phase
+            let phase = locked_phase
                 + wrap(
                     self.phase[i] - self.phase[peak]
-                        + std::f64::consts::PI * (i as f64 - peak as f64),
+                        + self.centre_phase(i as f64 - peak as f64),
                 );
             for (bin, weight) in [(lower, 1.0 - fraction), (lower + 1, fraction)] {
                 if bin <= 0 || bin >= (BINS - 1) as isize {
@@ -365,7 +405,7 @@ impl PitchShifter {
                 let bin = bin as usize;
                 let value = Complex::polar(
                     self.magnitude[i] * gain * weight,
-                    phase - std::f64::consts::PI * bin as f64,
+                    phase - self.centre_phase(bin as f64),
                 );
                 self.shifted[bin].re += value.re;
                 self.shifted[bin].im += value.im;
@@ -378,11 +418,12 @@ impl PitchShifter {
             };
         }
         self.fft.transform(&mut self.shifted, true);
-        // Periodic Hann squared sums to 3N/(8H), independent of sample position.
-        let normalization = 8.0 * HOP as f64 / (3.0 * WINDOW as f64);
-        for i in 0..WINDOW {
-            self.output[(self.clock + i) % QUEUE] +=
-                self.shifted[i].re * self.window[i] * normalization;
+        // Periodic Hann of length SYNTHESIS sums to SYNTHESIS/(2H) under hop H.
+        let normalization = 2.0 * HOP as f64 / SYNTHESIS as f64;
+        let start = WINDOW - SYNTHESIS;
+        for i in start..WINDOW {
+            self.output[(self.clock + i - start) % QUEUE] +=
+                self.shifted[i].re * self.synthesis_window[i] * normalization;
         }
     }
 
@@ -444,6 +485,23 @@ mod tests {
         for (expected, actual) in original.iter().zip(data) {
             assert!((expected.re - actual.re).abs() < 1e-12);
             assert!((expected.im - actual.im).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn asymmetric_windows_product_is_right_aligned_hann() {
+        let (analysis, synthesis, phase_center) = asymmetric_windows();
+        assert!((1330.0..1340.0).contains(&phase_center), "{phase_center}");
+        for i in 0..WINDOW - SYNTHESIS {
+            assert_eq!(synthesis[i], 0.0);
+        }
+        for i in WINDOW - SYNTHESIS..WINDOW {
+            let product = analysis[i] * synthesis[i];
+            let expected = hann(i - (WINDOW - SYNTHESIS), SYNTHESIS);
+            assert!(
+                (product - expected).abs() < 1e-12,
+                "product[{i}]={product} expected={expected}"
+            );
         }
     }
 
