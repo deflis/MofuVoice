@@ -5,6 +5,8 @@ fn main() {
     println!("cargo:rustc-link-lib=user32");
     println!("cargo:rustc-link-lib=gdi32");
     println!("cargo:rustc-link-lib=ole32");
+    println!("cargo:rustc-link-lib=comctl32");
+    println!("cargo:rustc-link-lib=dwmapi");
     let sdk = std::path::PathBuf::from(
         std::env::var_os("CPAL_ASIO_DIR").expect("Set CPAL_ASIO_DIR to the ASIO SDK directory"),
     );

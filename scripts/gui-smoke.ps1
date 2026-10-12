@@ -31,6 +31,31 @@ public static class VoiceGuiSmoke {
 $taskRoot = Split-Path -Parent $PSScriptRoot
 $taskExe = Join-Path $taskRoot 'target\release\rust-low-latency-voice-changer-gui.exe'
 $taskProcess = Start-Process -FilePath $taskExe -WindowStyle Hidden -PassThru
+function Find-ClassWindow([string]$ClassName) {
+    $found = [IntPtr]::Zero
+    $visit = [VoiceGuiSmoke+Visit]{
+        param($handle, $parameter)
+        $class = [Text.StringBuilder]::new(256)
+        [void][VoiceGuiSmoke]::GetClassNameW($handle, $class, 256)
+        if ($class.ToString() -eq $ClassName) { $script:__found = $handle }
+        return $true
+    }
+    $script:__found = [IntPtr]::Zero
+    foreach ($thread in $taskProcess.Threads) {
+        [void][VoiceGuiSmoke]::EnumThreadWindows($thread.Id, $visit, [IntPtr]::Zero)
+    }
+    $script:__found
+}
+function Open-ChildWindow([int]$ButtonId, [string]$ClassName) {
+    $deadline = [DateTime]::UtcNow.AddSeconds(5)
+    do {
+        $window = Find-ClassWindow $ClassName
+        if ($window -ne [IntPtr]::Zero) { return $window }
+        Click-Button $ButtonId
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "Window $ClassName was not created"
+}
 function Read-Status {
     $taskBuffer = [Text.StringBuilder]::new(8192)
     $taskResult = [UIntPtr]::Zero
@@ -50,7 +75,7 @@ function Wait-Status([string]$Pattern) {
 }
 function Set-Field([int]$Id, [string]$Value) {
     $taskResult = [UIntPtr]::Zero
-    $taskControl = [VoiceGuiSmoke]::GetDlgItem($script:taskWindow, $Id)
+    $taskControl = [VoiceGuiSmoke]::GetDlgItem($script:taskSettings, $Id)
     if ([VoiceGuiSmoke]::Write($taskControl, 0xC, [UIntPtr]::Zero, $Value, 2, 2000, [ref]$taskResult) -eq [IntPtr]::Zero) {
         throw "Cannot set control $Id"
     }
@@ -74,23 +99,18 @@ try {
     $taskDeadline = [DateTime]::UtcNow.AddSeconds(10)
     do {
         $taskProcess.Refresh()
-        $script:taskWindow = [IntPtr]::Zero
-        $taskVisit = [VoiceGuiSmoke+Visit]{
-            param($taskHandle, $taskParameter)
-            $taskClass = [Text.StringBuilder]::new(256)
-            [void][VoiceGuiSmoke]::GetClassNameW($taskHandle, $taskClass, 256)
-            if ($taskClass.ToString() -eq 'RustLowLatencyVoiceChangerWindow') { $script:taskWindow = $taskHandle }
-            return $true
-        }
-        foreach ($taskThread in $taskProcess.Threads) {
-            [void][VoiceGuiSmoke]::EnumThreadWindows($taskThread.Id, $taskVisit, [IntPtr]::Zero)
-        }
-        if ($taskWindow -ne [IntPtr]::Zero -and [VoiceGuiSmoke]::GetDlgItem($taskWindow, 205) -ne [IntPtr]::Zero) { break }
+        $script:taskWindow = Find-ClassWindow 'RustLowLatencyVoiceChangerWindow'
+        if ($taskWindow -ne [IntPtr]::Zero -and [VoiceGuiSmoke]::GetDlgItem($taskWindow, 101) -ne [IntPtr]::Zero) { break }
         if ($taskProcess.HasExited) { throw 'GUI exited before creating a window' }
         Start-Sleep -Milliseconds 100
     } while ([DateTime]::UtcNow -lt $taskDeadline)
     if ($taskWindow -eq [IntPtr]::Zero) { throw 'GUI window was not created' }
-    $script:taskStatus = [VoiceGuiSmoke]::GetDlgItem($taskWindow, 205)
+
+    $script:taskSettings = Open-ChildWindow 105 'RustLowLatencyVoiceChangerSettings'
+    $script:taskStatusWindow = Open-ChildWindow 106 'RustLowLatencyVoiceChangerStatus'
+    $script:taskStatus = [VoiceGuiSmoke]::GetDlgItem($script:taskStatusWindow, 205)
+    if ($script:taskStatus -eq [IntPtr]::Zero) { throw 'Status detail control was not created' }
+
     Write-Output (Wait-Status '^Ready')
     Set-Field 201 $Device
     Set-Field 202 ([string]$Frames)
@@ -110,7 +130,7 @@ try {
         Set-Field 203 $taskPitch
         Click-Button 101
         $null = Wait-Status '^Running:'
-        if ([VoiceGuiSmoke]::IsWindowEnabled([VoiceGuiSmoke]::GetDlgItem($taskWindow, 203))) {
+        if ([VoiceGuiSmoke]::IsWindowEnabled([VoiceGuiSmoke]::GetDlgItem($script:taskSettings, 203))) {
             throw 'Settings remained editable during playback'
         }
         Start-Sleep -Seconds $RunSeconds
