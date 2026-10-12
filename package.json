@@ -12,7 +12,8 @@
   "dependencies": {
     "@tauri-apps/api": "2.12.3",
     "react": "19.3.0",
-    "react-dom": "19.3.0"
+    "react-dom": "19.3.0",
+    "zustand": "5.0.15"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.12.2",
@@ -20,6 +21,7 @@
     "@types/react-dom": "19.3.0",
     "oxfmt": "0.72.0",
     "oxlint": "1.87.0",
+    "oxlint-tsgolint": "7.0.2004",
     "typescript": "7.0.2",
     "vite": "8.3.4"
   },

@@ -83,6 +83,9 @@ button {
   color: light-dark(#a80000, #ff9090);
   overflow-wrap: anywhere;
 }
+.notice {
+  display: block;
+}
 p,
 pre {
   overflow-wrap: anywhere;
