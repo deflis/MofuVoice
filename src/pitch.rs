@@ -562,13 +562,6 @@ impl PitchShifter {
                 region += 1;
             }
             let peak = if count == 0 { i } else { self.peaks[region] };
-            if count != 0 && peak != rotation_peak {
-                rotation = Complex::polar(
-                    1.0,
-                    self.synthesis_phase[peak] - self.phase[peak] - centre_step * peak as f64,
-                );
-                rotation_peak = peak;
-            }
             // Translate each peak's entire main lobe together. Scaling its bin offsets
             // would broaden the lobe and recreate low-frequency modulation products.
             let frequency_bin = self.phase_advance[peak] * bin_scale;
@@ -576,6 +569,18 @@ impl PitchShifter {
             let destination = i as f64 + frequency_bin * ratio_delta;
             let lower = destination.floor() as isize;
             let fraction = destination - lower as f64;
+            // Both interpolation destinations are discarded by synthesis outside
+            // the positive-frequency range. Avoid envelope and phase work there.
+            if lower >= (BINS - 1) as isize || lower < 0 {
+                continue;
+            }
+            if count != 0 && peak != rotation_peak {
+                rotation = Complex::polar(
+                    1.0,
+                    self.synthesis_phase[peak] - self.phase[peak] - centre_step * peak as f64,
+                );
+                rotation_peak = peak;
+            }
             let gain = if preserve {
                 let position = (destination / self.formant_ratio).clamp(0.0, (BINS - 1) as f64);
                 let env_lower = position.floor() as usize;
