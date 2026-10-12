@@ -35,6 +35,12 @@ static ALLOCATOR: CountingAllocator = CountingAllocator;
 fn callback_does_not_allocate_including_first_frames_and_transitions() {
     for preserve in [false, true] {
         let mut dsp = PitchShifter::new(7.0, preserve, 0.0).unwrap();
+        let mut level = rust_low_latency_voice_changer::level::LevelSettings {
+            enabled: true,
+            ..Default::default()
+        }
+        .build()
+        .unwrap();
         let input = std::array::from_fn::<_, 512, _>(|i| (0.1 * (i as f64 * 0.017).sin()) as f32);
         let mut output = [0.0; 512];
         ALLOCATIONS.with(|n| n.set(0));
@@ -43,6 +49,7 @@ fn callback_does_not_allocate_including_first_frames_and_transitions() {
             dsp.set_semitones(pitch).unwrap();
             for _ in 0..32 {
                 dsp.process_block(&input, &mut output);
+                level.process_in_place(&mut output);
             }
         }
         ENABLED.with(|enabled| enabled.set(false));

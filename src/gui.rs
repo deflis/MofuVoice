@@ -29,6 +29,8 @@ unsafe extern "C" {
         gate_threshold: *const u16,
         gate_attack: *const u16,
         gate_release: *const u16,
+        level_enabled: i32,
+        level_values: *const *const u16,
         save: extern "C" fn(
             *mut c_void,
             *const u16,
@@ -40,6 +42,8 @@ unsafe extern "C" {
             *const u16,
             *const u16,
             *const u16,
+            i32,
+            *const *const u16,
         ) -> i32,
         start: extern "C" fn(
             *mut c_void,
@@ -52,6 +56,8 @@ unsafe extern "C" {
             *const u16,
             *const u16,
             *const u16,
+            i32,
+            *const *const u16,
             i32,
         ),
         stop: extern "C" fn(*mut c_void),
@@ -183,14 +189,17 @@ fn run_audio(
         driver,
         config,
         options.frames,
-        options.pitch,
-        options.preserve_formants,
-        options.formant_shift,
-        crate::gate::GateSettings {
-            enabled: options.gate,
-            threshold: options.gate_threshold,
-            attack_ms: options.gate_attack_ms,
-            release_ms: options.gate_release_ms,
+        asio::DspSettings {
+            semitones: options.pitch,
+            preserve_formants: options.preserve_formants,
+            formant_shift: options.formant_shift,
+            level: options.level,
+            gate: crate::gate::GateSettings {
+                enabled: options.gate,
+                threshold: options.gate_threshold,
+                attack_ms: options.gate_attack_ms,
+                release_ms: options.gate_release_ms,
+            },
         },
     )?;
     if stop.load(Ordering::Acquire) {
@@ -213,11 +222,12 @@ fn run_audio(
                 return Err("No ASIO callbacks for 2 seconds".into());
             }
             set_status(status, format!(
-                "Running: {:.1} s | pitch {} semitones | formant {} | shift {} semitones | gate {}\n{details}\nPeriod: {:.3} ms | Input 1 -> output 1\n{}\n\n{}\n\nNonzero input counts indicate signal arrival, not listening quality.\nTimestamp blocks=0 means gap detection is unavailable.",
+                "Running: {:.1} s | pitch {} semitones | formant {} | shift {} semitones | gate {} | auto level {}\n{details}\nPeriod: {:.3} ms | Input 1 -> output 1\n{}\n\n{}\n\nNonzero input counts indicate signal arrival, not listening quality.\nTimestamp blocks=0 means gap detection is unavailable.",
                 started.elapsed().as_secs_f64(), options.pitch,
                 if options.preserve_formants { "preserve" } else { "off" },
                 options.formant_shift,
                 if options.gate { "on" } else { "off" },
+                if options.level.enabled { "on" } else { "off" },
                 options.frames as f64 * 1000.0 / crate::RATE as f64,
                 engine.latency_summary()?, engine.summary()
             ));
@@ -255,6 +265,17 @@ unsafe fn read_wide(pointer: *const u16) -> String {
     }
     String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(pointer, length) })
 }
+// Native code supplies exactly eight live, null-terminated field strings.
+unsafe fn level_arguments(enabled: i32, values: *const *const u16) -> Vec<String> {
+    let mut args = vec![
+        "--auto-level".into(),
+        if enabled != 0 { "on" } else { "off" }.into(),
+    ];
+    for (index, flag) in crate::level::FLAGS.iter().enumerate() {
+        args.extend([(*flag).into(), unsafe { read_wide(*values.add(index)) }]);
+    }
+    args
+}
 extern "C" fn start(
     context: *mut c_void,
     device: *const u16,
@@ -266,11 +287,13 @@ extern "C" fn start(
     gate_threshold: *const u16,
     gate_attack: *const u16,
     gate_release: *const u16,
+    level_enabled: i32,
+    level_values: *const *const u16,
     inspect: i32,
 ) {
     // SAFETY: see the native callback contract above. No worker accesses Session.
     let session = unsafe { &mut *context.cast::<Session>() };
-    let args = unsafe {
+    let mut args = unsafe {
         vec![
             "--device".into(),
             read_wide(device),
@@ -292,6 +315,7 @@ extern "C" fn start(
             read_wide(gate_release),
         ]
     };
+    args.extend(unsafe { level_arguments(level_enabled, level_values) });
     match Options::parse(args) {
         Ok(mut options) => {
             options.inspect = inspect != 0;
@@ -316,6 +340,8 @@ extern "C" fn save(
     gate_threshold: *const u16,
     gate_attack: *const u16,
     gate_release: *const u16,
+    level_enabled: i32,
+    level_values: *const *const u16,
 ) -> i32 {
     // SAFETY: the UI supplies live UTF-16 text and exclusively owns Session.
     let session = unsafe { &mut *context.cast::<Session>() };
@@ -340,6 +366,7 @@ extern "C" fn save(
                 read_wide(gate_release),
             ]
         };
+        args.extend(unsafe { level_arguments(level_enabled, level_values) });
         let device = unsafe { read_wide(device) };
         if !device.is_empty() {
             args.extend(["--device".into(), device]);
@@ -463,6 +490,13 @@ pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
     });
     let gate_attack = wide(&options.gate_attack_ms.to_string());
     let gate_release = wide(&options.gate_release_ms.to_string());
+    let level_values: Vec<_> = options
+        .level
+        .values()
+        .iter()
+        .map(|v| wide(&v.to_string()))
+        .collect();
+    let level_pointers: Vec<_> = level_values.iter().map(|v| v.as_ptr()).collect();
     // SAFETY: buffers and Session remain live during this synchronous native UI loop.
     let error = unsafe {
         voice_gui_run(
@@ -477,6 +511,8 @@ pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
             gate_threshold.as_ptr(),
             gate_attack.as_ptr(),
             gate_release.as_ptr(),
+            i32::from(options.level.enabled),
+            level_pointers.as_ptr(),
             save,
             start,
             stop,
@@ -517,6 +553,23 @@ mod tests {
         let threshold = wide("auto");
         let attack = wide("5");
         let release = wide("80");
+        let custom = crate::level::LevelSettings {
+            enabled: true,
+            target_db: -18.0,
+            max_gain_db: 6.0,
+            floor_db: -55.0,
+            response_ms: 1200.0,
+            threshold_db: -10.0,
+            ratio: 4.0,
+            attack_ms: 3.0,
+            release_ms: 100.0,
+        };
+        let values: Vec<_> = custom
+            .values()
+            .iter()
+            .map(|v| wide(&v.to_string()))
+            .collect();
+        let pointers: Vec<_> = values.iter().map(|v| v.as_ptr()).collect();
         assert_eq!(
             save(
                 (&mut session as *mut Session).cast(),
@@ -529,6 +582,8 @@ mod tests {
                 threshold.as_ptr(),
                 attack.as_ptr(),
                 release.as_ptr(),
+                1,
+                pointers.as_ptr(),
             ),
             1
         );
@@ -540,6 +595,8 @@ mod tests {
         assert_eq!(saved.formant_shift, -3.0);
         assert!(saved.preserve_formants);
         assert!(saved.gate);
+        assert!(saved.level.enabled);
+        assert_eq!(saved.level, custom);
         assert_eq!(saved.gate_threshold, crate::gate::GateThreshold::Auto);
         std::fs::remove_file(path).unwrap();
     }
@@ -569,6 +626,12 @@ mod tests {
         let threshold = wide("auto");
         let attack = wide("5");
         let release = wide("80");
+        let values: Vec<_> = crate::level::LevelSettings::default()
+            .values()
+            .iter()
+            .map(|v| wide(&v.to_string()))
+            .collect();
+        let pointers: Vec<_> = values.iter().map(|v| v.as_ptr()).collect();
         start(
             context,
             device.as_ptr(),
@@ -580,6 +643,8 @@ mod tests {
             threshold.as_ptr(),
             attack.as_ptr(),
             release.as_ptr(),
+            1,
+            pointers.as_ptr(),
             0,
         );
         assert!(session.worker.is_none());
