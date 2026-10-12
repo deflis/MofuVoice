@@ -1,6 +1,31 @@
 import { create } from "zustand";
 import { listen } from "@tauri-apps/api/event";
-import { api, type LevelSettings, type Settings, type Snapshot } from "./api";
+import { invoke } from "@tauri-apps/api/core";
+
+export type LevelSettings = {
+  enabled: boolean;
+  targetDb: string;
+  maxGainDb: string;
+  floorDb: string;
+  responseMs: string;
+  thresholdDb: string;
+  ratio: string;
+  attackMs: string;
+  releaseMs: string;
+};
+export type Settings = {
+  level: LevelSettings;
+  device: string;
+  frames: string;
+  pitch: string;
+  formantShift: string;
+  preserveFormants: boolean;
+  gate: boolean;
+  gateThreshold: string;
+  gateAttackMs: string;
+  gateReleaseMs: string;
+};
+type Snapshot = { busy: boolean; status: string };
 
 type SettingsStore = {
   settings: Settings | undefined;
@@ -37,7 +62,7 @@ export const useSettingsStore = create<SettingsStore>()((set, get) => {
     set({ pending: true, error: "", notice: "" });
     try {
       await action();
-      set({ snapshot: await api.status() });
+      set({ snapshot: await invoke<Snapshot>("audio_status") });
     } catch (failure) {
       set({ error: String(failure) });
     } finally {
@@ -64,7 +89,7 @@ export const useSettingsStore = create<SettingsStore>()((set, get) => {
       };
       const poll = async () => {
         try {
-          const snapshot = await api.status();
+          const snapshot = await invoke<Snapshot>("audio_status");
           if (!disposed) {
             set({ snapshot });
           }
@@ -77,7 +102,11 @@ export const useSettingsStore = create<SettingsStore>()((set, get) => {
       };
       const load = async () => {
         try {
-          const result = await api.bootstrap();
+          const result = await invoke<{
+            settings: Settings;
+            devices: string[];
+            levelDefaults: LevelSettings;
+          }>("bootstrap");
           if (!disposed) {
             set(result);
           }
@@ -102,12 +131,15 @@ export const useSettingsStore = create<SettingsStore>()((set, get) => {
         );
       };
     },
-    start: (inspect) => run(() => api.start(requireSettings(get().settings), inspect)),
-    stop: () => run(api.stop),
-    spectrum: () => run(api.spectrum),
+    start: (inspect) =>
+      run(() =>
+        invoke<void>("start_audio", { settings: requireSettings(get().settings), inspect }),
+      ),
+    stop: () => run(() => invoke<void>("stop_audio")),
+    spectrum: () => run(() => invoke<void>("open_spectrum")),
     save: () =>
       run(async () => {
-        await api.save(requireSettings(get().settings));
+        await invoke<void>("save_settings", { settings: requireSettings(get().settings) });
         set({ notice: "設定を保存しました。" });
       }),
     close: async () => {
@@ -117,7 +149,7 @@ export const useSettingsStore = create<SettingsStore>()((set, get) => {
       }
       set({ closing: true, error: "" });
       try {
-        await api.close(settings);
+        await invoke<void>("close_application", { settings });
       } catch (failure) {
         set({ closing: false, error: String(failure) });
       }
