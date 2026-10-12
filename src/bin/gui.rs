@@ -1,0 +1,25 @@
+#![windows_subsystem = "windows"]
+
+use rust_low_latency_voice_changer::{cli::Options, gui};
+use std::process::ExitCode;
+
+fn main() -> ExitCode {
+    let result = Options::parse_gui(std::env::args().skip(1)).and_then(|options| {
+        if options.help {
+            gui::show_message(
+                "rust-low-latency-voice-changer-gui [--device NAME] [--frames N] [--pitch SEMITONES] [--formant preserve|off]\n\nSelect an ASIO device in the window or with --device NAME.\nDefault: 512 frames / pitch 0 / preserve formants.\nPitch range: -12..12 (fractional allowed).\nUse Inspect, Start and Stop in the window. Stop before changing settings.",
+                false,
+            );
+            Ok(())
+        } else {
+            gui::run(options)
+        }
+    });
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            gui::show_message(&error.to_string(), true);
+            ExitCode::FAILURE
+        }
+    }
+}

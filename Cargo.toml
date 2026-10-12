@@ -1,0 +1,23 @@
+[package]
+name = "rust-low-latency-voice-changer"
+version = "0.1.0"
+edition = "2021"
+autobins = false
+
+[[bin]]
+name = "rust-low-latency-voice-changer-cli"
+path = "src/bin/cli.rs"
+
+[[bin]]
+name = "rust-low-latency-voice-changer-gui"
+path = "src/bin/gui.rs"
+
+[dependencies]
+asio-sys = "=0.2.6"
+
+[build-dependencies]
+cc = "1"
+
+[[bench]]
+name = "dsp"
+harness = false
