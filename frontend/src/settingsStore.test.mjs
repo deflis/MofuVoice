@@ -1,17 +1,6 @@
 import assert from "node:assert/strict";
-import { registerHooks } from "node:module";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, mock, test } from "node:test";
-
-// Node strips types; resolve the bundler-style local import used by the store.
-registerHooks({
-  resolve(specifier, context, nextResolve) {
-    if (specifier === "./api" && context.parentURL?.endsWith("/settingsStore.ts")) {
-      return nextResolve("./api.ts", context);
-    }
-    return nextResolve(specifier, context);
-  },
-});
 
 const settings = {
   device: "ASIO",
@@ -36,9 +25,11 @@ const settings = {
   },
 };
 const bootstrap = { settings, devices: ["ASIO"], levelDefaults: settings.level };
-const api = {};
+const commands = {};
 const listen = mock.fn();
-mock.module(new URL("./api.ts", import.meta.url).href, { exports: { api } });
+mock.module("@tauri-apps/api/core", {
+  exports: { invoke: (command, args) => commands[command](args) },
+});
 mock.module("@tauri-apps/api/event", { exports: { listen } });
 const { useSettingsStore: store } = await import("./settingsStore.ts");
 let disconnect;
@@ -55,10 +46,16 @@ function deferred() {
 
 beforeEach(() => {
   store.setState(store.getInitialState(), true);
-  api.bootstrap = mock.fn(async () => bootstrap);
-  api.status = mock.fn(async () => ({ busy: false, status: "idle" }));
-  for (const action of ["start", "stop", "save", "spectrum", "close"]) {
-    api[action] = mock.fn(async () => {});
+  commands.bootstrap = mock.fn(async () => bootstrap);
+  commands.audio_status = mock.fn(async () => ({ busy: false, status: "idle" }));
+  for (const action of [
+    "start_audio",
+    "stop_audio",
+    "save_settings",
+    "open_spectrum",
+    "close_application",
+  ]) {
+    commands[action] = mock.fn(async () => {});
   }
   listen.mock.resetCalls();
   listen.mock.mockImplementation(async () => () => {});
@@ -70,38 +67,38 @@ afterEach(() => {
 
 test("close during bootstrap waits for settings and sends only one shutdown", async () => {
   const loading = deferred();
-  api.bootstrap.mock.mockImplementation(() => loading.promise);
+  commands.bootstrap.mock.mockImplementation(() => loading.promise);
   disconnect = store.getState().connect();
   await store.getState().close();
   await store.getState().close();
-  assert.equal(api.close.mock.callCount(), 0);
+  assert.equal(commands.close_application.mock.callCount(), 0);
   loading.resolve(bootstrap);
   await setImmediate();
-  assert.equal(api.close.mock.callCount(), 1);
-  assert.equal(api.close.mock.calls[0].arguments[0], settings);
+  assert.equal(commands.close_application.mock.callCount(), 1);
+  assert.equal(commands.close_application.mock.calls[0].arguments[0].settings, settings);
 });
 
 test("close during a command runs after completion even when the command fails", async () => {
   for (const failed of [false, true]) {
     store.setState({ settings, closing: false });
     const saving = deferred();
-    api.save.mock.mockImplementation(() => saving.promise);
+    commands.save_settings.mock.mockImplementation(() => saving.promise);
     const operation = store.getState().save();
     await store.getState().close();
-    const before = api.close.mock.callCount();
+    const before = commands.close_application.mock.callCount();
     if (failed) {
       saving.reject(new Error("save failed"));
     } else {
       saving.resolve();
     }
     await operation;
-    assert.equal(api.close.mock.callCount(), before + 1);
+    assert.equal(commands.close_application.mock.callCount(), before + 1);
     assert.equal(store.getState().pending, false);
   }
 });
 
 test("bootstrap failure exposes retry state and reconnect loads settings", async () => {
-  api.bootstrap.mock.mockImplementation(async () => {
+  commands.bootstrap.mock.mockImplementation(async () => {
     throw new Error("bootstrap failed");
   });
   disconnect = store.getState().connect();
@@ -110,7 +107,7 @@ test("bootstrap failure exposes retry state and reconnect loads settings", async
   assert.match(store.getState().error, /bootstrap failed/);
   assert.equal(store.getState().settings, undefined);
   disconnect();
-  api.bootstrap.mock.mockImplementation(async () => bootstrap);
+  commands.bootstrap.mock.mockImplementation(async () => bootstrap);
   disconnect = store.getState().connect();
   assert.equal(store.getState().loadFailed, false);
   await setImmediate();
@@ -123,8 +120,8 @@ test("setup-cleanup-setup ignores old responses and removes late subscriptions",
   const status = deferred();
   const subscription = deferred();
   const remove = mock.fn();
-  api.bootstrap.mock.mockImplementationOnce(() => loading.promise);
-  api.status.mock.mockImplementationOnce(() => status.promise);
+  commands.bootstrap.mock.mockImplementationOnce(() => loading.promise);
+  commands.audio_status.mock.mockImplementationOnce(() => status.promise);
   listen.mock.mockImplementationOnce(() => subscription.promise);
   const cleanup = store.getState().connect();
   const obsoleteClose = listen.mock.calls[0].arguments[1];
@@ -139,26 +136,26 @@ test("setup-cleanup-setup ignores old responses and removes late subscriptions",
   assert.equal(store.getState().settings.pitch, "0");
   assert.equal(store.getState().snapshot.status, "idle");
   assert.equal(remove.mock.callCount(), 1);
-  assert.equal(api.close.mock.callCount(), 0);
+  assert.equal(commands.close_application.mock.callCount(), 0);
 });
 
 test("failed shutdown reports validation error and allows draft correction", async () => {
   store.setState({ settings: { ...settings, pitch: "" } });
-  api.close.mock.mockImplementation(async () => {
+  commands.close_application.mock.mockImplementation(async () => {
     throw new Error("invalid pitch");
   });
   await store.getState().close();
   assert.equal(store.getState().closing, false);
   assert.match(store.getState().error, /invalid pitch/);
   store.getState().update("pitch", "3");
-  api.close.mock.mockImplementation(async () => {});
+  commands.close_application.mock.mockImplementation(async () => {});
   await store.getState().close();
-  assert.equal(api.close.mock.calls[1].arguments[0].pitch, "3");
+  assert.equal(commands.close_application.mock.calls[1].arguments[0].settings.pitch, "3");
 });
 
 test("failed bootstrap cancels deferred close before an explicit retry", async () => {
   const loading = deferred();
-  api.bootstrap.mock.mockImplementationOnce(() => loading.promise);
+  commands.bootstrap.mock.mockImplementationOnce(() => loading.promise);
   disconnect = store.getState().connect();
   await store.getState().close();
   loading.reject(new Error("bootstrap failed"));
@@ -167,15 +164,15 @@ test("failed bootstrap cancels deferred close before an explicit retry", async (
   disconnect = store.getState().connect();
   await setImmediate();
   assert.equal(store.getState().settings, settings);
-  assert.equal(api.close.mock.callCount(), 0);
+  assert.equal(commands.close_application.mock.callCount(), 0);
 });
 
 test("cleanup cancels polling and ignores failures from obsolete connections", async (context) => {
   context.mock.timers.enable({ apis: ["setTimeout"] });
   const loading = deferred();
   const status = deferred();
-  api.bootstrap.mock.mockImplementationOnce(() => loading.promise);
-  api.status.mock.mockImplementationOnce(() => status.promise);
+  commands.bootstrap.mock.mockImplementationOnce(() => loading.promise);
+  commands.audio_status.mock.mockImplementationOnce(() => status.promise);
   const cleanup = store.getState().connect();
   cleanup();
   disconnect = store.getState().connect();
@@ -187,9 +184,26 @@ test("cleanup cancels polling and ignores failures from obsolete connections", a
   assert.equal(store.getState().loadFailed, false);
   context.mock.timers.tick(250);
   await setImmediate();
-  assert.equal(api.status.mock.callCount(), 3);
+  assert.equal(commands.audio_status.mock.callCount(), 3);
   disconnect();
   context.mock.timers.tick(1000);
   await setImmediate();
-  assert.equal(api.status.mock.callCount(), 3);
+  assert.equal(commands.audio_status.mock.callCount(), 3);
+});
+
+test("audio commands send the merged Tauri command names and payloads", async () => {
+  store.setState({ settings });
+  await store.getState().start(false);
+  await store.getState().start(true);
+  assert.deepEqual(
+    commands.start_audio.mock.calls.map((call) => call.arguments),
+    [[{ settings, inspect: false }], [{ settings, inspect: true }]],
+  );
+  await store.getState().stop();
+  await store.getState().spectrum();
+  await store.getState().save();
+  assert.deepEqual(commands.stop_audio.mock.calls[0].arguments, [undefined]);
+  assert.deepEqual(commands.open_spectrum.mock.calls[0].arguments, [undefined]);
+  assert.deepEqual(commands.save_settings.mock.calls[0].arguments, [{ settings }]);
+  assert.equal(store.getState().notice, "設定を保存しました。");
 });
