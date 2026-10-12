@@ -403,7 +403,7 @@ mod tests {
             .load(Ordering::Relaxed)
             .wrapping_sub(shared.read.load(Ordering::Relaxed));
         assert!(filled > 0);
-        assert!(filled <= RING - 1);
+        assert!(filled < RING);
         let mut out = Vec::new();
         shared.drain(&mut out);
         assert_eq!(out.len(), filled);
