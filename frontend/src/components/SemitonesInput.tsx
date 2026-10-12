@@ -1,3 +1,5 @@
+import { useId } from "react";
+
 export function SemitonesInput({
   label,
   value,
@@ -8,14 +10,16 @@ export function SemitonesInput({
   onChange: (value: string) => void;
 }) {
   const number = Number(value);
+  const sliderId = useId();
   return (
-    <label className="semitones">
-      <span>
+    <div className="semitones">
+      <label htmlFor={sliderId}>
         {label}
         <small>半音</small>
-      </span>
+      </label>
       <div className="slider-row">
         <input
+          id={sliderId}
           type="range"
           min="-12"
           max="12"
@@ -34,6 +38,6 @@ export function SemitonesInput({
           onChange={(event) => onChange(event.target.value)}
         />
       </div>
-    </label>
+    </div>
   );
 }
