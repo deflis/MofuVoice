@@ -9,30 +9,24 @@ jobs:
   check:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install LLVM
-        uses: KyleMayes/install-llvm-action@v2
-        with:
-          version: "20"
-
-      - name: Set LIBCLANG_PATH
-        shell: pwsh
-        run: |
-          if (-not $env:LLVM_PATH) { throw 'LLVM_PATH was not set by install-llvm-action' }
-          "LIBCLANG_PATH=$($env:LLVM_PATH)\bin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
-      - name: Cache ASIO SDK
-        uses: actions/cache@v4
-        with:
-          path: .tools/asiosdk
-          key: asio-sdk-${{ hashFiles('scripts/fetch-asio-sdk.ps1') }}
-
-      - name: Fetch ASIO SDK
-        shell: pwsh
-        run: ./scripts/fetch-asio-sdk.ps1
+      - uses: actions/checkout@v7
 
       - uses: jdx/mise-action@v5
+
+      - name: Cache LLVM
+        uses: actions/cache@v6
+        with:
+          path: .tools/llvm
+          key: llvm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise.toml') }}
+
+      - name: Cache ASIO SDK
+        uses: actions/cache@v6
+        with:
+          path: .tools/asiosdk
+          key: asio-sdk-${{ hashFiles('mise.toml') }}
+
+      - name: Set up LLVM and ASIO SDK
+        run: mise run setup:ci
 
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile

@@ -156,12 +156,12 @@ GUIにも `--device`、`--frames`、`--pitch`、`--formant`、`--formant-shift` 
 
 ソースコードからビルドするには、RustのWindows x64 MSVCツールチェーン、Visual C++ Build ToolsとWindows SDK、libclang、ASIO SDK、WebView2 Runtimeとmiseが必要です。
 
-ASIO SDK は `.tools/asiosdk` に置きます（`common/asio.h` があること）。次のスクリプトで Steinberg から取得できます（SDK 自体は再配布しないでください）。libclang が PATH にない場合は `mise.local.toml` か環境変数で `LIBCLANG_PATH` を指定してください。
+ASIO SDK は `.tools/asiosdk` に置きます（`common/asio.h` があること）。次のmiseタスクで Steinberg から取得できます（SDK 自体は再配布しないでください）。libclang が PATH にない場合は `mise.local.toml` か環境変数で `LIBCLANG_PATH` を指定してください。
 
 ```powershell
 mise trust
 mise install
-./scripts/fetch-asio-sdk.ps1
+mise run setup:asio
 pnpm install --frozen-lockfile
 pnpm desktop:build
 ```
