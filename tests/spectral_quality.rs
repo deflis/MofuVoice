@@ -238,7 +238,9 @@ fn silence_and_impulse_delay_and_invalid_settings() {
         dsp.process_block(&input, &mut output);
         assert!(output.iter().all(|x| x.is_finite()));
         // Analysis history is WINDOW samples; synthesis then spans LATENCY samples.
-        assert!(output[4096 + WINDOW + LATENCY..].iter().all(|x| x.abs() < 1e-9));
+        assert!(output[4096 + WINDOW + LATENCY..]
+            .iter()
+            .all(|x| x.abs() < 1e-9));
     }
     assert!(PitchShifter::new(0.0, false, 1.0).is_err());
     for value in [f64::NAN, f64::INFINITY, -12.1, 12.1] {

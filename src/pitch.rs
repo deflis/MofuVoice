@@ -395,8 +395,7 @@ impl PitchShifter {
             };
             let phase = locked_phase
                 + wrap(
-                    self.phase[i] - self.phase[peak]
-                        + self.centre_phase(i as f64 - peak as f64),
+                    self.phase[i] - self.phase[peak] + self.centre_phase(i as f64 - peak as f64),
                 );
             for (bin, weight) in [(lower, 1.0 - fraction), (lower + 1, fraction)] {
                 if bin <= 0 || bin >= (BINS - 1) as isize {
