@@ -19,5 +19,5 @@ asio-sys = "=0.2.6"
 cc = "1"
 
 [[bench]]
-name = "dsp"
+name = "spectral"
 harness = false

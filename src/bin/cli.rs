@@ -1,4 +1,4 @@
-use rust_low_latency_voice_changer::pitch::{CENTER_DELAY, MAX_DELAY, MIN_DELAY};
+use rust_low_latency_voice_changer::pitch::LATENCY;
 use rust_low_latency_voice_changer::{asio, cli};
 use rust_low_latency_voice_changer::{RATE, TARGET_FRAMES};
 use std::{
@@ -12,7 +12,7 @@ use std::{
 fn main() -> Result<(), Box<dyn Error>> {
     let options = cli::Options::parse(std::env::args().skip(1))?;
     if options.help {
-        println!("Usage: rust-low-latency-voice-changer-cli --device NAME [--frames N] [--seconds N] [--pitch SEMITONES] [--formant preserve|off] [--formant-shift SEMITONES]\n       rust-low-latency-voice-changer-cli --inspect --device NAME [--frames N]\n       rust-low-latency-voice-changer-cli --list-devices\nSelect a device with --device NAME; use --list-devices to see registered names.\nDefault: 512 frames / pitch 0. Pitch and formant shift range: -12..12 (fractional allowed). Formant shift defaults to 0; nonzero shift requires preserve.\nInput 1 -> output 1; other outputs silent. Pitch 0 and formant shift 0: bit-preserving zero-delay bypass.\nWet DSP: variable delay {MIN_DELAY}..{MAX_DELAY} samples, center {CENTER_DELAY}; FIFO=0. Formant correction: causal LPC, default preserve; --formant off disables it.\nEnter stops interactive mode.");
+        println!("Usage: rust-low-latency-voice-changer-cli --device NAME [--frames N] [--seconds N] [--pitch SEMITONES] [--formant preserve|off] [--formant-shift SEMITONES]\n       rust-low-latency-voice-changer-cli --inspect --device NAME [--frames N]\n       rust-low-latency-voice-changer-cli --list-devices\nSelect a device with --device NAME; use --list-devices to see registered names.\nDefault: 512 frames / pitch 0. Pitch and formant shift range: -12..12 (fractional allowed). Formant shift defaults to 0; nonzero shift requires preserve.\nInput 1 -> output 1; other outputs silent. Pitch 0 and formant shift 0: bit-preserving zero-delay bypass.\nWet DSP: spectral phase locking, fixed {LATENCY} samples of delay. Formant correction: cepstral envelope, default preserve; --formant off disables it.\nEnter stops interactive mode.");
         return Ok(());
     }
     if !options.list && options.device.is_empty() {
@@ -60,7 +60,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     if options.pitch == 0.0 && options.formant_shift == 0.0 {
         println!("Pitch=0; DSP=0 samples; FIFO=0 samples. Input 1 -> output 1.");
     } else {
-        println!("Pitch={} semitones; ratio={:.6}; wet DSP reads={MIN_DELAY}..{MAX_DELAY} samples ({:.3}..{:.3} ms), center={CENTER_DELAY} samples (5 ms), not fixed latency; FIFO=0. Formant mode reported below.", options.pitch, rust_low_latency_voice_changer::pitch::pitch_ratio(options.pitch)?, MIN_DELAY as f64 * 1000.0 / RATE as f64, MAX_DELAY as f64 * 1000.0 / RATE as f64);
+        println!("Pitch={} semitones; ratio={:.6}; spectral wet DSP delay={LATENCY} samples ({:.3} ms). Formant mode reported below.", options.pitch, rust_low_latency_voice_changer::pitch::pitch_ratio(options.pitch)?, LATENCY as f64 * 1000.0 / RATE as f64);
     }
     println!(
         "ASIO period: {:.3} ms; target {} samples / {:.3} ms. Total latency remains unmeasured.",
@@ -68,7 +68,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         TARGET_FRAMES,
         TARGET_FRAMES as f64 * 1000.0 / RATE as f64
     );
-    println!("Formant correction: {}. LPC order=32, past window=1024 samples, update=128 samples; no additional lookahead. Listening quality unverified.", if options.preserve_formants { "preserve" } else { "off" });
+    println!("Formant correction: {}. Cepstral spectral envelope; window=2048 samples, update=128 samples. Listening quality unverified.", if options.preserve_formants { "preserve" } else { "off" });
     engine.start()?;
     println!(
         "Formant shift: {} semitones (independent of pitch).",

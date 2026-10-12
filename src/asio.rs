@@ -1,6 +1,6 @@
 //! Direct ASIO buffer callbacks. asio-sys is used only to load/unload the driver.
 use crate::{
-    pitch::{PitchShifter, Sample},
+    pitch::{PitchShifter, Sample, LATENCY},
     RATE,
 };
 use asio_sys::{bindings::asio_import as ffi, Driver};
@@ -519,7 +519,7 @@ impl Engine {
     }
     pub fn summary(&self) -> String {
         let metrics = &self.state.metrics;
-        format!("duplex blocks={}; frames={}; FIFO=0; nonzero input samples={}; max callback={:.3} us; deadline misses={}; timestamp blocks={}; sample-position gaps={}; fault flags=0x{:x}", self.blocks(), self.state.frames, metrics.nonzero.load(Ordering::Relaxed), metrics.max_ns.load(Ordering::Relaxed) as f64 / 1000.0, metrics.late.load(Ordering::Relaxed), metrics.timestamp_blocks.load(Ordering::Relaxed), metrics.gaps.load(Ordering::Relaxed), metrics.faults.load(Ordering::Relaxed))
+        format!("duplex blocks={}; frames={}; spectral wet DSP={LATENCY} samples (42.67 ms), neutral bypass=0; nonzero input samples={}; max callback={:.3} us; deadline misses={}; timestamp blocks={}; sample-position gaps={}; fault flags=0x{:x}", self.blocks(), self.state.frames, metrics.nonzero.load(Ordering::Relaxed), metrics.max_ns.load(Ordering::Relaxed) as f64 / 1000.0, metrics.late.load(Ordering::Relaxed), metrics.timestamp_blocks.load(Ordering::Relaxed), metrics.gaps.load(Ordering::Relaxed), metrics.faults.load(Ordering::Relaxed))
     }
     pub fn print_latencies(&self) -> Result<()> {
         println!("{}", self.latency_summary()?);
@@ -639,7 +639,7 @@ mod tests {
         // Exercise the wet route through the raw ASIO descriptors, including ring wraps.
         state.buffers[1].buffers[0] = output_a.as_mut_ptr().cast();
         *state.pitch.get_mut() = PitchShifter::new(3.0, true, 0.0).unwrap();
-        for _ in 0..256 {
+        for _ in 0..1024 {
             assert_eq!(unsafe { state.process::<f32>(0) }, 3);
         }
         assert_ne!(input_a.map(f32::to_bits), output_a.map(f32::to_bits));

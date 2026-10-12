@@ -1,16 +1,10 @@
-//! Two overlapping variable-delay reads; all storage is allocated before processing.
-//! This short window favors latency over bass/transient quality.
-//! Bandlimited resampling is not performed. Wet delay is variable, not a fixed latency.
-use crate::formant::FormantCorrector;
+//! Monophonic spectral pitch shifting with identity phase locking.
+//! All FFT tables, windows, and overlap storage are allocated before streaming.
+//! Wet audio has a fixed WINDOW-sample delay; the neutral setting bypasses exactly.
 use std::{error::Error, fmt};
 
-pub const MIN_DELAY: usize = 2;
-pub const DELAY_SPAN: usize = 476;
-pub const MAX_DELAY: usize = MIN_DELAY + DELAY_SPAN;
-pub const CENTER_DELAY: usize = MIN_DELAY + DELAY_SPAN / 2;
-pub const SMOOTH_SAMPLES: usize = 960; // 20 ms at the application's fixed 48 kHz.
-pub const FADE_SAMPLES: usize = 480; // 10 ms for entering/leaving zero-delay bypass.
-const HISTORY: usize = 512;
+pub const SMOOTH_SAMPLES: usize = 960;
+pub const FADE_SAMPLES: usize = 480;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct InvalidPitch;
@@ -75,22 +69,118 @@ impl Sample for i16 {
     }
 }
 
+pub const WINDOW: usize = 2048;
+pub const HOP: usize = 128;
+pub const LATENCY: usize = WINDOW;
+const BINS: usize = WINDOW / 2 + 1;
+const QUEUE: usize = WINDOW * 2;
+const CEPSTRUM: usize = 80;
+
+#[derive(Clone, Copy, Default)]
+struct Complex {
+    re: f64,
+    im: f64,
+}
+impl Complex {
+    fn polar(magnitude: f64, phase: f64) -> Self {
+        Self {
+            re: magnitude * phase.cos(),
+            im: magnitude * phase.sin(),
+        }
+    }
+}
+
+struct Fft {
+    reverse: Box<[usize; WINDOW]>,
+    roots: Box<[Complex; WINDOW / 2]>,
+}
+impl Fft {
+    fn new() -> Self {
+        Self {
+            reverse: Box::new(std::array::from_fn(|i| {
+                i.reverse_bits() >> (usize::BITS - WINDOW.ilog2())
+            })),
+            roots: Box::new(std::array::from_fn(|i| {
+                Complex::polar(1.0, -std::f64::consts::TAU * i as f64 / WINDOW as f64)
+            })),
+        }
+    }
+    fn transform(&self, data: &mut [Complex; WINDOW], inverse: bool) {
+        for i in 0..WINDOW {
+            if i < self.reverse[i] {
+                data.swap(i, self.reverse[i]);
+            }
+        }
+        let mut size = 2;
+        while size <= WINDOW {
+            let half = size / 2;
+            for start in (0..WINDOW).step_by(size) {
+                for j in 0..half {
+                    let mut root = self.roots[j * WINDOW / size];
+                    if inverse {
+                        root.im = -root.im;
+                    }
+                    let a = data[start + j];
+                    let b = data[start + j + half];
+                    let re = b.re * root.re - b.im * root.im;
+                    let im = b.re * root.im + b.im * root.re;
+                    data[start + j] = Complex {
+                        re: a.re + re,
+                        im: a.im + im,
+                    };
+                    data[start + j + half] = Complex {
+                        re: a.re - re,
+                        im: a.im - im,
+                    };
+                }
+            }
+            size *= 2;
+        }
+        if inverse {
+            for value in data {
+                value.re /= WINDOW as f64;
+                value.im /= WINDOW as f64;
+            }
+        }
+    }
+}
+
+fn wrap(phase: f64) -> f64 {
+    (phase + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI
+}
+
 pub struct PitchShifter {
-    history: Box<[f64; HISTORY]>,
-    formant: Option<FormantCorrector>,
-    write: usize,
-    phase: f64,
-    semitones: f64,
-    formant_shift: f64,
+    fft: Fft,
+    window: Box<[f64; WINDOW]>,
+    input: Box<[f64; WINDOW]>,
+    output: Box<[f64; QUEUE]>,
+    spectrum: Box<[Complex; WINDOW]>,
+    shifted: Box<[Complex; WINDOW]>,
+    envelope_work: Box<[Complex; WINDOW]>,
+    magnitude: Box<[f64; BINS]>,
+    phase: Box<[f64; BINS]>,
+    previous_phase: Box<[f64; BINS]>,
+    synthesis_phase: Box<[f64; BINS]>,
+    previous_synthesis_phase: Box<[f64; BINS]>,
+    phase_advance: Box<[f64; BINS]>,
+    envelope: Box<[f64; BINS]>,
+    peaks: Box<[usize; BINS]>,
+    previous_peaks: Box<[usize; BINS]>,
+    previous_peak_count: usize,
+    clock: usize,
+    until_frame: usize,
     ratio: f64,
     target_ratio: f64,
     ratio_step: f64,
-    ratio_remaining: usize,
+    remaining: usize,
+    semitones: f64,
+    preserve_formants: bool,
+    formant_ratio: f64,
+    formant_shift: f64,
     wet: f64,
     target_wet: f64,
-    wet_step: f64,
-    wet_remaining: usize,
 }
+
 impl PitchShifter {
     pub fn new(
         semitones: f64,
@@ -98,105 +188,240 @@ impl PitchShifter {
         formant_shift: f64,
     ) -> Result<Self, Box<dyn Error>> {
         let ratio = pitch_ratio(semitones)?;
-        let shift_ratio = formant_ratio(formant_shift)?;
+        let formant_ratio = formant_ratio(formant_shift)?;
         if !preserve_formants && formant_shift != 0.0 {
             return Err(InvalidFormant.into());
         }
         let wet = f64::from(semitones != 0.0 || formant_shift != 0.0);
         Ok(Self {
-            history: Box::new([0.0; HISTORY]),
-            formant: preserve_formants.then(|| FormantCorrector::new(shift_ratio)),
-            write: 0,
-            phase: 0.0,
-            semitones,
-            formant_shift,
+            fft: Fft::new(),
+            window: Box::new(std::array::from_fn(|i| {
+                0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / WINDOW as f64).cos()
+            })),
+            input: Box::new([0.0; WINDOW]),
+            output: Box::new([0.0; QUEUE]),
+            spectrum: Box::new([Complex::default(); WINDOW]),
+            shifted: Box::new([Complex::default(); WINDOW]),
+            envelope_work: Box::new([Complex::default(); WINDOW]),
+            magnitude: Box::new([0.0; BINS]),
+            phase: Box::new([0.0; BINS]),
+            previous_phase: Box::new([0.0; BINS]),
+            synthesis_phase: Box::new([0.0; BINS]),
+            previous_synthesis_phase: Box::new([0.0; BINS]),
+            phase_advance: Box::new([0.0; BINS]),
+            envelope: Box::new([0.0; BINS]),
+            peaks: Box::new([0; BINS]),
+            previous_peaks: Box::new([0; BINS]),
+            previous_peak_count: 0,
+            clock: 0,
+            until_frame: HOP,
             ratio,
             target_ratio: ratio,
             ratio_step: 0.0,
-            ratio_remaining: 0,
+            remaining: 0,
+            semitones,
+            preserve_formants,
+            formant_ratio,
+            formant_shift,
             wet,
             target_wet: wet,
-            wet_step: 0.0,
-            wet_remaining: 0,
         })
     }
 
-    /// Validate on the control side. Repeating a target does not restart a ramp.
     pub fn set_semitones(&mut self, semitones: f64) -> Result<(), InvalidPitch> {
         let ratio = pitch_ratio(semitones)?;
-        if self.semitones == semitones {
+        if semitones == self.semitones {
             return Ok(());
         }
         self.semitones = semitones;
         self.target_ratio = ratio;
         self.ratio_step = (ratio - self.ratio) / SMOOTH_SAMPLES as f64;
-        self.ratio_remaining = SMOOTH_SAMPLES;
-        let target_wet = f64::from(semitones != 0.0 || self.formant_shift != 0.0);
-        if self.target_wet != target_wet {
-            self.target_wet = target_wet;
-            self.wet_step = (target_wet - self.wet) / FADE_SAMPLES as f64;
-            self.wet_remaining = FADE_SAMPLES;
-        }
+        self.remaining = SMOOTH_SAMPLES;
+        self.target_wet = f64::from(semitones != 0.0 || self.formant_shift != 0.0);
         Ok(())
     }
 
-    fn read(&self, phase: f64) -> f64 {
-        let delay = MIN_DELAY as f64 + phase * DELAY_SPAN as f64;
-        let whole = delay.floor() as usize;
-        let fraction = delay - whole as f64;
-        let recent = (self.write + HISTORY - whole) % HISTORY;
-        let older = (recent + HISTORY - 1) % HISTORY;
-        self.history[recent] * (1.0 - fraction) + self.history[older] * fraction
+    fn frame(&mut self) {
+        for i in 0..WINDOW {
+            self.spectrum[i] = Complex {
+                re: self.input[(self.clock + i) % WINDOW] * self.window[i],
+                im: 0.0,
+            };
+        }
+        self.fft.transform(&mut self.spectrum, false);
+        for i in 0..BINS {
+            let value = self.spectrum[i];
+            self.magnitude[i] = value.re.hypot(value.im);
+            self.phase[i] = value.im.atan2(value.re);
+            let advance = std::f64::consts::TAU * HOP as f64 * i as f64 / WINDOW as f64;
+            let frequency = advance + wrap(self.phase[i] - self.previous_phase[i] - advance);
+            self.phase_advance[i] = frequency;
+            self.previous_phase[i] = self.phase[i];
+        }
+        if self.preserve_formants {
+            // Real cepstral low-pass estimates a smooth envelope without fitting harmonics.
+            for i in 0..WINDOW {
+                let bin = i.min(WINDOW - i);
+                self.envelope_work[i] = Complex {
+                    re: self.magnitude[bin].max(1e-12).ln(),
+                    im: 0.0,
+                };
+            }
+            self.fft.transform(&mut self.envelope_work, true);
+            self.envelope_work[CEPSTRUM + 1..WINDOW - CEPSTRUM].fill(Complex::default());
+            self.fft.transform(&mut self.envelope_work, false);
+            for i in 0..BINS {
+                self.envelope[i] = self.envelope_work[i].re;
+            }
+        }
+        let mut count = 0;
+        for i in 1..BINS - 1 {
+            if self.magnitude[i] > self.magnitude[i - 1]
+                && self.magnitude[i] >= self.magnitude[i + 1]
+            {
+                self.peaks[count] = i;
+                count += 1;
+            }
+        }
+        self.previous_synthesis_phase
+            .copy_from_slice(self.synthesis_phase.as_slice());
+        let mut previous = 0;
+        for &peak in &self.peaks[..count] {
+            // Store phase at the window centre, removing the alternating pi phase
+            // of adjacent FFT bins. A moving peak must retain its oscillator phase,
+            // rather than adopt the unrelated accumulator of its new bin.
+            let input_phase = wrap(self.phase[peak] + std::f64::consts::PI * peak as f64);
+            while previous + 1 < self.previous_peak_count
+                && self.previous_peaks[previous + 1].abs_diff(peak)
+                    < self.previous_peaks[previous].abs_diff(peak)
+            {
+                previous += 1;
+            }
+            self.synthesis_phase[peak] = if self.ratio == 1.0
+                || self.previous_peak_count == 0
+                || self.previous_peaks[previous].abs_diff(peak) > 2
+            {
+                input_phase
+            } else {
+                wrap(
+                    self.previous_synthesis_phase[self.previous_peaks[previous]]
+                        + self.phase_advance[peak] * self.ratio,
+                )
+            };
+        }
+        self.previous_peaks[..count].copy_from_slice(&self.peaks[..count]);
+        self.previous_peak_count = count;
+        self.shifted.fill(Complex::default());
+        self.shifted[0] = self.spectrum[0];
+        if self.ratio == 1.0 {
+            self.shifted[BINS - 1] = self.spectrum[BINS - 1];
+        }
+        let dc_lobe = self.magnitude[0] > self.magnitude[1];
+        if dc_lobe {
+            self.shifted[1] = self.spectrum[1];
+        }
+        let mut region = 0;
+        for i in 1..BINS - 1 {
+            if dc_lobe && i == 1 {
+                continue;
+            }
+            while region + 1 < count && 2 * i > self.peaks[region] + self.peaks[region + 1] {
+                region += 1;
+            }
+            let peak = if count == 0 { i } else { self.peaks[region] };
+            // Translate each peak's entire main lobe together. Scaling its bin offsets
+            // would broaden the lobe and recreate low-frequency modulation products.
+            let frequency_bin =
+                self.phase_advance[peak] * WINDOW as f64 / (std::f64::consts::TAU * HOP as f64);
+            // Shift continuously by measured frequency, including fractional bins.
+            let destination = i as f64 + frequency_bin * (self.ratio - 1.0);
+            let lower = destination.floor() as isize;
+            let fraction = destination - lower as f64;
+            let gain = if self.preserve_formants {
+                let position = (destination / self.formant_ratio).clamp(0.0, (BINS - 1) as f64);
+                let lower = position.floor() as usize;
+                let fraction = position - lower as f64;
+                let desired = self.envelope[lower] * (1.0 - fraction)
+                    + self.envelope[(lower + 1).min(BINS - 1)] * fraction;
+                // Bound envelope correction, rather than clipping the synthesis waveform.
+                (desired - self.envelope[i]).clamp(-2.0, 2.0).exp()
+            } else {
+                1.0
+            };
+            let centre_phase = if count == 0 {
+                self.phase[peak] + std::f64::consts::PI * peak as f64
+            } else {
+                self.synthesis_phase[peak]
+            };
+            let phase = centre_phase
+                + wrap(
+                    self.phase[i] - self.phase[peak]
+                        + std::f64::consts::PI * (i as f64 - peak as f64),
+                );
+            for (bin, weight) in [(lower, 1.0 - fraction), (lower + 1, fraction)] {
+                if bin <= 0 || bin >= (BINS - 1) as isize {
+                    continue;
+                }
+                let bin = bin as usize;
+                let value = Complex::polar(
+                    self.magnitude[i] * gain * weight,
+                    phase - std::f64::consts::PI * bin as f64,
+                );
+                self.shifted[bin].re += value.re;
+                self.shifted[bin].im += value.im;
+            }
+        }
+        for i in 1..BINS - 1 {
+            self.shifted[WINDOW - i] = Complex {
+                re: self.shifted[i].re,
+                im: -self.shifted[i].im,
+            };
+        }
+        self.fft.transform(&mut self.shifted, true);
+        // Periodic Hann squared sums to 3N/(8H), independent of sample position.
+        let normalization = 8.0 * HOP as f64 / (3.0 * WINDOW as f64);
+        for i in 0..WINDOW {
+            self.output[(self.clock + i) % QUEUE] +=
+                self.shifted[i].re * self.window[i] * normalization;
+        }
     }
 
-    /// Equal-length mono blocks. Returns the number of nonzero input samples.
-    /// No allocation, lock, I/O or parameter exponentiation occurs here.
+    /// Equal-length blocks; callback storage and FFT tables are never allocated here.
     pub fn process_block<T: Sample>(&mut self, input: &[T], output: &mut [T]) -> u64 {
         assert_eq!(input.len(), output.len());
         let mut nonzero = 0;
         for (&sample, out) in input.iter().zip(output) {
             nonzero += u64::from(sample != T::default());
             let value = sample.normalized();
-            // Prevent a nonfinite float from poisoning future wet blocks. Dry bits are preserved.
             let dry = if value.is_finite() { value } else { 0.0 };
-            self.history[self.write] = match &mut self.formant {
-                Some(formant) => formant.analyze(dry),
-                None => dry,
-            };
-            if self.ratio_remaining != 0 {
-                self.ratio_remaining -= 1;
+            self.input[self.clock % WINDOW] = dry;
+            let wet = self.output[self.clock % QUEUE];
+            self.output[self.clock % QUEUE] = 0.0;
+            if self.remaining != 0 {
                 self.ratio += self.ratio_step;
-                if self.ratio_remaining == 0 {
+                self.remaining -= 1;
+                if self.remaining == 0 {
                     self.ratio = self.target_ratio;
                 }
             }
-            if self.wet_remaining != 0 {
-                self.wet_remaining -= 1;
-                self.wet += self.wet_step;
-                if self.wet_remaining == 0 {
-                    self.wet = self.target_wet;
-                }
+            let step = 1.0 / FADE_SAMPLES as f64;
+            if self.wet < self.target_wet {
+                self.wet = (self.wet + step).min(self.target_wet);
             }
-            if self.wet == 0.0 && self.formant.is_none() {
-                *out = sample;
+            if self.wet > self.target_wet {
+                self.wet = (self.wet - step).max(self.target_wet);
+            }
+            *out = if self.wet == 0.0 {
+                sample
             } else {
-                let second = (self.phase + 0.5).fract();
-                // Complementary Hann weights are zero where each read head wraps.
-                let weight = 0.5 - 0.5 * (std::f64::consts::TAU * self.phase).cos();
-                let shifted = self.read(self.phase) * weight + self.read(second) * (1.0 - weight);
-                let shifted = match &mut self.formant {
-                    Some(formant) => formant.synthesize(shifted),
-                    None => shifted,
-                };
-                *out = if self.wet == 0.0 {
-                    sample
-                } else {
-                    T::from_normalized(dry * (1.0 - self.wet) + shifted * self.wet)
-                };
+                T::from_normalized((dry * (1.0 - self.wet) + wet * self.wet).clamp(-1.0, 1.0))
+            };
+            self.clock = (self.clock + 1) % QUEUE;
+            self.until_frame -= 1;
+            if self.until_frame == 0 {
+                self.frame();
+                self.until_frame = HOP;
             }
-            // y[n] = x[n-delay[n]]: read speed = 1 - delta(delay) = ratio.
-            self.phase = (self.phase + (1.0 - self.ratio) / DELAY_SPAN as f64).rem_euclid(1.0);
-            self.write = (self.write + 1) % HISTORY;
         }
         nonzero
     }
@@ -205,555 +430,38 @@ impl PitchShifter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::RATE;
-
-    fn resonant_noise(count: usize) -> Vec<f32> {
-        let radius = 0.99_f64;
-        let coefficient = 2.0 * radius * (std::f64::consts::TAU * 1500.0 / RATE as f64).cos();
-        let (mut a, mut b) = (0.0, 0.0);
-        let mut seed = 1_u32;
-        (0..count)
-            .map(|_| {
-                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
-                let noise = seed as f64 / u32::MAX as f64 - 0.5;
-                let next = 0.001 * noise + coefficient * a - radius * radius * b;
-                b = a;
-                a = next;
-                next as f32
-            })
-            .collect()
-    }
-
-    fn spectral_power(signal: &[f32], frequency: f64) -> f64 {
-        let coefficient = 2.0 * (std::f64::consts::TAU * frequency / RATE as f64).cos();
-        let (mut a, mut b) = (0.0, 0.0);
-        for (n, &sample) in signal.iter().enumerate() {
-            let window = 0.5 - 0.5 * (std::f64::consts::TAU * n as f64 / signal.len() as f64).cos();
-            let next = sample as f64 * window + coefficient * a - b;
-            b = a;
-            a = next;
-        }
-        (a * a + b * b - coefficient * a * b).max(0.0)
-    }
 
     #[test]
-    fn independent_formant_shift_moves_resonance() {
-        let input = resonant_noise(40_960);
-        for (pitch, shift) in [
-            (0.0, -12.0),
-            (0.0, -3.0),
-            (0.0, 3.0),
-            (0.0, 12.0),
-            (-3.0, -3.0),
-            (-3.0, 3.0),
-            (3.0, -3.0),
-            (3.0, 3.0),
-        ] {
-            let mut output = vec![0.0; input.len()];
-            PitchShifter::new(pitch, true, shift)
-                .unwrap()
-                .process_block(&input, &mut output);
-            let expected = 1500.0 * formant_ratio(shift).unwrap();
-            let peak = (500..=3500)
-                .step_by(10)
-                .map(|frequency| {
-                    let power: f64 = output[8192..]
-                        .as_chunks::<4096>()
-                        .0
-                        .iter()
-                        .map(|chunk| spectral_power(chunk, frequency as f64))
-                        .sum();
-                    (frequency as f64, power)
-                })
-                .max_by(|a, b| a.1.total_cmp(&b.1))
-                .unwrap()
-                .0;
-            assert!(
-                (peak - expected).abs() < 150.0,
-                "pitch={pitch}, shift={shift}: peak={peak}, expected={expected}"
-            );
-            assert!(output
-                .iter()
-                .all(|sample| sample.is_finite() && sample.abs() <= 1.0));
+    fn fft_round_trip_preserves_real_and_imaginary_samples() {
+        let fft = Fft::new();
+        let original = std::array::from_fn(|i| Complex {
+            re: (i as f64 * 0.31).sin(),
+            im: (i as f64 * 0.17).cos(),
+        });
+        let mut data = original;
+        fft.transform(&mut data, false);
+        fft.transform(&mut data, true);
+        for (expected, actual) in original.iter().zip(data) {
+            assert!((expected.re - actual.re).abs() < 1e-12);
+            assert!((expected.im - actual.im).abs() < 1e-12);
         }
     }
 
     #[test]
-    fn shifted_formants_recover_from_overloads_and_silence_in_all_formats() {
-        for shift in [-12.0, -3.0, 3.0, 12.0] {
-            let mut dsp = PitchShifter::new(0.0, true, shift).unwrap();
-            let mut input = vec![0.0_f32; 48_000];
-            input[..5].copy_from_slice(&[
-                f32::NAN,
-                f32::INFINITY,
-                f32::NEG_INFINITY,
-                f32::MAX,
-                -f32::MAX,
-            ]);
-            input[512..4096].copy_from_slice(&tone(3584, 730.0));
-            let mut output = vec![0.0; input.len()];
-            dsp.process_block(&input, &mut output);
-            assert!(output.iter().all(|x| x.is_finite() && x.abs() <= 1.0));
-            assert!(output[47_000..].iter().all(|x| x.abs() < 1e-5));
-            let mut output = [0_i32; 4096];
-            dsp.process_block(&[i32::MAX; 4096], &mut output);
-            let mut output = [0_i16; 4096];
-            dsp.process_block(&[i16::MIN; 4096], &mut output);
-            let mut recovery = vec![0.0_f32; 48_000];
-            dsp.process_block(&vec![0.0; 48_000], &mut recovery);
-            assert!(recovery.iter().all(|x| x.is_finite() && x.abs() <= 1.0));
-            assert!(recovery[47_000..].iter().all(|x| x.abs() < 1e-5));
-            // A fresh silence-only stream must produce exact silence at every shift.
-            let mut silence = [1.0_f32; 4096];
-            PitchShifter::new(0.0, true, shift)
-                .unwrap()
-                .process_block(&[0.0; 4096], &mut silence);
-            assert!(silence.iter().all(|x| *x == 0.0));
-        }
-    }
-
-    #[test]
-    fn formant_shift_keeps_pitch_and_survives_pitch_retargeting() {
-        let input = tone(24_000, RATE as f64 / 238.0);
-        for shift in [-12.0, -3.0, 3.0, 12.0] {
-            let mut dsp = PitchShifter::new(3.0, true, shift).unwrap();
-            dsp.set_semitones(0.0).unwrap();
-            let mut output = vec![0.0; input.len()];
-            dsp.process_block(&input, &mut output);
-            assert_eq!(dsp.wet, 1.0);
-            let signal = &output[8192..];
-            let measured = signal
-                .windows(2)
-                .filter(|w| w[0] <= 0.0 && w[1] > 0.0)
-                .count() as f64
-                * RATE as f64
-                / signal.len() as f64;
-            assert!(
-                (measured - RATE as f64 / 238.0).abs() < 4.0,
-                "shift={shift}: {measured}"
-            );
-        }
-    }
-
-    #[test]
-    fn shifted_formants_are_independent_of_block_boundaries() {
-        let input = resonant_noise(4096);
-        for shift in [-12.0, -2.5, 2.5, 12.0] {
-            let mut whole = vec![0.0; input.len()];
-            PitchShifter::new(0.0, true, shift)
-                .unwrap()
-                .process_block(&input, &mut whole);
-            for size in [1, 7, 64, 512] {
-                let mut dsp = PitchShifter::new(0.0, true, shift).unwrap();
-                let mut output = vec![0.0; input.len()];
-                for (a, b) in input.chunks(size).zip(output.chunks_mut(size)) {
-                    dsp.process_block(a, b);
-                }
-                assert_eq!(whole, output);
-            }
-        }
-        assert!(PitchShifter::new(0.0, false, 3.0).is_err());
-        for shift in [f64::NAN, f64::INFINITY, -12.1, 12.1] {
-            assert!(PitchShifter::new(0.0, true, shift).is_err());
-        }
-    }
-
-    #[test]
-    fn correction_keeps_resonance_nearer_original_in_both_pitch_directions() {
-        // Broadband excitation through a known 1500 Hz all-pole vocal-tract model.
-        // Average independent spectral windows to avoid selecting a random noise bin.
-        fn peak(signal: &[f32]) -> f64 {
-            (900..=2100)
-                .step_by(10)
-                .map(|frequency| {
-                    let power: f64 = signal[8192..]
-                        .as_chunks::<4096>()
-                        .0
-                        .iter()
-                        .map(|chunk| spectral_power(chunk, frequency as f64))
-                        .sum();
-                    (frequency as f64, power)
-                })
-                .max_by(|a, b| a.1.total_cmp(&b.1))
-                .unwrap()
-                .0
-        }
-        let input = resonant_noise(40_960);
-        let original = peak(&input);
-        assert!((original - 1500.0).abs() < 100.0);
-        for pitch in [-3.0, 3.0] {
-            let mut corrected = vec![0.0; input.len()];
-            let mut uncorrected = vec![0.0; input.len()];
-            PitchShifter::new(pitch, true, 0.0)
-                .unwrap()
-                .process_block(&input, &mut corrected);
-            PitchShifter::new(pitch, false, 0.0)
-                .unwrap()
-                .process_block(&input, &mut uncorrected);
-            let restored = peak(&corrected);
-            let shifted = peak(&uncorrected);
-            assert!((shifted - original * pitch_ratio(pitch).unwrap()).abs() < 100.0);
-            assert!(
-                (restored - original).abs() < 100.0,
-                "pitch={pitch}: original={original}, restored={restored}, shifted={shifted}"
-            );
-            assert!((restored - original).abs() < (shifted - original).abs() * 0.5);
-        }
-    }
-
-    #[test]
-    fn corrected_periodic_excitation_still_shifts_pitch() {
-        let input = tone(24_000, RATE as f64 / 238.0);
-        for pitch in [-12.0, -3.0, 3.0, 12.0] {
-            let mut output = vec![0.0; input.len()];
-            PitchShifter::new(pitch, true, 0.0)
-                .unwrap()
-                .process_block(&input, &mut output);
-            let expected = RATE as f64 / 238.0 * pitch_ratio(pitch).unwrap();
-            let signal = &output[8192..];
-            let measured = signal
-                .windows(2)
-                .filter(|w| w[0] <= 0.0 && w[1] > 0.0)
-                .count() as f64
-                * RATE as f64
-                / signal.len() as f64;
-            assert!(
-                (measured - expected).abs() < 4.0,
-                "pitch={pitch}: {measured} vs {expected}"
-            );
-        }
-    }
-
-    #[test]
-    fn corrected_processing_is_independent_of_callback_sizes() {
-        let input = resonant_noise(4096);
-        for pitch in [-12.0, -3.0, 0.0, 3.0, 12.0] {
-            let mut whole = vec![0.0; input.len()];
-            PitchShifter::new(pitch, true, 0.0)
-                .unwrap()
-                .process_block(&input, &mut whole);
-            for size in [1, 7, 64, 512, 8192] {
-                let mut dsp = PitchShifter::new(pitch, true, 0.0).unwrap();
-                let mut output = vec![0.0; input.len()];
-                for (a, b) in input.chunks(size).zip(output.chunks_mut(size)) {
-                    dsp.process_block(a, b);
-                }
-                assert_eq!(whole, output, "pitch={pitch}, size={size}");
-            }
-        }
-    }
-
-    #[test]
-    fn corrected_bypass_preserves_all_formats_and_returns_after_retargeting() {
-        let floats = [
-            1.0_f32,
-            -0.0,
-            f32::from_bits(1),
-            f32::from_bits(0x7fc01234),
-            f32::INFINITY,
-        ];
-        let mut output = [0.0; 5];
-        PitchShifter::new(0.0, true, 0.0)
-            .unwrap()
-            .process_block(&floats, &mut output);
-        assert_eq!(floats.map(f32::to_bits), output.map(f32::to_bits));
-        let integers = [i32::MIN, -1, 0, 1, i32::MAX];
-        let mut output = [0; 5];
-        PitchShifter::new(0.0, true, 0.0)
-            .unwrap()
-            .process_block(&integers, &mut output);
-        assert_eq!(integers, output);
-        let shorts = [i16::MIN, -1, 0, 1, i16::MAX];
-        let mut output = [0; 5];
-        PitchShifter::new(0.0, true, 0.0)
-            .unwrap()
-            .process_block(&shorts, &mut output);
-        assert_eq!(shorts, output);
-        let input = resonant_noise(4096);
+    fn neutral_wet_path_reconstructs_at_declared_latency() {
+        let mut dsp = PitchShifter::new(0.0, false, 0.0).unwrap();
+        // Exercise the transform, rather than the public neutral bypass.
+        dsp.wet = 1.0;
+        dsp.target_wet = 1.0;
+        let mut input: Vec<f32> = (0..12_000)
+            .map(|i| (0.13 * (i as f64 * 0.03).sin() + 0.05 * (i as f64 * 0.13).cos()) as f32)
+            .collect();
+        input[3072] = 0.7;
         let mut output = vec![0.0; input.len()];
-        let mut dsp = PitchShifter::new(0.0, true, 0.0).unwrap();
-        for pitch in [3.0, -3.0, 12.0, -12.0, 0.0] {
-            dsp.set_semitones(pitch).unwrap();
-            dsp.process_block(&input[..100], &mut output[..100]);
-            dsp.set_semitones(-pitch).unwrap();
-            dsp.process_block(&input[100..], &mut output[100..]);
-            assert!(output.iter().all(|s| s.is_finite() && s.abs() <= 1.0));
+        dsp.process_block(&input, &mut output);
+        assert!(output[..LATENCY].iter().all(|x| x.abs() < 1e-8));
+        for (&expected, &actual) in input.iter().zip(&output[LATENCY..]) {
+            assert!((expected - actual).abs() < 1e-6, "{expected} != {actual}");
         }
-        assert_eq!(input[100 + FADE_SAMPLES..], output[100 + FADE_SAMPLES..]);
-    }
-
-    #[test]
-    fn corrected_silence_nonfinite_input_and_integer_overloads_are_bounded() {
-        for pitch in [-12.0, -3.0, 3.0, 12.0] {
-            let mut dsp = PitchShifter::new(pitch, true, 0.0).unwrap();
-            let mut input = vec![0.0_f32; 8192];
-            input[..3].copy_from_slice(&[f32::NAN, f32::INFINITY, f32::NEG_INFINITY]);
-            let mut output = vec![1.0; input.len()];
-            dsp.process_block(&input, &mut output);
-            assert!(output.iter().all(|&s| s == 0.0));
-            let input: Vec<i32> = (0..8192)
-                .map(|n| if n % 2 == 0 { i32::MAX } else { i32::MIN })
-                .collect();
-            let mut output = vec![0_i32; input.len()];
-            dsp.process_block(&input, &mut output);
-            assert!(output.iter().any(|&s| s != 0));
-            let mut output = vec![0.0_f32; 16_384];
-            dsp.process_block(&vec![0.0; output.len()], &mut output);
-            assert!(output.iter().all(|s| s.is_finite() && s.abs() <= 1.0));
-            assert!(output[12_000..].iter().all(|s| s.abs() < 1e-6));
-        }
-    }
-
-    #[test]
-    fn corrected_impulses_extreme_floats_and_changing_envelopes_recover() {
-        for pitch in [-12.0, -3.0, 3.0, 12.0] {
-            let mut dsp = PitchShifter::new(pitch, true, 0.0).unwrap();
-            let mut input = vec![0.0_f32; 48_000];
-            input[0] = 1.0;
-            for (n, sample) in input[1024..24_000].iter_mut().enumerate() {
-                *sample = match (n / 128) % 4 {
-                    0 => {
-                        (0.9 * (std::f64::consts::TAU * 400.0 * n as f64 / RATE as f64).sin())
-                            as f32
-                    }
-                    1 => {
-                        if n % 2 == 0 {
-                            1.0
-                        } else {
-                            -1.0
-                        }
-                    }
-                    2 => {
-                        if n % 2 == 0 {
-                            f32::MAX
-                        } else {
-                            -f32::MAX
-                        }
-                    }
-                    _ => 0.0,
-                };
-            }
-            let mut output = vec![0.0; input.len()];
-            dsp.process_block(&input, &mut output);
-            assert!(output[..MIN_DELAY].iter().all(|&s| s == 0.0));
-            assert!(output.iter().all(|s| s.is_finite() && s.abs() <= 1.0));
-            assert!(output[40_000..].iter().all(|s| s.abs() < 1e-6));
-        }
-    }
-
-    fn tone(count: usize, frequency: f64) -> Vec<f32> {
-        (0..count)
-            .map(|n| {
-                (0.7 * (std::f64::consts::TAU * frequency * n as f64 / RATE as f64).sin()) as f32
-            })
-            .collect()
-    }
-
-    #[test]
-    fn validates_range_and_octave_ratios() {
-        assert_eq!(pitch_ratio(-12.0), Ok(0.5));
-        assert_eq!(pitch_ratio(0.0), Ok(1.0));
-        assert_eq!(pitch_ratio(12.0), Ok(2.0));
-        for invalid in [-12.01, 12.01, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-            assert!(PitchShifter::new(invalid, false, 0.0).is_err());
-            let mut dsp = PitchShifter::new(3.0, false, 0.0).unwrap();
-            assert!(dsp.set_semitones(invalid).is_err());
-            assert_eq!(dsp.target_ratio, pitch_ratio(3.0).unwrap());
-        }
-    }
-
-    #[test]
-    fn zero_pitch_preserves_bits_and_has_no_impulse_delay() {
-        let input = [
-            1.0_f32,
-            -0.0,
-            f32::from_bits(1),
-            f32::from_bits(0x7fc01234),
-            -1.0,
-        ];
-        let mut out = [0.0; 5];
-        PitchShifter::new(0.0, false, 0.0)
-            .unwrap()
-            .process_block(&input, &mut out);
-        assert_eq!(input.map(f32::to_bits), out.map(f32::to_bits));
-        let integers = [i32::MIN, -1, 0, 1, i32::MAX];
-        let mut out = [0; 5];
-        PitchShifter::new(0.0, false, 0.0)
-            .unwrap()
-            .process_block(&integers, &mut out);
-        assert_eq!(integers, out);
-    }
-
-    #[test]
-    fn silence_and_impulse_stay_inside_wet_delay_bounds() {
-        for pitch in [-12.0, -3.0, 3.0, 12.0] {
-            let mut dsp = PitchShifter::new(pitch, false, 0.0).unwrap();
-            let mut out = vec![1.0; 2048];
-            dsp.process_block(&vec![0.0_f32; 2048], &mut out);
-            assert!(out.iter().all(|&s| s == 0.0));
-            // Several initial phases, including immediately before a wrap.
-            for phase in [0.0, 0.25, 0.499, 0.75, 0.999] {
-                let mut dsp = PitchShifter::new(pitch, false, 0.0).unwrap();
-                dsp.phase = phase;
-                let mut input = vec![0.0_f32; MAX_DELAY + 16];
-                input[0] = 1.0;
-                let mut out = vec![0.0; input.len()];
-                dsp.process_block(&input, &mut out);
-                assert!(out[..MIN_DELAY].iter().all(|&s| s == 0.0));
-                assert!(out[MAX_DELAY + 1..].iter().all(|&s| s == 0.0));
-                assert!(out.iter().any(|&s| s > 0.0), "pitch={pitch}, phase={phase}");
-                assert!(out.iter().all(|&s| (0.0..=1.0).contains(&s)));
-            }
-        }
-    }
-
-    #[test]
-    fn processing_is_independent_of_block_boundaries() {
-        let input = tone(20_000, 337.0);
-        for pitch in [-12.0, -3.0, 0.0, 3.0, 12.0] {
-            let mut whole = vec![0.0; input.len()];
-            PitchShifter::new(pitch, false, 0.0)
-                .unwrap()
-                .process_block(&input, &mut whole);
-            for size in [1, 7, 64, 512, 8192] {
-                let mut dsp = PitchShifter::new(pitch, false, 0.0).unwrap();
-                let mut out = vec![0.0; input.len()];
-                for (a, b) in input.chunks(size).zip(out.chunks_mut(size)) {
-                    dsp.process_block(a, b);
-                }
-                assert_eq!(whole, out, "pitch={pitch}, size={size}");
-            }
-        }
-    }
-
-    #[test]
-    fn periodic_tones_shift_by_requested_ratio_in_both_directions() {
-        // Integer periods in the half-window align both grains, isolating read speed
-        // from the short-window modulation sidebands tested separately below.
-        for frequency in [RATE as f64 / 238.0, RATE as f64 * 5.0 / 238.0] {
-            let input = tone(48_000, frequency);
-            for pitch in [-12.0, -3.0, 3.0, 12.0] {
-                let mut out = vec![0.0; input.len()];
-                PitchShifter::new(pitch, false, 0.0)
-                    .unwrap()
-                    .process_block(&input, &mut out);
-                let signal = &out[2000..];
-                let crossings = signal
-                    .windows(2)
-                    .filter(|w| w[0] <= 0.0 && w[1] > 0.0)
-                    .count();
-                let measured = crossings as f64 * RATE as f64 / signal.len() as f64;
-                let expected = frequency * pitch_ratio(pitch).unwrap();
-                assert!(
-                    (measured - expected).abs() < 2.0,
-                    "{pitch}: {measured} vs {expected}"
-                );
-                assert!(signal.iter().all(|s| s.is_finite() && s.abs() <= 0.701));
-            }
-        }
-    }
-
-    #[test]
-    fn nonaligned_tone_peak_tracks_pitch_with_short_window_sidebands() {
-        fn power(signal: &[f32], frequency: f64) -> f64 {
-            let angle = std::f64::consts::TAU * frequency / RATE as f64;
-            let coefficient = 2.0 * angle.cos();
-            let (mut a, mut b) = (0.0, 0.0);
-            for (n, &sample) in signal.iter().enumerate() {
-                let window =
-                    0.5 - 0.5 * (std::f64::consts::TAU * n as f64 / signal.len() as f64).cos();
-                let next = sample as f64 * window + coefficient * a - b;
-                b = a;
-                a = next;
-            }
-            a * a + b * b - coefficient * a * b
-        }
-        let input = tone(16_000, 1000.0);
-        for pitch in [-12.0, -3.0, 3.0, 12.0] {
-            let ratio = pitch_ratio(pitch).unwrap();
-            let expected = 1000.0 * ratio;
-            // Repeated two-grain crossfades produce sidebands spaced by this rate.
-            let grain_rate = 2.0 * (1.0 - ratio).abs() * RATE as f64 / DELAY_SPAN as f64;
-            let mut out = vec![0.0; input.len()];
-            PitchShifter::new(pitch, false, 0.0)
-                .unwrap()
-                .process_block(&input, &mut out);
-            let signal = &out[2000..];
-            let (peak, peak_power) = (400..=2200)
-                .step_by(2)
-                .map(|frequency| (frequency as f64, power(signal, frequency as f64)))
-                .max_by(|a, b| a.1.total_cmp(&b.1))
-                .unwrap();
-            assert!(
-                (peak - expected).abs() < grain_rate / 2.0 + 4.0,
-                "pitch={pitch}: peak={peak}, expected={expected}, spacing={grain_rate}"
-            );
-            assert!(peak_power > power(signal, 1000.0) * 4.0);
-        }
-    }
-
-    #[test]
-    fn retargeting_mid_ramp_keeps_current_ratio_and_mix() {
-        let mut dsp = PitchShifter::new(0.0, false, 0.0).unwrap();
-        dsp.set_semitones(12.0).unwrap();
-        let mut out = [0.0; 100];
-        dsp.process_block(&[0.5_f32; 100], &mut out);
-        let (ratio, wet) = (dsp.ratio, dsp.wet);
-        dsp.set_semitones(-12.0).unwrap();
-        assert_eq!((dsp.ratio, dsp.wet), (ratio, wet));
-        dsp.set_semitones(0.0).unwrap();
-        assert_eq!((dsp.ratio, dsp.wet), (ratio, wet));
-        let mut out = [0.0; SMOOTH_SAMPLES];
-        dsp.process_block(&[0.5_f32; SMOOTH_SAMPLES], &mut out);
-        assert_eq!((dsp.ratio, dsp.wet), (1.0, 0.0));
-        assert!(out[FADE_SAMPLES..].iter().all(|&s| s == 0.5));
-    }
-
-    #[test]
-    fn parameter_ramps_and_bypass_return_are_bounded_and_exact() {
-        let input = tone(4760, 201.6806722689);
-        let mut dsp = PitchShifter::new(0.0, false, 0.0).unwrap();
-        let mut out = vec![0.0; input.len()];
-        dsp.process_block(&input, &mut out);
-        for pitch in [3.0, -3.0, 12.0, -12.0, 0.0] {
-            let previous = out[out.len() - 1];
-            dsp.set_semitones(pitch).unwrap();
-            dsp.process_block(&input[..100], &mut out[..100]);
-            assert!(dsp.ratio_remaining > 0);
-            let remaining = dsp.ratio_remaining;
-            dsp.set_semitones(pitch).unwrap();
-            assert_eq!(remaining, dsp.ratio_remaining);
-            dsp.process_block(&input[100..], &mut out[100..]);
-            assert_eq!(dsp.ratio, pitch_ratio(pitch).unwrap());
-            assert!(out.iter().all(|s| s.is_finite() && s.abs() <= 0.701));
-            // Smooth low-frequency test signal, including head wraps and parameter ramps.
-            assert!((out[0] - previous).abs() < 0.08);
-            assert!(out.windows(2).all(|w| (w[1] - w[0]).abs() < 0.08));
-        }
-        assert_eq!(input[FADE_SAMPLES..], out[FADE_SAMPLES..]);
-        let extreme = [i16::MIN, -1, 0, 1, i16::MAX];
-        let mut out = [0; 5];
-        dsp.process_block(&extreme, &mut out);
-        assert_eq!(extreme, out);
-    }
-
-    #[test]
-    fn integer_wet_processing_and_nonfinite_history_remain_safe() {
-        assert_eq!(i32::from_normalized(2.0), i32::MAX);
-        assert_eq!(i16::from_normalized(-2.0), i16::MIN);
-        for value in [i32::MIN, -1, 0, 1, i32::MAX] {
-            assert_eq!(i32::from_normalized(value.normalized()), value);
-        }
-        let mut dsp = PitchShifter::new(3.0, false, 0.0).unwrap();
-        let mut out = [0_i32; 1024];
-        dsp.process_block(&[i32::MAX; 1024], &mut out);
-        assert_eq!(out[600..], [i32::MAX; 424]);
-        let mut dsp = PitchShifter::new(3.0, false, 0.0).unwrap();
-        let mut input = [0.0_f32; 1024];
-        input[0] = f32::NAN;
-        input[1] = f32::INFINITY;
-        let mut out = [0.0; 1024];
-        dsp.process_block(&input, &mut out);
-        assert!(out.iter().all(|&s| s == 0.0));
     }
 }
