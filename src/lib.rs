@@ -3,6 +3,7 @@ pub mod asio;
 pub mod cli;
 pub mod formant;
 pub mod gui;
+mod gui_settings;
 pub mod pitch;
 pub const RATE: u32 = 48_000;
 pub const DEFAULT_FRAMES: u32 = 512;

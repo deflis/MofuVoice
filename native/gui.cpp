@@ -7,6 +7,7 @@
 using Start = void (*)(void *, const wchar_t *, const wchar_t *, const wchar_t *, const wchar_t *, int, int);
 using Stop = void (*)(void *);
 using Poll = int (*)(void *, wchar_t *, size_t);
+using Save = int (*)(void *, const wchar_t *, const wchar_t *, const wchar_t *, const wchar_t *, int);
 extern "C" void voice_gui_message(const wchar_t *title, const wchar_t *message, int error) {
     MessageBoxW(nullptr, message, title, MB_OK | (error ? MB_ICONERROR : MB_ICONINFORMATION));
 }
@@ -16,6 +17,7 @@ struct Gui {
     Start start;
     Stop stop;
     Poll poll;
+    Save save;
     const wchar_t *device_text, *devices, *frames_text, *pitch_text, *shift_text;
     int preserve;
     HWND device = nullptr, frames = nullptr, pitch = nullptr, formant = nullptr, shift = nullptr;
@@ -131,6 +133,13 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM
         refresh(window, *gui);
         return 0;
     case WM_CLOSE:
+        if (gui->closing) return 0;
+        {
+            auto device = text(gui->device), frames = text(gui->frames), pitch = text(gui->pitch);
+            auto shift = text(gui->shift);
+            if (!gui->save(gui->context, device.c_str(), frames.c_str(), pitch.c_str(), shift.c_str(),
+                SendMessageW(gui->formant, BM_GETCHECK, 0, 0) == BST_CHECKED)) return 0;
+        }
         gui->closing = true;
         gui->stop(gui->context);
         SetWindowTextW(window, L"Rust Low-Latency Voice Changer - stopping...");
@@ -146,8 +155,8 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM
 
 extern "C" unsigned long voice_gui_run(void *context, const wchar_t *device,
     const wchar_t *devices, const wchar_t *frames, const wchar_t *pitch, const wchar_t *shift, int preserve,
-    Start start, Stop stop, Poll poll) {
-    Gui gui{context, start, stop, poll, device, devices, frames, pitch, shift, preserve};
+    Save save, Start start, Stop stop, Poll poll) {
+    Gui gui{context, start, stop, poll, save, device, devices, frames, pitch, shift, preserve};
     HINSTANCE instance = GetModuleHandleW(nullptr);
     const wchar_t *class_name = L"RustLowLatencyVoiceChangerWindow";
     WNDCLASSW wc{};

@@ -1,9 +1,10 @@
 //! UI callbacks run on the main thread. The worker owns the entire ASIO lifetime;
 //! driver callbacks own DSP. No GUI locks or messages occur in audio callbacks.
-use crate::{asio, cli::Options};
+use crate::{asio, cli::Options, gui_settings};
 use std::{
     error::Error,
     ffi::c_void,
+    path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
@@ -24,6 +25,14 @@ unsafe extern "C" {
         pitch: *const u16,
         formant_shift: *const u16,
         preserve: i32,
+        save: extern "C" fn(
+            *mut c_void,
+            *const u16,
+            *const u16,
+            *const u16,
+            *const u16,
+            i32,
+        ) -> i32,
         start: extern "C" fn(*mut c_void, *const u16, *const u16, *const u16, *const u16, i32, i32),
         stop: extern "C" fn(*mut c_void),
         poll: extern "C" fn(*mut c_void, *mut u16, usize) -> i32,
@@ -53,13 +62,15 @@ impl Drop for ComApartment {
 }
 
 struct Session {
+    settings_path: PathBuf,
     worker: Option<JoinHandle<()>>,
     stop: Arc<AtomicBool>,
     status: Arc<Mutex<String>>,
 }
 impl Session {
-    fn new() -> Self {
+    fn new(settings_path: PathBuf) -> Self {
         Self {
+            settings_path,
             worker: None,
             stop: Arc::new(AtomicBool::new(false)),
             status: Arc::new(Mutex::new("Ready. Inspect settings or start audio.".into())),
@@ -246,6 +257,44 @@ extern "C" fn stop(context: *mut c_void) {
     let session = unsafe { &mut *context.cast::<Session>() };
     session.stop.store(true, Ordering::Release);
 }
+extern "C" fn save(
+    context: *mut c_void,
+    device: *const u16,
+    frames: *const u16,
+    pitch: *const u16,
+    formant_shift: *const u16,
+    preserve: i32,
+) -> i32 {
+    // SAFETY: the UI supplies live UTF-16 text and exclusively owns Session.
+    let session = unsafe { &mut *context.cast::<Session>() };
+    let result = (|| -> Result<(), Box<dyn Error>> {
+        let mut args = unsafe {
+            vec![
+                "--frames".into(),
+                read_wide(frames),
+                "--pitch".into(),
+                read_wide(pitch),
+                "--formant-shift".into(),
+                read_wide(formant_shift),
+                "--formant".into(),
+                if preserve != 0 { "preserve" } else { "off" }.into(),
+            ]
+        };
+        let device = unsafe { read_wide(device) };
+        if !device.is_empty() {
+            args.extend(["--device".into(), device]);
+        }
+        let options = Options::parse_gui(args)?;
+        gui_settings::save(&session.settings_path, &options)
+    })();
+    match result {
+        Ok(()) => 1,
+        Err(error) => {
+            show_message(&format!("GUI settings were not saved: {error}\nCorrect the settings or storage problem, then close again."), true);
+            0
+        }
+    }
+}
 extern "C" fn poll(context: *mut c_void, output: *mut u16, capacity: usize) -> i32 {
     // SAFETY: UI thread supplies a unique Session and a writable capacity-sized buffer.
     let session = unsafe { &mut *context.cast::<Session>() };
@@ -260,8 +309,17 @@ extern "C" fn poll(context: *mut c_void, output: *mut u16, capacity: usize) -> i
     }
     i32::from(busy)
 }
+/// Load preferences, then apply only explicitly supplied GUI arguments.
+pub fn initial_options(args: impl IntoIterator<Item = String>) -> Result<Options, Box<dyn Error>> {
+    let args: Vec<_> = args.into_iter().collect();
+    if args.iter().any(|arg| arg == "--help") {
+        return Options::parse_gui(args);
+    }
+    gui_settings::merge(&gui_settings::load(&gui_settings::path()?)?, args)
+}
+
 pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
-    let mut session = Session::new();
+    let mut session = Session::new(gui_settings::path()?);
     let device = wide(&options.device);
     // Multi-string: one null per device and a final null terminator.
     let devices = wide(&asio_sys::Asio::new().driver_names().join("\0"));
@@ -279,6 +337,7 @@ pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
             pitch.as_ptr(),
             formant_shift.as_ptr(),
             i32::from(options.preserve_formants),
+            save,
             start,
             stop,
             poll,
@@ -302,8 +361,37 @@ pub fn show_message(message: &str, error: bool) {
 mod tests {
     use super::*;
     #[test]
+    fn native_save_callback_persists_controls_without_starting_worker() {
+        let path =
+            std::env::temp_dir().join(format!("voice-gui-callback-{}.txt", std::process::id()));
+        let mut session = Session::new(path.clone());
+        let device = wide("Example ASIO Device");
+        let frames = wide("256");
+        let pitch = wide("2.5");
+        let shift = wide("-3");
+        assert_eq!(
+            save(
+                (&mut session as *mut Session).cast(),
+                device.as_ptr(),
+                frames.as_ptr(),
+                pitch.as_ptr(),
+                shift.as_ptr(),
+                1
+            ),
+            1
+        );
+        assert!(session.worker.is_none());
+        let saved = gui_settings::load(&path).unwrap();
+        assert_eq!(saved.device, "Example ASIO Device");
+        assert_eq!(saved.frames, 256);
+        assert_eq!(saved.pitch, 2.5);
+        assert_eq!(saved.formant_shift, -3.0);
+        assert!(saved.preserve_formants);
+        std::fs::remove_file(path).unwrap();
+    }
+    #[test]
     fn worker_cancellation_does_not_require_gui_or_audio_hardware() {
-        let mut session = Session::new();
+        let mut session = Session::new(PathBuf::from("unused-test-settings.txt"));
         let stop_flag = Arc::clone(&session.stop);
         session.worker = Some(thread::spawn(move || {
             while !stop_flag.load(Ordering::Acquire) {
@@ -319,7 +407,7 @@ mod tests {
     }
     #[test]
     fn invalid_settings_do_not_spawn_worker_and_status_is_terminated() {
-        let mut session = Session::new();
+        let mut session = Session::new(PathBuf::from("unused-test-settings.txt"));
         let device = wide("Example ASIO Device");
         let frames = wide("0");
         let pitch = wide("0");
