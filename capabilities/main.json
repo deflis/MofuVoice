@@ -1,0 +1,6 @@
+{
+  "identifier": "main",
+  "description": "Main control window can listen for shutdown requests.",
+  "windows": ["main"],
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
+}

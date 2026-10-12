@@ -6,7 +6,7 @@ Windows向けのリアルタイムボイスチェンジャーです。GUIで音�
 
 ## はじめに
 
-Windows x64と、48 kHzのフルデュプレックス入出力に対応したASIOドライバが必要です。実行ファイルを用意してから、次の手順で音声処理を開始します。ソースコードから実行ファイルを作成する場合は、末尾の「ビルド」を参照してください。
+Windows x64と、48 kHzのフルデュプレックス入出力に対応したASIOドライバが必要です。実行ファイルを用意してから、次の手順で音声処理を開始します。操作画面はReact + TypeScript / Tauri 2、スペアナはWin32の別ウィンドウです。WindowsではWebView2 Runtimeが必要です。ソースコードから実行ファイルを作成する場合は、末尾の「ビルド」を参照してください。
 
 ### 1. 起動する
 
@@ -14,7 +14,7 @@ Windows x64と、48 kHzのフルデュプレックス入出力に対応したASI
 
 ### 2. デバイスと音声の接続を準備する
 
-**Device** の一覧から使用するASIOデバイスを選びます。初回起動時は未選択です。次回からは前回保存した設定を復元します。
+**ASIO device** の一覧から使用するASIOデバイスを選びます。初回起動時は未選択です。次回からは前回保存した設定を復元します。
 
 デバイス側の設定でサンプルレートを **48 kHz** にし、マイクの信号を **入力1** に接続してください。アプリは入力1を処理して **出力1** へ送り、その他の出力は無音にします。
 
@@ -115,19 +115,25 @@ GUIにも `--device`、`--frames`、`--pitch`、`--formant`、`--formant-shift` 
 
 ## ビルド
 
-ソースコードからビルドするには、RustのWindows x64 MSVCツールチェーン、Visual C++ Build ToolsとWindows SDK、libclang、ASIO SDKが必要です。Rust は mise で入れられます（`mise.toml` の `rust`）。
+ソースコードからビルドするには、RustのWindows x64 MSVCツールチェーン、Visual C++ Build ToolsとWindows SDK、libclang、ASIO SDK、Node.js 26とWebView2 Runtimeが必要です。Rust、Node.js、pnpmのバージョンは `mise.toml` で固定しています。oxlintとoxfmtは開発依存としてpnpmでインストールします。
 
 ASIO SDK は `.tools/asiosdk` に置きます（`common/asio.h` があること）。`.cargo/config.toml` と `mise.toml` の `CPAL_ASIO_DIR` がこのパスを指します。次のスクリプトで Steinberg から取得できます（SDK 自体は再配布しないでください）。libclang が PATH にない場合は `mise.local.toml` か環境変数で `LIBCLANG_PATH` を指定してください。
 
 ```powershell
+mise trust
 mise install
 ./scripts/fetch-asio-sdk.ps1
-cargo build --release --locked
+pnpm install --frozen-lockfile
+pnpm desktop:build
 ```
 
 Pull request と `master` への push では、GitHub Actions が `cargo fmt`、`clippy`、`cargo test`、Release の `spectral_quality` を実行します。`master` への push では、加えて GUI / CLI の Release バイナリを成果物としてアップロードします。
 
-`target/release/` にGUIとCLIの実行ファイルが生成されます。
+`target/release/` にGUIとCLIの実行ファイルが生成されます。配布するGUIにはReactの静的ファイルが埋め込まれます。
+
+React画面の開発には `pnpm desktop:dev` を使います。音声処理を含む動作確認はTauriで行い、`pnpm dev` は画面側の開発サーバーだけを起動します。CLIだけなら `cargo build --release --locked` でビルドできます。
+
+操作画面は `frontend/src/App.tsx`、IPCの型と呼び出しは `frontend/src/api.ts`、Tauriのコマンドは `src/gui.rs`、ASIOセッションの管理は `src/session.rs` にあります。スペアナの描画は `native/spectrum.cpp`、Rustとの接続は `src/native_spectrum.rs`、解析は `src/spectrum.rs` に分離しています。音声サンプルとスペアナ画像をWebViewへ転送しません。
 
 <details>
 <summary>開発者向けの検証</summary>
@@ -137,15 +143,15 @@ GUIとCLIのDSPは `src/pitch.rs` です。2048サンプルの解析窓と512サ
 `tests/spectral_quality.rs` は低域の不要成分、ピッチ精度、共鳴の移動、連続的なピッチ変化時の音量・位相の揺れ、ブロック分割、引数検証、バイパスを検証します。単音の結果は会話音声の品質保証ではありません。DSPの速度は `spectral` ベンチマークで測定します。
 
 ```powershell
-cargo check --locked
-cargo test --locked
+cargo check --features desktop --locked
+cargo test --features desktop --locked
 cargo test --release --locked --test spectral_quality
-cargo clippy --all-targets --locked -- -D warnings
+cargo clippy --all-targets --all-features --locked -- -D warnings
 cargo fmt --check
 cargo bench --locked --bench spectral
 ```
 
-GUIの実機テストは `scripts/gui-smoke.ps1 -Device "ASIOデバイス名" -Frames 512 -RunSeconds 3` で実行できます。対象デバイスを48 kHzに設定し、対応するバッファサイズを指定してください。このテストは実際に音声処理を開始します。音声品質と総遅延は聴取・録音で確認し、ログはバージョン管理に含めません。
+GUIの検証手順は [GUI検証ガイド](docs/gui-testing.md) を参照してください。実機の音声品質と総遅延は聴取・録音で確認し、ログはバージョン管理に含めません。
 
 実声の比較には、48 kHz・モノラル・PCM16のWAVを用意し、次の例を実行します。既存の出力ファイルは上書きしません。
 

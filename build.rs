@@ -1,7 +1,10 @@
 fn main() {
+    #[cfg(feature = "desktop")]
+    tauri_build::build();
     println!("cargo:rerun-if-env-changed=CPAL_ASIO_DIR");
     println!("cargo:rerun-if-changed=native/asio_extra.cpp");
     println!("cargo:rerun-if-changed=native/gui.cpp");
+    println!("cargo:rerun-if-changed=native/spectrum.cpp");
     println!("cargo:rustc-link-lib=user32");
     println!("cargo:rustc-link-lib=gdi32");
     println!("cargo:rustc-link-lib=ole32");
@@ -26,6 +29,7 @@ fn main() {
         .include(sdk.join("common"))
         .file("native/asio_extra.cpp")
         .file("native/gui.cpp")
+        .file("native/spectrum.cpp")
         .flag_if_supported("/utf-8")
         .compile("voice_asio_extra");
 }

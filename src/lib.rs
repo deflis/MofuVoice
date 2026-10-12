@@ -2,9 +2,13 @@
 pub mod asio;
 pub mod cli;
 pub mod gate;
+#[cfg(feature = "desktop")]
 pub mod gui;
+#[cfg(feature = "desktop")]
 mod gui_settings;
+pub mod native_spectrum;
 pub mod pitch;
+pub mod session;
 pub mod spectrum;
 pub const RATE: u32 = 48_000;
 pub const DEFAULT_FRAMES: u32 = 512;

@@ -11,12 +11,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: 1.99.0
-          components: rustfmt, clippy
-
       - name: Install LLVM
         uses: KyleMayes/install-llvm-action@v2
         with:
@@ -38,17 +32,25 @@ jobs:
         shell: pwsh
         run: ./scripts/fetch-asio-sdk.ps1
 
+      - uses: jdx/mise-action@v5
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
+
+      - name: Build React frontend
+        run: mise run build:web
 
       - name: cargo fmt
         run: cargo fmt --check
 
       - name: cargo clippy
-        run: cargo clippy --all-targets --locked -- -D warnings
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
 
       - name: cargo test
-        run: cargo test --locked
+        run: cargo test --all-features --locked
 
       - name: cargo test (release spectral_quality)
         run: cargo test --release --locked --test spectral_quality

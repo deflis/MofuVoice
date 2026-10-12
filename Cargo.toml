@@ -3,6 +3,7 @@ name = "rust-low-latency-voice-changer"
 version = "0.1.0"
 edition = "2021"
 autobins = false
+default-run = "rust-low-latency-voice-changer-gui"
 
 [[bin]]
 name = "rust-low-latency-voice-changer-cli"
@@ -11,12 +12,20 @@ path = "src/bin/cli.rs"
 [[bin]]
 name = "rust-low-latency-voice-changer-gui"
 path = "src/bin/gui.rs"
+required-features = ["desktop"]
+
+[features]
+custom-protocol = ["desktop", "tauri/custom-protocol"]
+desktop = ["dep:tauri", "dep:tauri-build", "dep:serde"]
 
 [dependencies]
 asio-sys = "=0.2.6"
+tauri = { version = "2", optional = true , features = [] }
+serde = { version = "1", features = ["derive"], optional = true }
 
 [build-dependencies]
 cc = "1"
+tauri-build = { version = "2", optional = true , features = [] }
 
 [[bench]]
 name = "spectral"

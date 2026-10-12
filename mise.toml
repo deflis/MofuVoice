@@ -1,5 +1,14 @@
 [tools]
-rust = "1.99.0"
+rust = { version = "1.99.0", components = ["rustfmt", "clippy"] }
+node = "26.11.1"
+pnpm = "12.11.2"
 
 [env]
 CPAL_ASIO_DIR = "{{config_root}}/.tools/asiosdk"
+
+[tasks.typecheck]
+run = "pnpm exec tsc -p frontend/tsconfig.json"
+
+[tasks."build:web"]
+depends = ["typecheck"]
+run = "pnpm build"
