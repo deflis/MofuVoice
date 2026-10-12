@@ -430,8 +430,10 @@ static CALLBACKS: RawCallbacks = RawCallbacks {
     message,
     time: buffer_switch_time,
 };
+// asio-sys does not allowlist ASIOGetLatencies; bind the MSVC C++ mangled export directly.
 unsafe extern "C" {
-    fn voice_asio_get_latencies(input: *mut i32, output: *mut i32) -> i32;
+    #[link_name = "\x01?ASIOGetLatencies@@YAJPEAJ0@Z"]
+    fn asio_get_latencies(input: *mut i32, output: *mut i32) -> i32;
 }
 
 pub struct DspSettings {
@@ -563,7 +565,7 @@ impl Engine {
     pub fn latency_summary(&self) -> Result<String> {
         let (mut input, mut output) = (0, 0);
         check(
-            unsafe { voice_asio_get_latencies(&mut input, &mut output) },
+            unsafe { asio_get_latencies(&mut input, &mut output) },
             "ASIOGetLatencies",
         )?;
         Ok(format!("Driver-reported ASIO latency: input={input} samples ({:.3} ms), output={output} samples ({:.3} ms). Not a microphone round-trip measurement.", input as f64 * 1000.0 / RATE as f64, output as f64 * 1000.0 / RATE as f64))
