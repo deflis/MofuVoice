@@ -4,6 +4,7 @@ pub mod cli;
 pub mod gate;
 pub mod gui;
 mod gui_settings;
+pub mod level;
 pub mod pitch;
 pub mod spectrum;
 pub const RATE: u32 = 48_000;

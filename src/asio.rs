@@ -169,6 +169,7 @@ struct CallbackState {
     output_ready: AtomicBool,
     last_position: AtomicU64,
     metrics: Metrics,
+    level: UnsafeCell<crate::level::AutoLevel>,
     gate: UnsafeCell<NoiseGate>,
     scratch: UnsafeCell<Vec<f32>>,
     pitch: UnsafeCell<PitchShifter>,
@@ -208,6 +209,7 @@ impl CallbackState {
                 } else {
                     nonzero = pitch.process_block(input, output);
                 }
+                unsafe { &mut *self.level.get() }.process_in_place(output);
                 crate::spectrum::push_output_samples(output);
             } else {
                 output.fill(T::default());
@@ -432,6 +434,13 @@ unsafe extern "C" {
     fn voice_asio_get_latencies(input: *mut i32, output: *mut i32) -> i32;
 }
 
+pub struct DspSettings {
+    pub semitones: f64,
+    pub preserve_formants: bool,
+    pub formant_shift: f64,
+    pub gate: GateSettings,
+    pub level: crate::level::LevelSettings,
+}
 pub struct Engine {
     driver: Driver,
     state: Box<CallbackState>,
@@ -443,14 +452,12 @@ impl Engine {
         driver: Driver,
         config: Configuration,
         frames: u32,
-        semitones: f64,
-        preserve_formants: bool,
-        formant_shift: f64,
-        gate: GateSettings,
+        dsp: DspSettings,
     ) -> Result<Self> {
         config.validate(frames)?;
-        let pitch = PitchShifter::new(semitones, preserve_formants, formant_shift)?;
-        let gate = gate.build()?;
+        let pitch = PitchShifter::new(dsp.semitones, dsp.preserve_formants, dsp.formant_shift)?;
+        let gate = dsp.gate.build()?;
+        let level = dsp.level.build()?;
         let mut buffers = Vec::with_capacity(config.inputs + config.outputs);
         for (input, channels) in [(true, config.inputs), (false, config.outputs)] {
             for channel in 0..channels {
@@ -471,6 +478,7 @@ impl Engine {
             output_ready: AtomicBool::new(false),
             last_position: AtomicU64::new(u64::MAX),
             metrics: Metrics::default(),
+            level: UnsafeCell::new(level),
             gate: UnsafeCell::new(gate),
             scratch: UnsafeCell::new(vec![0.0; frames as usize]),
             pitch: UnsafeCell::new(pitch),
@@ -650,6 +658,7 @@ mod tests {
             output_ready: AtomicBool::new(false),
             last_position: AtomicU64::new(u64::MAX),
             metrics: Metrics::default(),
+            level: UnsafeCell::new(crate::level::LevelSettings::default().build().unwrap()),
             gate: UnsafeCell::new(
                 GateSettings {
                     enabled: false,
@@ -671,11 +680,39 @@ mod tests {
         assert_eq!(unsafe { state.process::<f32>(1) }, 4);
         assert_eq!(input_b, output_b);
         assert_eq!(other_b, [0.0; 4]);
+        *state.pitch.get_mut() = PitchShifter::new(0.0, true, 0.0).unwrap();
+        *state.gate.get_mut() = GateSettings {
+            enabled: true,
+            threshold: crate::gate::GateThreshold::Db(-90.0),
+            attack_ms: 0.1,
+            release_ms: 80.0,
+        }
+        .build()
+        .unwrap();
+        *state.level.get_mut() = crate::level::LevelSettings {
+            enabled: true,
+            ..Default::default()
+        }
+        .build()
+        .unwrap();
+        unsafe { state.process::<f32>(0) };
+        assert!(output_a[0] > 0.0 && output_a[0] <= 0.892);
+        assert_eq!(output_a[1], 0.0);
+        assert_eq!(other_a, [0.0; 4]);
         state.buffers[1].buffers[0] = state.buffers[0].buffers[0];
         assert!(state.validate_pointers().is_err());
 
         // Exercise the wet route through the raw ASIO descriptors, including ring wraps.
         state.buffers[1].buffers[0] = output_a.as_mut_ptr().cast();
+        *state.gate.get_mut() = GateSettings {
+            enabled: false,
+            threshold: crate::gate::GateThreshold::Auto,
+            attack_ms: 5.0,
+            release_ms: 80.0,
+        }
+        .build()
+        .unwrap();
+        *state.level.get_mut() = crate::level::LevelSettings::default().build().unwrap();
         *state.pitch.get_mut() = PitchShifter::new(3.0, true, 0.0).unwrap();
         for _ in 0..1024 {
             assert_eq!(unsafe { state.process::<f32>(0) }, 3);

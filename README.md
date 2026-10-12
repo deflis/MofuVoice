@@ -30,7 +30,7 @@ Voicemeeter（Banana / Potato）や VB-Audio Matrix でルーティングする�
 
 ### 4. 元の声で接続を確かめる
 
-**Start** を押し、マイクに向かって話します。下部に `Running` と表示され、出力先から元の声が聞こえることを確認してください。PitchとFormant shiftが両方0のときは、入力をそのまま返します。
+**Start** を押し、マイクに向かって話します。下部に `Running` と表示され、出力先から元の声が聞こえることを確認してください。PitchとFormant shiftが両方0で、Noise gateとAuto levelがオフのときは、入力をそのまま返します。
 
 ### 5. 声を変える
 
@@ -54,11 +54,37 @@ Voicemeeter（Banana / Potato）や VB-Audio Matrix でルーティングする�
 | **Preserve formants** | オンにすると、ピッチ変更時に元の声の響きを保つ補正を行います。既定オン |
 | **Formant shift** | 声の共鳴の移動量。−12〜+12半音、小数可。既定0。非ゼロではPreserve formantsをオンにします |
 
-Preserve formantsをオフにすると、声の高さとともに響きも変わります。同じPitchでオン・オフを切り替えて聞き比べると違いを確認できます。オフのときにFormant shiftを非ゼロにするとエラーになります。PitchとFormant shiftが両方0のときは、この設定にかかわらず元の音声を返します。
+Preserve formantsをオフにすると、声の高さとともに響きも変わります。同じPitchでオン・オフを切り替えて聞き比べると違いを確認できます。オフのときにFormant shiftを非ゼロにするとエラーになります。PitchとFormant shiftが両方0で、Noise gateとAuto levelがオフのときは、この設定にかかわらず元の音声を返します。
 
 大きなフォルマント移動では響きの幅や音量も変わり、歪みが生じる場合があります。まず±2〜3半音程度で聞きながら調整してください。
 
 Framesを小さくすると音声処理の周期が短くなりますが、処理が間に合わず音が途切れる場合があります。まず対応するサイズで安定して使えることを確認し、必要に応じて小さくしてください。
+
+## 自動音量調整
+
+Settingsの **Auto level** をオンにすると、声の変換後に緩やかなRMS音量補正とソフトニーコンプレッサーを適用します。既定ではオフです。まず既定値で使い、必要なときだけ **Customize auto level** を開いて調整してください。**Reset auto level defaults** は詳細設定を既定値に戻します。オフにすると詳細設定を保持したまま、この処理をバイパスします。
+
+| 詳細設定 | 既定値 | 範囲・効果 | CLI |
+| --- | --- | --- | --- |
+| Target RMS dB | −20 dBFS | −36〜−6。会話の目標RMS音量 | `--level-target` |
+| Max gain dB | +9 dB | 0〜18。小声の最大増幅量 | `--level-max-gain` |
+| Activity floor dB | −50 dBFS | −90〜−30。これ以下では音量補正を更新しない。目標音量より低くする | `--level-floor` |
+| Level response ms | 1500 ms | 100〜10000。音量補正の応答。長いほどゆっくり | `--level-response` |
+| Comp. threshold dB | −12 dBFS | −36〜0。圧縮が始まるピーク音量。ニー幅は6 dB | `--compress-threshold` |
+| Ratio | 3:1 | 1〜20。1ではコンプレッサーの圧縮なし | `--compress-ratio` |
+| Attack ms | 5 ms | 0.1〜100。大声の圧縮速度 | `--compress-attack` |
+| Release ms | 150 ms | 10〜2000。圧縮とピーク保護の回復速度 | `--compress-release` |
+
+GUIの詳細値は保存・復元され、CLI指定は各項目だけを上書きします。設定変更はStop → 変更 → Startの順です。GUI設定INIには `auto_level` と、表の順に `level_target_db`、`level_max_gain_db`、`level_floor_db`、`level_response_ms`、`compress_threshold_db`、`compress_ratio`、`compress_attack_ms`、`compress_release_ms` を保存します。既存のINIにはこれらのキーが必要です。起動エラーが出た場合はキーを追加するか、INIを削除して既定値で起動してください。
+
+```powershell
+.\target\release\rust-low-latency-voice-changer-cli.exe --device "ASIOデバイス名" --auto-level on
+.\target\release\rust-low-latency-voice-changer-cli.exe --device "ASIOデバイス名" --auto-level on --level-target -18 --level-max-gain 6 --compress-ratio 4
+```
+
+無音では補正量を保持し、下限を超えるノイズも声として扱うため、発話判定の下限と最大増幅量を環境に合わせて調整してください。前段のゲートとも併用できます。音量補正の減衰は最大18 dB、後段のピーク保護は−1 dBFSで固定です。突発ピークは即時にゲインを下げるため、強い過渡音では波形に影響があります。入力やピッチ変換ですでにクリップした波形は復元しません。
+
+この処理による追加のサンプル遅延は0です。応答時間はゲイン変化の速度であり、音声を遅らせる時間ではありません。ピッチ変換・ドライバ・ハードウェアの遅延は別に残ります。実機での聞き比べ・会話のしやすさ・総遅延は確認が必要です。
 
 ## 停止と終了
 
@@ -77,6 +103,19 @@ frames=512
 pitch=0
 formant_shift=0
 preserve_formants=true
+gate=false
+gate_threshold=auto
+gate_attack_ms=5
+gate_release_ms=80
+auto_level=false
+level_target_db=-20
+level_max_gain_db=9
+level_floor_db=-50
+level_response_ms=1500
+compress_threshold_db=-12
+compress_ratio=3
+compress_attack_ms=5
+compress_release_ms=150
 ```
 
 入力値が不正な場合や保存に失敗した場合はエラーを表示し、ウィンドウを開いたままにします。問題を直してから閉じ直してください。保存ファイルが壊れている場合は起動時にエラーを表示します。ファイルを修正するか削除すると、初期設定で起動できます。
@@ -96,7 +135,7 @@ preserve_formants=true
 
 下部には入力信号の累計、処理回数、ドライバのレイテンシ、異常などが表示されます。`nonzero input samples` が増えていれば入力信号が届いていますが、出力先で聞こえるかは実際に確認してください。
 
-PitchとFormant shiftが両方0ならDSPは遅延なしのバイパスです。それ以外では約10.67 msのDSP遅延に、デバイスや音声の接続経路の遅延が加わります。Framesを小さくしてもDSPの合成遅延（512サンプル）は減りません。表示されるドライバのレイテンシは、マイクから出力先までの総遅延とは異なります。
+PitchとFormant shiftが両方0で、Noise gateとAuto levelがオフならDSPは遅延なしのバイパスです。ゲートと自動音量調整も追加サンプル遅延は0ですが、オンの場合は音量を変更します。ピッチまたはフォルマント変換では約10.67 msのDSP遅延に、デバイスや音声の接続経路の遅延が加わります。Framesを小さくしてもDSPの合成遅延（512サンプル）は減りません。表示されるドライバのレイテンシは、マイクから出力先までの総遅延とは異なります。
 
 ## CLIでの操作
 
