@@ -203,18 +203,20 @@ impl Fft {
         while size <= N {
             let half = size / 2;
             let stride = N / size;
-            for start in (0..N).step_by(size) {
-                for j in 0..half {
-                    let root = roots[j * stride];
-                    let a = data[start + j];
-                    let b = data[start + j + half];
+            for block in data.chunks_exact_mut(size) {
+                let (left, right) = block.split_at_mut(half);
+                for ((left, right), root) in
+                    left.iter_mut().zip(right).zip(roots.iter().step_by(stride))
+                {
+                    let a = *left;
+                    let b = *right;
                     let re = b.re * root.re - b.im * root.im;
                     let im = b.re * root.im + b.im * root.re;
-                    data[start + j] = Complex {
+                    *left = Complex {
                         re: a.re + re,
                         im: a.im + im,
                     };
-                    data[start + j + half] = Complex {
+                    *right = Complex {
                         re: a.re - re,
                         im: a.im - im,
                     };
@@ -709,6 +711,62 @@ mod tests {
                         dsp.process_block(chunk, out);
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn fft_slice_butterflies_match_indexed_reference_bits() {
+        let fft = Fft::new();
+        let input = std::array::from_fn(|i| Complex {
+            re: (i as f64 * 0.31).sin(),
+            im: (i as f64 * 0.17).cos(),
+        });
+        for inverse in [false, true] {
+            let mut reference = input;
+            for (i, &j) in fft.reverse.iter().enumerate() {
+                if i < j {
+                    reference.swap(i, j);
+                }
+            }
+            let roots = if inverse {
+                &fft.inverse_roots
+            } else {
+                &fft.forward_roots
+            };
+            let mut size = 2;
+            while size <= WINDOW {
+                let half = size / 2;
+                for start in (0..WINDOW).step_by(size) {
+                    for j in 0..half {
+                        let a = reference[start + j];
+                        let b = reference[start + j + half];
+                        let root = roots[j * WINDOW / size];
+                        let re = b.re * root.re - b.im * root.im;
+                        let im = b.re * root.im + b.im * root.re;
+                        reference[start + j] = Complex {
+                            re: a.re + re,
+                            im: a.im + im,
+                        };
+                        reference[start + j + half] = Complex {
+                            re: a.re - re,
+                            im: a.im - im,
+                        };
+                    }
+                }
+                size *= 2;
+            }
+            if inverse {
+                for value in &mut reference {
+                    value.re *= 1.0 / WINDOW as f64;
+                    value.im *= 1.0 / WINDOW as f64;
+                }
+            }
+            let mut actual = input;
+            fft.transform(&mut actual, inverse);
+            for (a, b) in actual.iter().zip(reference) {
+                assert_eq!(a.re.to_bits(), b.re.to_bits());
+                assert_eq!(a.im.to_bits(), b.im.to_bits());
             }
         }
     }
