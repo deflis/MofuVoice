@@ -201,7 +201,10 @@ mod tests {
         assert!(NoiseGate::new(true, GateThreshold::Auto, 5.0, 2000.1).is_err());
         assert!(GateThreshold::parse("nope").is_err());
         assert_eq!(GateThreshold::parse("auto").unwrap(), GateThreshold::Auto);
-        assert_eq!(GateThreshold::parse("-40").unwrap(), GateThreshold::Db(-40.0));
+        assert_eq!(
+            GateThreshold::parse("-40").unwrap(),
+            GateThreshold::Db(-40.0)
+        );
     }
 
     #[test]

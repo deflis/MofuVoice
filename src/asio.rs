@@ -198,7 +198,10 @@ impl CallbackState {
                             std::mem::size_of_val(storage.as_slice())
                                 >= self.frames * std::mem::size_of::<T>()
                         );
-                        std::slice::from_raw_parts_mut(storage.as_mut_ptr().cast::<T>(), self.frames)
+                        std::slice::from_raw_parts_mut(
+                            storage.as_mut_ptr().cast::<T>(),
+                            self.frames,
+                        )
                     };
                     gate.process_block(input, scratch);
                     nonzero = pitch.process_block(scratch, output);
