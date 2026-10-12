@@ -1,6 +1,8 @@
 //! Offline pitch rendering. Accepts mono 48 kHz PCM16 WAV only.
 use rust_low_latency_voice_changer::{
-    pitch::{PitchShifter, LATENCY},
+    audio::{AudioProcessor, DspSettings},
+    cli::Options,
+    pitch::LATENCY,
     RATE,
 };
 use std::{error::Error, fs, path::Path};
@@ -111,7 +113,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     let pitch: f64 = args[2].parse()?;
     let shift: f64 = args[3].parse()?;
-    let mut dsp = PitchShifter::new(pitch, true, shift)?;
+    let options = Options::parse([
+        "--pitch".to_string(),
+        args[2].clone(),
+        "--formant-shift".to_string(),
+        args[3].clone(),
+    ])?;
+    let mut dsp = AudioProcessor::<f32>::new(RATE, 512, DspSettings::from(&options))?;
     let directory = Path::new(&args[1]);
     for name in ["input.wav", "processed.wav"] {
         if directory.join(name).exists() {
@@ -123,7 +131,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     input.resize(count + LATENCY * 2, 0.0);
     let mut output = vec![0.0; input.len()];
     for (a, b) in input.chunks(512).zip(output.chunks_mut(512)) {
-        dsp.process_block(a, b);
+        dsp.process_block(a, b)?;
     }
     let delay = if pitch == 0.0 && shift == 0.0 {
         0

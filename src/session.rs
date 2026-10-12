@@ -1,5 +1,5 @@
-//! Owns the ASIO worker independently of the presentation layer.
-use crate::{asio, cli::Options};
+//! Owns the audio worker independently of the presentation layer.
+use crate::{audio::DspSettings, backend, cli::Options};
 use std::{
     error::Error,
     sync::{
@@ -9,8 +9,11 @@ use std::{
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
+#[cfg(all(windows, feature = "asio"))]
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
+#[cfg(all(windows, feature = "asio"))]
 struct ComApartment;
+#[cfg(all(windows, feature = "asio"))]
 impl ComApartment {
     fn initialize() -> Result<Self, Box<dyn Error>> {
         // SAFETY: called only on the owning audio worker, before loading ASIO.
@@ -25,6 +28,7 @@ impl ComApartment {
         Ok(Self)
     }
 }
+#[cfg(all(windows, feature = "asio"))]
 impl Drop for ComApartment {
     fn drop(&mut self) {
         // SAFETY: RAII value is local to run_audio; the driver is dropped first.
@@ -42,7 +46,12 @@ impl Session {
         Self {
             worker: None,
             stop: Arc::new(AtomicBool::new(false)),
-            status: Arc::new(Mutex::new("Ready. Inspect settings or start audio.".into())),
+            status: Arc::new(Mutex::new(
+                backend::default_backend()
+                    .err()
+                    .map(|error| error.to_string())
+                    .unwrap_or_else(|| "Ready. Inspect settings or start audio.".into()),
+            )),
         }
     }
     pub fn start(&mut self, options: Options) -> Result<(), String> {
@@ -52,9 +61,9 @@ impl Session {
         self.stop.store(false, Ordering::Release);
         let stop = Arc::clone(&self.stop);
         let status = Arc::clone(&self.status);
-        set_status(&status, "Opening ASIO driver...".into());
+        set_status(&status, "Opening audio device...".into());
         match thread::Builder::new()
-            .name("asio-control".into())
+            .name("audio-control".into())
             .spawn(move || {
                 let result = run_audio(options, &stop, &status);
                 if let Err(error) = result {
@@ -115,18 +124,20 @@ fn run_audio(
     stop: &AtomicBool,
     status: &Mutex<String>,
 ) -> Result<(), Box<dyn Error>> {
-    let _apartment = ComApartment::initialize()?;
-    let host = asio_sys::Asio::new();
-    let name = host
-        .driver_names()
-        .into_iter()
-        .find(|name| name.eq_ignore_ascii_case(&options.device))
-        .ok_or_else(|| format!("ASIO device '{}' not found", options.device))?;
-    let driver = host.load_driver(&name)?;
-    let config = asio::Configuration::query(&driver)?;
-    let details = format!("Device: {name}\n{}", config.summary());
+    let kind = backend::resolve(options.backend);
+    #[cfg(all(windows, feature = "asio"))]
+    let _apartment = if kind == backend::BackendKind::Asio {
+        Some(ComApartment::initialize()?)
+    } else {
+        None
+    };
+    let backend = backend::select(kind, &options.output_device)?;
+    let details = format!(
+        "Device: {}\n{}",
+        options.device,
+        backend.inspect(&options.device, options.frames)?
+    );
     set_status(status, details.clone());
-    config.validate(options.frames)?;
     if options.inspect {
         set_status(
             status,
@@ -139,23 +150,7 @@ fn run_audio(
         set_status(status, format!("Stopped before playback.\n{details}"));
         return Ok(());
     }
-    let mut engine = asio::Engine::open(
-        driver,
-        config,
-        options.frames,
-        asio::DspSettings {
-            semitones: options.pitch,
-            preserve_formants: options.preserve_formants,
-            formant_shift: options.formant_shift,
-            level: options.level,
-            gate: crate::gate::GateSettings {
-                enabled: options.gate,
-                threshold: options.gate_threshold,
-                attack_ms: options.gate_attack_ms,
-                release_ms: options.gate_release_ms,
-            },
-        },
-    )?;
+    let mut engine = backend.open(&options.device, options.frames, DspSettings::from(&options))?;
     if stop.load(Ordering::Acquire) {
         set_status(status, format!("Stopped before playback.\n{details}"));
         return Ok(());
@@ -173,10 +168,10 @@ fn run_audio(
                 last_blocks = blocks;
             }
             if last_progress.elapsed() > Duration::from_secs(2) {
-                return Err("No ASIO callbacks for 2 seconds".into());
+                return Err("No audio callbacks for 2 seconds".into());
             }
             set_status(status, format!(
-                "Running: {:.1} s | pitch {} semitones | formant {} | shift {} semitones | gate {} | auto level {}\n{details}\nPeriod: {:.3} ms | Input 1 -> output 1\n{}\n\n{}\n\nNonzero input counts indicate signal arrival, not listening quality.\nTimestamp blocks=0 means gap detection is unavailable.",
+                "Running: {:.1} s | pitch {} semitones | formant {} | shift {} semitones | gate {} | auto level {}\n{details}\nRequested period: {:.3} ms | Input 1 -> output 1\n{}\n\n{}\n\nNonzero input counts indicate signal arrival, not listening quality.\nTimestamp blocks=0 means gap detection is unavailable.",
                 started.elapsed().as_secs_f64(), options.pitch,
                 if options.preserve_formants { "preserve" } else { "off" },
                 options.formant_shift,
@@ -200,8 +195,8 @@ fn run_audio(
     result?;
     stop_result?;
     engine.check_events()?;
-    // A user cancelling immediately may stop before the first callback.
-    if engine.blocks() > 0 {
+    // A user may cancel before callbacks or before CPAL finishes queue priming.
+    if engine.has_playback() {
         engine.check_test_result()?;
     }
     Ok(())

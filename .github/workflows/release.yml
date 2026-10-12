@@ -40,7 +40,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build release
-        run: cargo build --release --features desktop,custom-protocol --locked
+        run: cargo build --release --features desktop,custom-protocol,asio --locked
 
       - name: Upload binaries
         uses: actions/upload-artifact@v7

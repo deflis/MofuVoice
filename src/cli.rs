@@ -4,6 +4,8 @@ use std::error::Error;
 #[derive(Debug, PartialEq)]
 pub struct Options {
     pub device: String,
+    pub output_device: String,
+    pub backend: crate::backend::BackendKind,
     pub seconds: Option<u64>,
     pub frames: u32,
     pub pitch: f64,
@@ -23,6 +25,8 @@ impl Options {
     pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Self, Box<dyn Error>> {
         let mut options = Self {
             device: String::new(),
+            output_device: String::new(),
+            backend: crate::backend::BackendKind::default(),
             seconds: None,
             frames: crate::DEFAULT_FRAMES,
             pitch: 0.0,
@@ -39,6 +43,8 @@ impl Options {
         };
         let mut args = args.into_iter();
         let mut device_given = false;
+        let mut output_given = false;
+        let mut backend_given = false;
         let mut frames_given = false;
         let mut pitch_given = false;
         let mut formant_given = false;
@@ -124,12 +130,27 @@ impl Options {
                     validate_time_ms(options.gate_release_ms)?;
                     gate_release_given = true;
                 }
+                "--backend" if !backend_given => {
+                    options.backend = crate::backend::BackendKind::parse(
+                        &args.next().ok_or("--backend requires auto, cpal or asio")?,
+                    )?;
+                    backend_given = true;
+                }
+                "--output-device" if !output_given => {
+                    options.output_device = args
+                        .next()
+                        .ok_or("--output-device requires a device name")?;
+                    if options.output_device.is_empty() || options.output_device.starts_with("--") {
+                        return Err("--output-device requires a device name".into());
+                    }
+                    output_given = true;
+                }
                 "--device" if !device_given => {
                     options.device = args
                         .next()
-                        .ok_or("--device requires an exact ASIO device name")?;
+                        .ok_or("--device requires an exact audio device name")?;
                     if options.device.is_empty() || options.device.starts_with("--") {
-                        return Err("--device requires an exact ASIO device name".into());
+                        return Err("--device requires an exact audio device name".into());
                     }
                     device_given = true;
                 }
@@ -164,6 +185,14 @@ impl Options {
             return Err(crate::pitch::InvalidFormant.to_string().into());
         }
         options.level.validate()?;
+        if options.backend == crate::backend::BackendKind::Asio && output_given {
+            return Err("ASIO uses one duplex device; --output-device is for CPAL".into());
+        }
+        if options.device.contains(['\r', '\n', '\0'])
+            || options.output_device.contains(['\r', '\n', '\0'])
+        {
+            return Err("Device names cannot contain line breaks or NUL".into());
+        }
         let gate_tuned = gate_threshold_given || gate_attack_given || gate_release_given;
         let modes =
             usize::from(options.list) + usize::from(options.inspect) + usize::from(options.help);
@@ -177,7 +206,8 @@ impl Options {
                     || level_fields.iter().any(|given| *given)
                     || gate_given
                     || gate_tuned))
-            || ((options.list || options.help) && (device_given || frames_given))
+            || (options.help && backend_given)
+            || ((options.list || options.help) && (device_given || output_given || frames_given))
         {
             return Err("Choose one CLI mode: --help, --list-devices, --inspect [--device NAME] [--frames N], or [--device NAME] [--frames N] [--seconds N] [--pitch SEMITONES] [--formant preserve|off] [--formant-shift SEMITONES] [--auto-level on|off] [--level-target DB] [--level-max-gain DB] [--level-floor DB] [--level-response MS] [--compress-threshold DB] [--compress-ratio N] [--compress-attack MS] [--compress-release MS] [--gate on|off] [--gate-threshold auto|DB] [--gate-attack MS] [--gate-release MS]".into());
         }
@@ -197,6 +227,30 @@ mod tests {
     use super::*;
     fn parse(args: &[&str]) -> Result<Options, Box<dyn Error>> {
         Options::parse(args.iter().map(|s| (*s).into()))
+    }
+    #[test]
+    fn backend_output_selection_defaults_and_validation() {
+        assert_eq!(
+            parse(&[]).unwrap().backend,
+            crate::backend::BackendKind::Auto
+        );
+        let options = parse(&[
+            "--backend",
+            "cpal",
+            "--device",
+            "Mic",
+            "--output-device",
+            "Headphones",
+        ])
+        .unwrap();
+        assert_eq!(options.output_device, "Headphones");
+        assert!(parse(&["--backend", "asio", "--output-device", "Headphones"]).is_err());
+        assert!(parse(&["--backend", "unknown"]).is_err());
+        assert!(parse(&["--backend", "cpal", "--backend", "auto"]).is_err());
+        assert!(parse(&["--output-device", "A", "--output-device", "B"]).is_err());
+        assert!(parse(&["--output-device", "--frames"]).is_err());
+        assert!(parse(&["--device", "bad\nname"]).is_err());
+        assert!(parse(&["--list-devices", "--backend", "cpal"]).is_ok());
     }
     #[test]
     fn automatic_level_and_custom_parameters_are_validated() {

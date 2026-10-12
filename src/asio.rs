@@ -1,7 +1,7 @@
 //! Direct ASIO buffer callbacks. asio-sys is used only to load/unload the driver.
 use crate::{
-    gate::{GateSettings, NoiseGate},
-    pitch::{PitchShifter, Sample, LATENCY},
+    audio::DspChain,
+    pitch::{Sample, LATENCY},
     RATE,
 };
 use asio_sys::{bindings::asio_import as ffi, Driver};
@@ -169,10 +169,8 @@ struct CallbackState {
     output_ready: AtomicBool,
     last_position: AtomicU64,
     metrics: Metrics,
-    level: UnsafeCell<crate::level::AutoLevel>,
-    gate: UnsafeCell<NoiseGate>,
+    dsp: UnsafeCell<DspChain>,
     scratch: UnsafeCell<Vec<f32>>,
-    pitch: UnsafeCell<PitchShifter>,
 }
 impl CallbackState {
     unsafe fn process<T: Sample>(&self, index: usize) -> u64 {
@@ -189,27 +187,17 @@ impl CallbackState {
             if channel == 0 {
                 // SAFETY: only the callback holding the processing guard accesses DSP.
                 // The control thread never reads or mutates it during streaming.
-                let gate = unsafe { &mut *self.gate.get() };
-                let pitch = unsafe { &mut *self.pitch.get() };
-                if gate.enabled() {
-                    // Scratch is frames of f32 storage; reinterpret as T (f32/i32/i16 all fit).
-                    let scratch = unsafe {
-                        let storage = &mut *self.scratch.get();
-                        debug_assert!(
-                            std::mem::size_of_val(storage.as_slice())
-                                >= self.frames * std::mem::size_of::<T>()
-                        );
-                        std::slice::from_raw_parts_mut(
-                            storage.as_mut_ptr().cast::<T>(),
-                            self.frames,
-                        )
-                    };
-                    gate.process_block(input, scratch);
-                    nonzero = pitch.process_block(scratch, output);
-                } else {
-                    nonzero = pitch.process_block(input, output);
-                }
-                unsafe { &mut *self.level.get() }.process_in_place(output);
+                let dsp = unsafe { &mut *self.dsp.get() };
+                // Scratch storage is aligned for f32/i32 and large enough for i16.
+                let scratch = unsafe {
+                    let storage = &mut *self.scratch.get();
+                    debug_assert!(
+                        std::mem::size_of_val(storage.as_slice())
+                            >= self.frames * std::mem::size_of::<T>()
+                    );
+                    std::slice::from_raw_parts_mut(storage.as_mut_ptr().cast::<T>(), self.frames)
+                };
+                nonzero = dsp.process_block(input, output, scratch);
                 crate::spectrum::push_output_samples(output);
             } else {
                 output.fill(T::default());
@@ -436,13 +424,7 @@ unsafe extern "C" {
     fn asio_get_latencies(input: *mut i32, output: *mut i32) -> i32;
 }
 
-pub struct DspSettings {
-    pub semitones: f64,
-    pub preserve_formants: bool,
-    pub formant_shift: f64,
-    pub gate: GateSettings,
-    pub level: crate::level::LevelSettings,
-}
+pub use crate::audio::DspSettings;
 pub struct Engine {
     driver: Driver,
     state: Box<CallbackState>,
@@ -457,9 +439,7 @@ impl Engine {
         dsp: DspSettings,
     ) -> Result<Self> {
         config.validate(frames)?;
-        let pitch = PitchShifter::new(dsp.semitones, dsp.preserve_formants, dsp.formant_shift)?;
-        let gate = dsp.gate.build()?;
-        let level = dsp.level.build()?;
+        let dsp = DspChain::new(dsp)?;
         let mut buffers = Vec::with_capacity(config.inputs + config.outputs);
         for (input, channels) in [(true, config.inputs), (false, config.outputs)] {
             for channel in 0..channels {
@@ -480,10 +460,8 @@ impl Engine {
             output_ready: AtomicBool::new(false),
             last_position: AtomicU64::new(u64::MAX),
             metrics: Metrics::default(),
-            level: UnsafeCell::new(level),
-            gate: UnsafeCell::new(gate),
+            dsp: UnsafeCell::new(dsp),
             scratch: UnsafeCell::new(vec![0.0; frames as usize]),
-            pitch: UnsafeCell::new(pitch),
         });
         let mut engine = Self {
             driver,
@@ -597,6 +575,30 @@ impl Engine {
         Ok(())
     }
 }
+impl crate::backend::AudioStream for Engine {
+    fn start(&mut self) -> Result<()> {
+        Engine::start(self)
+    }
+    fn stop(&mut self) -> Result<()> {
+        Engine::stop(self)
+    }
+    fn blocks(&self) -> u64 {
+        Engine::blocks(self)
+    }
+    fn summary(&self) -> String {
+        Engine::summary(self)
+    }
+    fn latency_summary(&self) -> Result<String> {
+        Engine::latency_summary(self)
+    }
+    fn check_events(&self) -> Result<()> {
+        Engine::check_events(self)
+    }
+    fn check_test_result(&self) -> Result<()> {
+        Engine::check_test_result(self)
+    }
+}
+
 impl Drop for Engine {
     fn drop(&mut self) {
         let own_pointer = ptr::from_ref(self.state.as_ref()).cast_mut();
@@ -624,6 +626,7 @@ impl Drop for Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{gate::GateSettings, pitch::PitchShifter};
     #[test]
     fn validates_fixed_power_of_two_and_stepped_buffers() {
         assert!(buffer_supported(512, 512, 512, 512, 0));
@@ -660,19 +663,13 @@ mod tests {
             output_ready: AtomicBool::new(false),
             last_position: AtomicU64::new(u64::MAX),
             metrics: Metrics::default(),
-            level: UnsafeCell::new(crate::level::LevelSettings::default().build().unwrap()),
-            gate: UnsafeCell::new(
-                GateSettings {
-                    enabled: false,
-                    threshold: crate::gate::GateThreshold::Auto,
-                    attack_ms: 5.0,
-                    release_ms: 80.0,
-                }
-                .build()
+            dsp: UnsafeCell::new(
+                DspChain::new(DspSettings::from(
+                    &crate::cli::Options::parse(Vec::<String>::new()).unwrap(),
+                ))
                 .unwrap(),
             ),
             scratch: UnsafeCell::new(vec![0.0; 4]),
-            pitch: UnsafeCell::new(PitchShifter::new(0.0, true, 0.0).unwrap()),
         };
         state.validate_pointers().unwrap();
         assert_eq!(unsafe { state.process::<f32>(0) }, 3);
@@ -682,8 +679,8 @@ mod tests {
         assert_eq!(unsafe { state.process::<f32>(1) }, 4);
         assert_eq!(input_b, output_b);
         assert_eq!(other_b, [0.0; 4]);
-        *state.pitch.get_mut() = PitchShifter::new(0.0, true, 0.0).unwrap();
-        *state.gate.get_mut() = GateSettings {
+        state.dsp.get_mut().pitch = PitchShifter::new(0.0, true, 0.0).unwrap();
+        state.dsp.get_mut().gate = GateSettings {
             enabled: true,
             threshold: crate::gate::GateThreshold::Db(-90.0),
             attack_ms: 0.1,
@@ -691,7 +688,7 @@ mod tests {
         }
         .build()
         .unwrap();
-        *state.level.get_mut() = crate::level::LevelSettings {
+        state.dsp.get_mut().level = crate::level::LevelSettings {
             enabled: true,
             ..Default::default()
         }
@@ -706,7 +703,7 @@ mod tests {
 
         // Exercise the wet route through the raw ASIO descriptors, including ring wraps.
         state.buffers[1].buffers[0] = output_a.as_mut_ptr().cast();
-        *state.gate.get_mut() = GateSettings {
+        state.dsp.get_mut().gate = GateSettings {
             enabled: false,
             threshold: crate::gate::GateThreshold::Auto,
             attack_ms: 5.0,
@@ -714,8 +711,8 @@ mod tests {
         }
         .build()
         .unwrap();
-        *state.level.get_mut() = crate::level::LevelSettings::default().build().unwrap();
-        *state.pitch.get_mut() = PitchShifter::new(3.0, true, 0.0).unwrap();
+        state.dsp.get_mut().level = crate::level::LevelSettings::default().build().unwrap();
+        state.dsp.get_mut().pitch = PitchShifter::new(3.0, true, 0.0).unwrap();
         for _ in 0..1024 {
             assert_eq!(unsafe { state.process::<f32>(0) }, 3);
         }

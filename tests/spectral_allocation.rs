@@ -32,6 +32,30 @@ unsafe impl GlobalAlloc for CountingAllocator {
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
 #[test]
+fn portable_processor_does_not_allocate_with_gate_pitch_and_level_enabled() {
+    use rust_low_latency_voice_changer::{
+        audio::{AudioProcessor, DspSettings},
+        cli::Options,
+        RATE,
+    };
+    let options =
+        Options::parse(["--pitch", "3", "--gate", "on", "--auto-level", "on"].map(String::from))
+            .unwrap();
+    let mut processor = AudioProcessor::<f32>::new(RATE, 512, DspSettings::from(&options)).unwrap();
+    let input = [0.1; 512];
+    let mut output = [0.0; 512];
+    ALLOCATIONS.with(|n| n.set(0));
+    ENABLED.with(|enabled| enabled.set(true));
+    for frames in [1, 64, 511, 512].into_iter().cycle().take(128) {
+        processor
+            .process_block(&input[..frames], &mut output[..frames])
+            .unwrap();
+    }
+    ENABLED.with(|enabled| enabled.set(false));
+    assert_eq!(ALLOCATIONS.with(Cell::get), 0);
+}
+
+#[test]
 fn callback_does_not_allocate_including_first_frames_and_transitions() {
     for preserve in [false, true] {
         let mut dsp = PitchShifter::new(7.0, preserve, 0.0).unwrap();

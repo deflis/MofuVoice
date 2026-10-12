@@ -16,6 +16,8 @@ export type LevelSettings = {
 export type Settings = {
   level: LevelSettings;
   device: string;
+  outputDevice: string;
+  backend: string;
   frames: string;
   pitch: string;
   formantShift: string;
@@ -25,12 +27,25 @@ export type Settings = {
   gateAttackMs: string;
   gateReleaseMs: string;
 };
+type DeviceChoices = {
+  devices: string[];
+  outputDevices: string[];
+  audioAvailable: boolean;
+  deviceError: string;
+  resolvedBackend: string;
+};
 type Snapshot = { busy: boolean; status: string };
 
 type SettingsStore = {
   settings: Settings | undefined;
   levelDefaults: LevelSettings | undefined;
   devices: string[];
+  outputDevices: string[];
+  backends: string[];
+  deviceError: string;
+  resolvedBackend: string;
+  spectrumAvailable: boolean;
+  audioAvailable: boolean;
   snapshot: Snapshot;
   pending: boolean;
   closing: boolean;
@@ -44,6 +59,7 @@ type SettingsStore = {
   save: () => Promise<void>;
   close: () => Promise<void>;
   update: <K extends keyof Settings>(key: K, value: Settings[K]) => void;
+  updateBackend: (backend: string) => Promise<void>;
   updateLevel: <K extends keyof LevelSettings>(key: K, value: LevelSettings[K]) => void;
   resetLevel: () => void;
 };
@@ -79,6 +95,12 @@ export const useSettingsStore = create<SettingsStore>()((set, get) => {
     settings: undefined,
     levelDefaults: undefined,
     devices: [],
+    outputDevices: [],
+    backends: [],
+    deviceError: "",
+    resolvedBackend: "",
+    spectrumAvailable: false,
+    audioAvailable: false,
     snapshot: { busy: false, status: "準備中…" },
     pending: false,
     closing: false,
@@ -109,11 +131,14 @@ export const useSettingsStore = create<SettingsStore>()((set, get) => {
       };
       const load = async () => {
         try {
-          const result = await invoke<{
-            settings: Settings;
-            devices: string[];
-            levelDefaults: LevelSettings;
-          }>("bootstrap");
+          const result = await invoke<
+            DeviceChoices & {
+              settings: Settings;
+              levelDefaults: LevelSettings;
+              backends: string[];
+              spectrumAvailable: boolean;
+            }
+          >("bootstrap");
           if (!disposed) {
             set(result);
             if (closeRequested) {
@@ -178,6 +203,19 @@ export const useSettingsStore = create<SettingsStore>()((set, get) => {
         settings: { ...requireSettings(state.settings), [key]: value },
         notice: "",
       })),
+    updateBackend: (backend) =>
+      run(async () => {
+        set((state) => ({
+          settings: { ...requireSettings(state.settings), backend, device: "", outputDevice: "" },
+          devices: [],
+          outputDevices: [],
+          audioAvailable: false,
+          resolvedBackend: "",
+          deviceError: "",
+          notice: "",
+        }));
+        set(await invoke<DeviceChoices>("device_choices", { backend }));
+      }),
     updateLevel: (key, value) =>
       set((state) => {
         const settings = requireSettings(state.settings);

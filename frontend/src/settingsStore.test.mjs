@@ -1,20 +1,11 @@
 import assert from "node:assert/strict";
-import { registerHooks } from "node:module";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, mock, test } from "node:test";
 
-// Node strips types; resolve the bundler-style local import used by the store.
-registerHooks({
-  resolve(specifier, context, nextResolve) {
-    if (specifier === "./api" && context.parentURL?.endsWith("/settingsStore.ts")) {
-      return nextResolve("./api.ts", context);
-    }
-    return nextResolve(specifier, context);
-  },
-});
-
 const settings = {
   device: "ASIO",
+  backend: "auto",
+  outputDevice: "",
   frames: "64",
   pitch: "0",
   formantShift: "0",
@@ -35,10 +26,45 @@ const settings = {
     releaseMs: "100",
   },
 };
-const bootstrap = { settings, devices: ["ASIO"], levelDefaults: settings.level };
+const bootstrap = {
+  settings,
+  devices: ["ASIO"],
+  outputDevices: [],
+  backends: ["auto", "cpal", "asio"],
+  levelDefaults: settings.level,
+  spectrumAvailable: true,
+  audioAvailable: true,
+  deviceError: "",
+  resolvedBackend: "asio",
+};
 const api = {};
 const listen = mock.fn();
-mock.module(new URL("./api.ts", import.meta.url).href, { exports: { api } });
+mock.module("@tauri-apps/api/core", {
+  exports: {
+    invoke: (command, args) => {
+      switch (command) {
+        case "bootstrap":
+          return api.bootstrap();
+        case "audio_status":
+          return api.status();
+        case "start_audio":
+          return api.start(args.settings, args.inspect);
+        case "stop_audio":
+          return api.stop();
+        case "save_settings":
+          return api.save(args.settings);
+        case "open_spectrum":
+          return api.spectrum();
+        case "close_application":
+          return api.close(args.settings);
+        case "device_choices":
+          return api.devices(args.backend);
+        default:
+          throw new Error(`Unexpected command ${command}`);
+      }
+    },
+  },
+});
 mock.module("@tauri-apps/api/event", { exports: { listen } });
 const { useSettingsStore: store } = await import("./settingsStore.ts");
 let disconnect;
@@ -56,6 +82,13 @@ function deferred() {
 beforeEach(() => {
   store.setState(store.getInitialState(), true);
   api.bootstrap = mock.fn(async () => bootstrap);
+  api.devices = mock.fn(async () => ({
+    devices: ["Mic"],
+    outputDevices: ["Headphones"],
+    audioAvailable: true,
+    deviceError: "",
+    resolvedBackend: "cpal",
+  }));
   api.status = mock.fn(async () => ({ busy: false, status: "idle" }));
   for (const action of ["start", "stop", "save", "spectrum", "close"]) {
     api[action] = mock.fn(async () => {});
@@ -192,4 +225,28 @@ test("cleanup cancels polling and ignores failures from obsolete connections", a
   context.mock.timers.tick(1000);
   await setImmediate();
   assert.equal(api.status.mock.callCount(), 3);
+});
+
+test("backend switching refreshes device choices and resets both endpoints", async () => {
+  store.setState(bootstrap);
+  const loading = deferred();
+  api.devices.mock.mockImplementation(() => loading.promise);
+  const switching = store.getState().updateBackend("cpal");
+  assert.equal(store.getState().pending, true);
+  assert.equal(store.getState().settings.backend, "cpal");
+  assert.equal(store.getState().settings.device, "");
+  assert.equal(store.getState().settings.outputDevice, "");
+  assert.equal(store.getState().audioAvailable, false);
+  loading.resolve({
+    devices: ["Mic"],
+    outputDevices: ["Headphones"],
+    audioAvailable: true,
+    deviceError: "",
+    resolvedBackend: "cpal",
+  });
+  await switching;
+  assert.deepEqual(store.getState().devices, ["Mic"]);
+  assert.deepEqual(store.getState().outputDevices, ["Headphones"]);
+  assert.equal(store.getState().resolvedBackend, "cpal");
+  assert.equal(store.getState().pending, false);
 });

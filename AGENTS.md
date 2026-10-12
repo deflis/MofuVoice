@@ -6,7 +6,8 @@
 - Target a total monitoring latency of 10 ms or less from microphone input to headphone output, including input/output buffering, DSP algorithmic delay, and hardware conversion. Verify through actual conversation that monitoring the processed voice does not disrupt the user's thinking or speech.
 - Consider implementing DSP features needed for streaming.
 - Prioritize voice quality first. Improve processing speed after improving quality, while preserving the achieved quality.
-- Do not consider using existing libraries.
+- Do not use existing libraries for DSP algorithms (pitch/formant processing, FFT, gates, leveling, compression, or resampling). Implement and validate DSP in this repository.
+- Existing libraries may be used for audio device access and platform integration. Use CPAL for cross-platform audio input/output; keep its sample transport and device configuration separate from the custom DSP.
 
 ## Testing Guidelines
 
