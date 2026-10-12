@@ -1,12 +1,40 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["typescript", "react", "oxc", "unicorn"],
+  "plugins": [
+    "typescript",
+    "react",
+    "oxc",
+    "unicorn",
+    "import",
+    "promise",
+    "jsx-a11y",
+    "node",
+    "jsdoc"
+  ],
+  "options": {
+    "typeAware": true
+  },
   "categories": {
-    "correctness": "error"
+    "correctness": "error",
+    "suspicious": "error"
   },
   "rules": {
     "react/rules-of-hooks": "error",
-    "react/exhaustive-deps": "error"
+    "react/exhaustive-deps": "error",
+    "react/react-in-jsx-scope": "off",
+    "eslint/curly": ["error", "all"],
+    "eslint/eqeqeq": ["error", "always"],
+    "eslint/no-nested-ternary": "error",
+    "eslint/no-var": "error",
+    "eslint/prefer-const": "error",
+    "eslint/no-duplicate-imports": "error",
+    "import/no-unassigned-import": ["error", { "allow": ["**/*.css"] }],
+    "typescript/no-explicit-any": "error",
+    "typescript/no-non-null-assertion": "error",
+    "typescript/consistent-type-imports": "error",
+    "typescript/ban-ts-comment": "error",
+    "react/button-has-type": "error",
+    "react/jsx-no-target-blank": "error"
   },
   "env": {
     "browser": true
