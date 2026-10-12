@@ -1,5 +1,5 @@
 //! GUI preferences only; never read or written from an audio callback.
-use crate::cli::Options;
+use crate::{cli::Options, gate::GateThreshold};
 use std::{
     error::Error,
     fs,
@@ -11,6 +11,13 @@ pub(crate) fn path() -> Result<PathBuf, Box<dyn Error>> {
     Ok(std::env::current_exe()
         .map_err(|error| format!("Cannot locate GUI executable: {error}"))?
         .with_file_name("settings.ini"))
+}
+
+fn threshold_text(threshold: GateThreshold) -> String {
+    match threshold {
+        GateThreshold::Auto => "auto".into(),
+        GateThreshold::Db(db) => db.to_string(),
+    }
 }
 
 fn arguments(options: &Options) -> Vec<String> {
@@ -28,6 +35,14 @@ fn arguments(options: &Options) -> Vec<String> {
             "off"
         }
         .into(),
+        "--gate".into(),
+        if options.gate { "on" } else { "off" }.into(),
+        "--gate-threshold".into(),
+        threshold_text(options.gate_threshold),
+        "--gate-attack".into(),
+        options.gate_attack_ms.to_string(),
+        "--gate-release".into(),
+        options.gate_release_ms.to_string(),
     ];
     if !options.device.is_empty() {
         args.extend(["--device".into(), options.device.clone()]);
@@ -58,6 +73,10 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
             "pitch",
             "formant_shift",
             "preserve_formants",
+            "gate",
+            "gate_threshold",
+            "gate_attack_ms",
+            "gate_release_ms",
         ]
         .contains(&key)
             || values.insert(key, value.trim()).is_some()
@@ -80,6 +99,11 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
         "false" => "off",
         _ => return Err("preserve_formants must be true or false".into()),
     };
+    let gate = match value("gate")? {
+        "true" | "on" => "on",
+        "false" | "off" => "off",
+        _ => return Err("gate must be true or false".into()),
+    };
     let mut args = vec![
         "--frames",
         value("frames")?,
@@ -89,6 +113,14 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
         value("formant_shift")?,
         "--formant",
         formant,
+        "--gate",
+        gate,
+        "--gate-threshold",
+        value("gate_threshold")?,
+        "--gate-attack",
+        value("gate_attack_ms")?,
+        "--gate-release",
+        value("gate_release_ms")?,
     ];
     if !device.is_empty() {
         args.extend(["--device", device]);
@@ -119,6 +151,10 @@ pub(crate) fn merge(saved: &Options, args: Vec<String>) -> Result<Options, Box<d
             "--pitch",
             "--formant-shift",
             "--formant",
+            "--gate",
+            "--gate-threshold",
+            "--gate-attack",
+            "--gate-release",
         ]
         .contains(&flag.as_str())
             || !seen.insert(flag.clone())
@@ -143,12 +179,16 @@ pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>>
         return Err("Device name cannot contain line breaks or NUL".into());
     }
     let text = format!(
-        "[gui]\ndevice={}\nframes={}\npitch={}\nformant_shift={}\npreserve_formants={}\n",
+        "[gui]\ndevice={}\nframes={}\npitch={}\nformant_shift={}\npreserve_formants={}\ngate={}\ngate_threshold={}\ngate_attack_ms={}\ngate_release_ms={}\n",
         options.device,
         options.frames,
         options.pitch,
         options.formant_shift,
-        options.preserve_formants
+        options.preserve_formants,
+        options.gate,
+        threshold_text(options.gate_threshold),
+        options.gate_attack_ms,
+        options.gate_release_ms
     );
     let temporary = path.with_extension(format!("{}.tmp", std::process::id()));
     let result = (|| -> std::io::Result<()> {
@@ -176,12 +216,12 @@ mod tests {
             .join("settings.ini");
         let defaults = load(&path).unwrap();
         assert!(defaults.device.is_empty());
-        let options = decode("[gui]\ndevice=日本語 ASIO = Device\nframes=256\npitch=-2.5\nformant_shift=3.25\npreserve_formants=true\n").unwrap();
+        let options = decode("[gui]\ndevice=日本語 ASIO = Device\nframes=256\npitch=-2.5\nformant_shift=3.25\npreserve_formants=true\ngate=true\ngate_threshold=-35\ngate_attack_ms=3\ngate_release_ms=120\n").unwrap();
         save(&path, &options).unwrap();
         assert_eq!(load(&path).unwrap(), options);
         let invalid = Options {
             frames: 0,
-            ..decode("[gui]\ndevice=Other\nframes=512\npitch=0\nformant_shift=0\npreserve_formants=true\n").unwrap()
+            ..decode("[gui]\ndevice=Other\nframes=512\npitch=0\nformant_shift=0\npreserve_formants=true\ngate=false\ngate_threshold=auto\ngate_attack_ms=5\ngate_release_ms=80\n").unwrap()
         };
         assert!(save(&path, &invalid).is_err());
         assert_eq!(load(&path).unwrap(), options);
@@ -214,12 +254,13 @@ mod tests {
     }
     #[test]
     fn explicit_values_override_only_their_fields() {
-        let saved = decode("[gui]\ndevice=ASIO Device\nframes=256\npitch=-3\nformant_shift=2\npreserve_formants=true\n").unwrap();
+        let saved = decode("[gui]\ndevice=ASIO Device\nframes=256\npitch=-3\nformant_shift=2\npreserve_formants=true\ngate=true\ngate_threshold=auto\ngate_attack_ms=5\ngate_release_ms=80\n").unwrap();
         let result = merge(&saved, vec!["--pitch".into(), "4.5".into()]).unwrap();
         assert_eq!(result.pitch, 4.5);
         assert_eq!(result.device, saved.device);
         assert_eq!(result.frames, 256);
         assert_eq!(result.formant_shift, 2.0);
+        assert!(result.gate);
         assert!(merge(&saved, vec!["--formant".into(), "off".into()]).is_err());
         assert!(merge(
             &saved,
@@ -230,7 +271,7 @@ mod tests {
     }
     #[test]
     fn ini_comments_order_and_invalid_entries() {
-        let text = "\u{feff}; preferences\r\n[gui]\r\n# voice\r\npreserve_formants = false\r\nformant_shift=0\r\npitch = -2.5\r\nframes=256\r\ndevice=日本語 ASIO = Device\r\n";
+        let text = "\u{feff}; preferences\r\n[gui]\r\n# voice\r\npreserve_formants = false\r\nformant_shift=0\r\npitch = -2.5\r\nframes=256\r\ndevice=日本語 ASIO = Device\r\ngate=false\r\ngate_threshold=auto\r\ngate_attack_ms=5\r\ngate_release_ms=80\r\n";
         let options = decode(text).unwrap();
         assert_eq!(options.device, "日本語 ASIO = Device");
         assert_eq!(options.frames, 256);
