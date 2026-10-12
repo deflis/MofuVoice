@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-This Windows Rust 2021 voice changer uses direct full-duplex ASIO, pitch shifting, and LPC formant preservation. Audio runs at 48 kHz with a default 512-frame buffer. Select an ASIO device explicitly.
+This Windows Rust 2021 voice changer uses direct full-duplex ASIO, pitch shifting, and LPC formant preservation. Defaults: 48 kHz, 512 frames. Select an ASIO device explicitly.
 
 - `src/bin/cli.rs` and `src/bin/gui.rs`: independent executable entry points.
 - `src/lib.rs`: shared modules and bit-preserving bypass.
@@ -12,7 +12,7 @@ This Windows Rust 2021 voice changer uses direct full-duplex ASIO, pitch shiftin
 - `native/` and `build.rs`: C++ ASIO latency bridge, GUI, and compilation/linking.
 - `tests/dsp_equivalence.rs` and `tests/reference/`: optimized-versus-reference DSP checks.
 - `benches/dsp.rs`: paired DSP performance benchmark.
-- `scripts/`: session-local toolchain setup and hardware GUI smoke test.
+- `scripts/gui-smoke.ps1`: hardware GUI smoke test with explicit device and buffer parameters.
 - `README.md`: setup, behavior, and verification guidance. `.tools/`, `target/`, and local measurement `logs/` are ignored; do not commit them.
 
 ## Build, Test, and Development Commands
@@ -20,16 +20,16 @@ This Windows Rust 2021 voice changer uses direct full-duplex ASIO, pitch shiftin
 Use Windows x64 Rust MSVC, Visual C++ Build Tools with Windows SDK, libclang, and the ASIO SDK:
 
 ```powershell
-. .\scripts\dev-env.ps1
 cargo check --locked
 cargo build --release --locked
 cargo test --locked
+cargo test --release --locked --test dsp_equivalence
 cargo clippy --all-targets --locked -- -D warnings
 cargo fmt --check
 cargo bench --locked --bench dsp
 ```
 
-Commands configure the session, check, build, test, lint, format-check, and benchmark. External toolchains require `CPAL_ASIO_DIR` and `LIBCLANG_PATH`; see README.
+Set `CPAL_ASIO_DIR` to the ASIO SDK root and `LIBCLANG_PATH` to the directory containing libclang.dll. Use the installed Windows x64 MSVC toolchain.
 
 ```powershell
 .\target\release\rust-low-latency-voice-changer-gui.exe
@@ -37,7 +37,7 @@ Commands configure the session, check, build, test, lint, format-check, and benc
 .\scripts\gui-smoke.ps1 -Device "ASIO device name" -Frames 512
 ```
 
-Inspection creates no audio buffers; the smoke test starts actual audio through GUI controls.
+Inspection creates no audio buffers; GUI smoke tests start actual audio.
 
 ## Coding Style & Architecture
 
@@ -47,10 +47,10 @@ Preallocate callback state; avoid callback allocation, locks, logging, I/O, and 
 
 ## Testing Guidelines
 
-Use adjacent unit-test modules and integration tests. Cover formats, channel mapping, pitch transitions, LPC stability, invalid arguments, and block boundaries. DSP optimizations must preserve reference output bits.
+Use adjacent unit tests and integration tests. Cover formats, mapping, transitions, LPC stability, invalid arguments, and block boundaries. Preserve reference DSP output bits; run equivalence tests in Release. The paired benchmark requires median time reduction of at least 10% per pitch setting.
 
-Record hardware settings, duration, overruns, sample-position discontinuities, and listening results locally. Distinguish DSP delay, reported driver latency, and measured round-trip latency.
+Record hardware settings, overruns, sample-position discontinuities, and listening results locally. Distinguish DSP delay, reported driver latency, and measured round-trip latency.
 
 ## Commit & Pull Request Guidelines
 
-Follow recent Japanese change descriptions and commit skills: noun-ending messages without type prefixes. PRs should explain behavior, relevant issues, checks, and hardware evidence or untested conditions. Update README when behavior changes; unit tests alone do not establish audio quality.
+For commits, follow commit skills: Japanese noun-ending messages without type prefixes. PRs should explain behavior, relevant issues, checks, and hardware evidence or untested conditions. Update README when behavior changes; unit tests alone do not establish audio quality.
