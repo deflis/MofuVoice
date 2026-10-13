@@ -33,7 +33,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         return Ok(());
     }
-    let details = backend.inspect(&options.device, options.frames)?;
+    let routing = backend::ChannelRouting::from(&options);
+    let details = backend.inspect(&options.device, options.frames, &routing)?;
     println!(
         "Selected: {}\n{details}",
         if options.device.is_empty() {
@@ -49,7 +50,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         );
         return Ok(());
     }
-    let mut engine = backend.open(&options.device, options.frames, DspSettings::from(&options))?;
+    let mut engine = backend.open(
+        &options.device,
+        options.frames,
+        &routing,
+        DspSettings::from(&options),
+    )?;
     engine.print_latencies()?;
     println!(
         "Rumble filter: {}; 80 Hz high-pass; no lookahead or buffered sample delay.",

@@ -7,8 +7,6 @@ use crate::{
 use std::error::Error;
 
 pub struct DspSettings {
-    pub input_channel: usize,
-    pub output_channels: Vec<usize>,
     pub rumble_filter: bool,
     pub semitones: f64,
     pub preserve_formants: bool,
@@ -20,8 +18,6 @@ pub struct DspSettings {
 impl From<&crate::cli::Options> for DspSettings {
     fn from(options: &crate::cli::Options) -> Self {
         Self {
-            input_channel: options.input_channel,
-            output_channels: options.output_channels.clone(),
             rumble_filter: options.rumble_filter,
             semitones: options.pitch,
             preserve_formants: options.preserve_formants,

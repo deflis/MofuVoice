@@ -219,8 +219,10 @@ fn run_audio(
         None
     };
     let backend = backend::select(kind, &options.output_device)?;
+    let routing = backend::ChannelRouting::from(&options);
     if options.inspect {
-        let inspection = backend.inspect_configuration(&options.device, options.frames)?;
+        let inspection =
+            backend.inspect_configuration(&options.device, options.frames, &routing)?;
         update_configuration(info, &inspection.configuration, &options, "inspected", kind);
         set_status(
             status,
@@ -237,7 +239,12 @@ fn run_audio(
         set_status(status, "Stopped before playback.".into());
         return Ok(());
     }
-    let mut engine = backend.open(&options.device, options.frames, DspSettings::from(&options))?;
+    let mut engine = backend.open(
+        &options.device,
+        options.frames,
+        &routing,
+        DspSettings::from(&options),
+    )?;
     let configuration = engine.configuration();
     update_configuration(info, &configuration, &options, "opening", kind);
     let details = format!("Device: {}\n{}", configuration.device, engine.details());

@@ -465,21 +465,13 @@ impl Engine {
         driver: Driver,
         config: Configuration,
         frames: u32,
+        routing: &crate::backend::ChannelRouting,
         dsp: DspSettings,
     ) -> Result<Self> {
         config.validate(frames)?;
-        if dsp.input_channel == 0
-            || dsp.input_channel > config.inputs
-            || dsp.output_channels.is_empty()
-            || dsp
-                .output_channels
-                .iter()
-                .any(|&c| c == 0 || c > config.outputs)
-        {
-            return Err("Selected channels are unavailable on this ASIO device".into());
-        }
-        let input_channel = dsp.input_channel;
-        let mut output_channels = dsp.output_channels.clone();
+        routing.validate(config.inputs, config.outputs)?;
+        let input_channel = routing.input_channel;
+        let mut output_channels = routing.output_channels.clone();
         output_channels.sort_unstable();
         let dsp = DspChain::new(dsp)?;
         let mut buffers = Vec::with_capacity(config.inputs + config.outputs);
@@ -824,7 +816,7 @@ mod tests {
         assert_ne!(input_a.map(f32::to_bits), output_a.map(f32::to_bits));
         assert!(output_a.iter().all(|s| s.is_finite() && s.abs() <= 1.0));
         assert_eq!(other_a, [0.0; 4]);
-        assert_eq!(output_b, input_b); // index 0 never writes index 1.
+        assert_eq!(output_b, [0.0; 4]); // Last index 1 routing muted this output; index 0 leaves it untouched.
         for _ in 0..4096 {
             assert_eq!(unsafe { state.process::<f32>(1) }, 4);
         }
