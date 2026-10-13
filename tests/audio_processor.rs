@@ -114,3 +114,39 @@ fn rumble_only_filters_before_neutral_pitch_without_gate_or_level() {
     assert_eq!(actual, expected);
     assert!(actual[24000..].iter().all(|x| x.abs() < 0.013));
 }
+
+#[test]
+fn nonzero_input_count_survives_integer_dc_removal() {
+    fn check<T: Sample>() {
+        for gate in ["off", "on"] {
+            let mut processor = AudioProcessor::<T>::new(
+                RATE,
+                512,
+                settings(&["--rumble-filter", "on", "--gate", gate]),
+            )
+            .unwrap();
+            let dc = T::from_normalized(0.1);
+            let mut output = [T::default(); 512];
+            // DC settles below one LSB, but every input sample remains nonzero.
+            for frames in [1, 63, 511, 512].into_iter().cycle().take(200) {
+                assert_eq!(
+                    processor
+                        .process_block(&[dc; 512][..frames], &mut output[..frames])
+                        .unwrap(),
+                    frames as u64
+                );
+            }
+            assert!(output.iter().all(|x| *x == T::default()));
+            // Filter ringing is output activity, not device input activity.
+            assert_eq!(
+                processor
+                    .process_block(&[T::default(); 512], &mut output)
+                    .unwrap(),
+                0
+            );
+            assert!(output.iter().any(|x| *x != T::default()));
+        }
+    }
+    check::<i16>();
+    check::<i32>();
+}

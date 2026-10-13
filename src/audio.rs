@@ -57,6 +57,7 @@ impl DspChain {
     /// Equal input/output lengths, scratch at least that long. No allocation or I/O.
     /// Scratch uses the same sample type, preserving integer and float neutral bypass.
     /// Process one selected mono input; the backend maps/silences output channels.
+    /// Returns the nonzero device input count, before any DSP attenuation or tails.
     pub fn process_block<T: Sample>(
         &mut self,
         input: &[T],
@@ -67,10 +68,11 @@ impl DspChain {
         assert!(scratch.len() >= input.len());
         let nonzero = if self.rumble.enabled() || self.gate.enabled() {
             let scratch = &mut scratch[..input.len()];
-            scratch.copy_from_slice(input);
+            let nonzero = crate::bypass_block(input, scratch);
             self.rumble.process_in_place(scratch);
             self.gate.process_in_place(scratch);
-            self.pitch.process_block(scratch, output)
+            self.pitch.process_block(scratch, output);
+            nonzero
         } else {
             self.pitch.process_block(input, output)
         };
