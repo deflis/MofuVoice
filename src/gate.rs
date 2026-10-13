@@ -167,7 +167,9 @@ impl NoiseGate {
     }
 
     fn process_sample(&mut self, input: f64) -> f64 {
-        let level = if input.is_finite() { input.abs() } else { 0.0 };
+        // Treat invalid active samples as silence in both detector and output.
+        let input = if input.is_finite() { input } else { 0.0 };
+        let level = input.abs();
         if level > self.envelope {
             self.envelope += (level - self.envelope) * self.detect_attack;
         } else {
@@ -242,6 +244,33 @@ mod tests {
         let mut output = [0; 5];
         gate.process_block(&input, &mut output);
         assert_eq!(input, output);
+    }
+
+    #[test]
+    fn invalid_samples_are_silenced_and_follow_the_silence_envelope() {
+        let input = [0.5_f32, f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.25];
+        let clean = [0.5_f32, 0.0, 0.0, 0.0, 0.25];
+        let mut expected = [0.0; 5];
+        NoiseGate::new(true, GateThreshold::Auto, 5.0, 80.0)
+            .unwrap()
+            .process_block(&clean, &mut expected);
+        let mut output = [0.0; 5];
+        NoiseGate::new(true, GateThreshold::Auto, 5.0, 80.0)
+            .unwrap()
+            .process_block(&input, &mut output);
+        assert_eq!(output, expected);
+        let mut in_place = input;
+        let mut gate = NoiseGate::new(true, GateThreshold::Auto, 5.0, 80.0).unwrap();
+        for chunk in in_place.chunks_mut(2) {
+            gate.process_in_place(chunk);
+        }
+        assert_eq!(in_place, expected);
+
+        let mut bypass = input;
+        NoiseGate::new(false, GateThreshold::Auto, 5.0, 80.0)
+            .unwrap()
+            .process_in_place(&mut bypass);
+        assert_eq!(bypass.map(f32::to_bits), input.map(f32::to_bits));
     }
 
     #[test]

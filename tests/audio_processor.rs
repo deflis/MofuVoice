@@ -33,6 +33,17 @@ fn neutral_bypass_preserves_supported_sample_formats() {
 }
 
 #[test]
+fn gate_only_silences_invalid_samples_without_losing_input_telemetry() {
+    let input = [0.25_f32, f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0];
+    let mut processor = AudioProcessor::new(RATE, 5, settings(&["--gate", "on"])).unwrap();
+    let mut output = [0.0; 5];
+    assert_eq!(processor.process_block(&input, &mut output).unwrap(), 4);
+    assert!(output.iter().all(|sample| sample.is_finite()));
+    assert_eq!(&output[1..], &[0.0; 4]);
+    assert!(output[0] > 0.0);
+}
+
+#[test]
 fn pipeline_matches_rumble_gate_pitch_level_order_across_variable_blocks() {
     let args = [
         "--rumble-filter",
