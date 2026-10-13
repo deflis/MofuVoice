@@ -25,6 +25,7 @@ export const settings = {
   pitch: "0",
   formantShift: "0",
   preserveFormants: true,
+  rumbleFilter: false,
   gate: false,
   gateThresholdMode: "auto",
   gateThresholdDb: "-50",

@@ -35,6 +35,8 @@ fn arguments(options: &Options) -> Vec<String> {
             "off"
         }
         .into(),
+        "--rumble-filter".into(),
+        if options.rumble_filter { "on" } else { "off" }.into(),
         "--gate".into(),
         if options.gate { "on" } else { "off" }.into(),
         "--gate-threshold".into(),
@@ -85,6 +87,7 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
             "pitch",
             "formant_shift",
             "preserve_formants",
+            "rumble_filter",
             "gate",
             "gate_threshold",
             "gate_attack_ms",
@@ -118,7 +121,14 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
         "false" | "off" => "off",
         _ => return Err("gate must be true or false".into()),
     };
+    let rumble = match values.get("rumble_filter").copied().unwrap_or("false") {
+        "true" => "on",
+        "false" => "off",
+        _ => return Err("rumble_filter must be true or false".into()),
+    };
     let mut args = vec![
+        "--rumble-filter",
+        rumble,
         "--backend",
         values.get("backend").copied().unwrap_or("asio"),
         "--frames",
@@ -181,6 +191,7 @@ pub(crate) fn merge(saved: &Options, args: Vec<String>) -> Result<Options, Box<d
             "--pitch",
             "--formant-shift",
             "--formant",
+            "--rumble-filter",
             "--gate",
             "--gate-threshold",
             "--gate-attack",
@@ -230,6 +241,7 @@ pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>>
         options.output_device,
         options.level.enabled
     ));
+    text.push_str(&format!("rumble_filter={}\n", options.rumble_filter));
     for (key, value) in crate::level::KEYS.iter().zip(options.level.values()) {
         text.push_str(&format!("{key}={value}\n"));
     }
@@ -252,6 +264,31 @@ pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>>
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn rumble_round_trip_legacy_and_override() {
+        let path =
+            std::env::temp_dir().join(format!("voice-rumble-settings-{}.ini", std::process::id()));
+        let options = Options::parse_gui(["--rumble-filter", "on"].map(String::from)).unwrap();
+        save(&path, &options).unwrap();
+        assert_eq!(load(&path).unwrap(), options);
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(
+            !decode(&text.replace("rumble_filter=true\n", ""))
+                .unwrap()
+                .rumble_filter
+        );
+        assert!(decode(&text.replace("rumble_filter=true", "rumble_filter=invalid")).is_err());
+        assert!(decode(&format!("{text}rumble_filter=false\n")).is_err());
+        assert!(
+            !merge(
+                &options,
+                ["--rumble-filter", "off"].map(String::from).to_vec()
+            )
+            .unwrap()
+            .rumble_filter
+        );
+        fs::remove_file(path).unwrap();
+    }
     #[test]
     fn backend_and_output_round_trip_with_legacy_asio_settings() {
         let path =

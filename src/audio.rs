@@ -7,6 +7,7 @@ use crate::{
 use std::error::Error;
 
 pub struct DspSettings {
+    pub rumble_filter: bool,
     pub semitones: f64,
     pub preserve_formants: bool,
     pub formant_shift: f64,
@@ -17,6 +18,7 @@ pub struct DspSettings {
 impl From<&crate::cli::Options> for DspSettings {
     fn from(options: &crate::cli::Options) -> Self {
         Self {
+            rumble_filter: options.rumble_filter,
             semitones: options.pitch,
             preserve_formants: options.preserve_formants,
             formant_shift: options.formant_shift,
@@ -32,6 +34,7 @@ impl From<&crate::cli::Options> for DspSettings {
 }
 
 pub struct DspChain {
+    pub(crate) rumble: crate::rumble::RumbleFilter,
     pub(crate) pitch: PitchShifter,
     pub(crate) gate: NoiseGate,
     pub(crate) level: AutoLevel,
@@ -40,6 +43,7 @@ pub struct DspChain {
 impl DspChain {
     pub fn new(settings: DspSettings) -> Result<Self, Box<dyn Error>> {
         Ok(Self {
+            rumble: crate::rumble::RumbleFilter::new(settings.rumble_filter),
             pitch: PitchShifter::new(
                 settings.semitones,
                 settings.preserve_formants,
@@ -61,9 +65,11 @@ impl DspChain {
     ) -> u64 {
         assert_eq!(input.len(), output.len());
         assert!(scratch.len() >= input.len());
-        let nonzero = if self.gate.enabled() {
+        let nonzero = if self.rumble.enabled() || self.gate.enabled() {
             let scratch = &mut scratch[..input.len()];
-            self.gate.process_block(input, scratch);
+            scratch.copy_from_slice(input);
+            self.rumble.process_in_place(scratch);
+            self.gate.process_in_place(scratch);
             self.pitch.process_block(scratch, output)
         } else {
             self.pitch.process_block(input, output)

@@ -65,6 +65,7 @@ pub struct Settings {
     pitch: String,
     formant_shift: String,
     preserve_formants: bool,
+    rumble_filter: bool,
     gate: bool,
     gate_threshold_mode: GateThresholdMode,
     gate_threshold_db: String,
@@ -82,6 +83,7 @@ impl Settings {
             pitch: options.pitch.to_string(),
             formant_shift: options.formant_shift.to_string(),
             preserve_formants: options.preserve_formants,
+            rumble_filter: options.rumble_filter,
             gate: options.gate,
             gate_threshold_mode: match options.gate_threshold {
                 GateThreshold::Auto => GateThresholdMode::Auto,
@@ -125,6 +127,8 @@ impl Settings {
                 "off"
             }
             .into(),
+            "--rumble-filter".into(),
+            if self.rumble_filter { "on" } else { "off" }.into(),
             "--gate".into(),
             if self.gate { "on" } else { "off" }.into(),
             "--gate-threshold".into(),
@@ -509,6 +513,8 @@ mod tests {
     fn auto_level_controls_round_trip_validate_and_persist() {
         let options = Options::parse_gui(
             [
+                "--rumble-filter",
+                "on",
                 "--auto-level",
                 "on",
                 "--level-target",
