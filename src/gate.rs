@@ -8,6 +8,8 @@ const RATIO: f64 = 4.0;
 const FLOOR_DB: f64 = -72.0;
 const HOLD_MS: f64 = 40.0;
 const AUTO_MARGIN_DB: f64 = 10.0;
+// Silence must not make quiet room/keyboard transients open the gate.
+const AUTO_MIN_THRESHOLD_DB: f64 = -45.0;
 const MIN_DB: f64 = -120.0;
 const DETECT_ATTACK_MS: f64 = 0.5;
 const DETECT_RELEASE_MS: f64 = 10.0;
@@ -146,7 +148,9 @@ impl NoiseGate {
     fn threshold_db(&self) -> f64 {
         match self.threshold {
             GateThreshold::Db(db) => db,
-            GateThreshold::Auto => (self.noise_floor_db + AUTO_MARGIN_DB).clamp(-90.0, -6.0),
+            GateThreshold::Auto => {
+                (self.noise_floor_db + AUTO_MARGIN_DB).clamp(AUTO_MIN_THRESHOLD_DB, -6.0)
+            }
         }
     }
 
@@ -333,5 +337,59 @@ mod tests {
         let mut output = vec![0.0; 64];
         gate.process_block(&input, &mut output);
         assert!(output[0].abs() > 0.9, "out0={}", output[0]);
+    }
+
+    #[test]
+    fn auto_suppresses_repeated_quiet_clicks_after_silence() {
+        let mut gate = NoiseGate::new(true, GateThreshold::Auto, 5.0, 80.0).unwrap();
+        gate.process_in_place(&mut vec![0.0_f32; RATE as usize * 2]);
+        let amplitude = from_db(-52.0) as f32;
+        let mut clicks = vec![0.0_f32; RATE as usize];
+        for start in (0..clicks.len()).step_by(RATE as usize / 10) {
+            // Three millisecond alternating transients, ten keystrokes per second.
+            for i in 0..144 {
+                clicks[start + i] = if i % 2 == 0 { amplitude } else { -amplitude };
+            }
+        }
+        gate.process_in_place(&mut clicks);
+        let peak = clicks.iter().map(|x| x.abs()).fold(0.0_f32, f32::max);
+        assert!(peak < amplitude * 0.1, "click attenuation <20 dB: {peak}");
+        assert_eq!(gate.threshold_db(), AUTO_MIN_THRESHOLD_DB);
+        assert_eq!(gate.hold_remaining, 0, "clicks must not trigger hold");
+    }
+
+    #[test]
+    fn auto_opens_for_quiet_voice_after_silence_and_closes_after_speech() {
+        let mut gate = NoiseGate::new(true, GateThreshold::Auto, 5.0, 80.0).unwrap();
+        gate.process_in_place(&mut vec![0.0_f32; RATE as usize * 2]);
+        let amplitude = from_db(-34.0) as f32;
+        let mut voice: Vec<f32> = (0..RATE as usize / 2)
+            .map(|i| {
+                (std::f64::consts::TAU * 180.0 * i as f64 / RATE as f64).sin() as f32 * amplitude
+            })
+            .collect();
+        let original = voice.clone();
+        gate.process_in_place(&mut voice);
+        // Gain attack must open promptly without buffering the speech onset.
+        let onset = (0..960).find(|&i| {
+            original[i].abs() > amplitude * 0.5 && voice[i].abs() > original[i].abs() * 0.8
+        });
+        assert!(onset.is_some(), "voice must open within 20 ms");
+        for (input, output) in original[2400..].iter().zip(&voice[2400..]) {
+            assert!((input - output).abs() < amplitude * 0.001);
+        }
+        gate.process_in_place(&mut vec![0.0_f32; RATE as usize]);
+        let mut noise = vec![from_db(-52.0) as f32; RATE as usize / 2];
+        gate.process_in_place(&mut noise);
+        assert!(noise.iter().all(|x| x.abs() < from_db(-52.0) as f32 * 0.1));
+    }
+
+    #[test]
+    fn manual_threshold_can_still_be_lower_than_auto_minimum() {
+        let mut gate = NoiseGate::new(true, GateThreshold::Db(-80.0), 5.0, 80.0).unwrap();
+        let mut quiet = vec![from_db(-65.0) as f32; RATE as usize / 2];
+        gate.process_in_place(&mut quiet);
+        assert_eq!(gate.threshold_db(), -80.0);
+        assert!(quiet.last().unwrap().abs() > from_db(-65.0) as f32 * 0.99);
     }
 }

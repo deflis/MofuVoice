@@ -44,6 +44,31 @@ fn gate_only_silences_invalid_samples_without_losing_input_telemetry() {
 }
 
 #[test]
+fn auto_gate_rejects_quiet_clicks_across_callback_boundaries() {
+    let mut input = vec![0.0_f32; RATE as usize * 3];
+    let amplitude = 10.0_f32.powf(-52.0 / 20.0);
+    for start in (RATE as usize * 2..input.len()).step_by(RATE as usize / 10) {
+        for i in 0..144 {
+            input[start + i] = if i % 2 == 0 { amplitude } else { -amplitude };
+        }
+    }
+    let run = |frames| {
+        let mut processor =
+            AudioProcessor::<f32>::new(RATE, frames, settings(&["--gate", "on"])).unwrap();
+        let mut output = vec![0.0; input.len()];
+        for (source, dest) in input.chunks(frames).zip(output.chunks_mut(frames)) {
+            processor.process_block(source, dest).unwrap();
+        }
+        output
+    };
+    let expected = run(512);
+    assert!(expected.iter().all(|x| x.abs() < amplitude * 0.1));
+    for frames in [1, 63, 128, 777] {
+        assert_eq!(run(frames), expected, "frames={frames}");
+    }
+}
+
+#[test]
 fn pipeline_matches_rumble_gate_pitch_level_order_across_variable_blocks() {
     let args = [
         "--rumble-filter",
