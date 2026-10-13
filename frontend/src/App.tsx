@@ -1,13 +1,14 @@
 import { useEffect, useReducer } from "react";
-import { useSettingsStore } from "./settingsStore";
-import { useSettingsLoadFailed, useSettingsReady } from "./settingsHooks";
+import { connectApplication } from "./applicationConnection";
+import { useSettingsReady, useSettingsLoadFailed } from "./settingsHooks";
 import { AudioControls } from "./components/AudioControls";
-import { SettingsPanel } from "./components/SettingsPanel";
-import { SaveSettingsButton } from "./components/SaveSettingsButton";
-import { AppHeader, Notifications, StatusDetails } from "./components/Status";
+import { SettingsWindow } from "./components/SettingsWindow";
+import { AppHeader } from "./components/AppHeader";
+import { Notifications } from "./components/Notifications";
+import { StatusDetails } from "./components/StatusDetails";
 
-function SettingsConnection() {
-  useEffect(() => useSettingsStore.getState().connect(), []);
+function ApplicationConnection() {
+  useEffect(() => connectApplication().disconnect, []);
   return null;
 }
 
@@ -18,7 +19,7 @@ export function App() {
 
   return (
     <main>
-      <SettingsConnection key={connectionAttempt} />
+      <ApplicationConnection key={connectionAttempt} />
       <AppHeader />
       <Notifications />
       {!ready ? (
@@ -34,8 +35,7 @@ export function App() {
       ) : (
         <>
           <AudioControls />
-          <SettingsPanel />
-          <SaveSettingsButton />
+          <SettingsWindow />
           <StatusDetails />
         </>
       )}

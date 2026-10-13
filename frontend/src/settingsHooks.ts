@@ -1,4 +1,5 @@
 import { useShallow } from "zustand/react/shallow";
+import { useAudioStore } from "./audioStore";
 import { requireSettings, useSettingsStore } from "./settingsStore";
 
 export function useSettingsReady() {
@@ -10,7 +11,11 @@ export function useSettingsLoadFailed() {
 }
 
 export function useSettingsLocked() {
-  return useSettingsStore((state) => state.pending || state.closing || state.snapshot.busy);
+  const audioLocked = useAudioStore(
+    (state) => state.pending || state.closing || state.snapshot.busy,
+  );
+  const saving = useSettingsStore((state) => state.saving || state.switchingBackend);
+  return audioLocked || saving;
 }
 
 export function useDeviceSettings() {
@@ -73,55 +78,10 @@ export function useAutoLevelSettings() {
   );
 }
 
-export function useAudioControls() {
-  return useSettingsStore(
-    useShallow((state) => {
-      const operating = state.pending || state.closing;
-      const busy = state.snapshot.busy;
-      return {
-        startDisabled:
-          operating ||
-          busy ||
-          !state.audioAvailable ||
-          (state.resolvedBackend === "asio" && !requireSettings(state.settings).device),
-        stopDisabled: operating || !busy,
-        spectrumDisabled: operating || !state.spectrumAvailable,
-        firstLine: state.snapshot.status.split("\n")[0],
-        start: state.start,
-        stop: state.stop,
-        spectrum: state.spectrum,
-      };
-    }),
-  );
-}
-
 export function useSaveSettings() {
-  return useSettingsStore(
-    useShallow((state) => ({
-      disabled: state.pending || state.closing,
-      save: state.save,
-    })),
+  const operating = useAudioStore((state) => state.pending || state.closing);
+  const { saving, save } = useSettingsStore(
+    useShallow((state) => ({ saving: state.saving || state.switchingBackend, save: state.save })),
   );
-}
-
-export function useHeaderStatus() {
-  return useSettingsStore((state) => {
-    if (state.closing) {
-      return "終了中";
-    }
-    if (state.snapshot.busy) {
-      return "処理中";
-    }
-    return "停止中";
-  });
-}
-
-export function useNotifications() {
-  return useSettingsStore(
-    useShallow((state) => ({ error: state.error || state.deviceError, notice: state.notice })),
-  );
-}
-
-export function useStatusDetails() {
-  return useSettingsStore((state) => state.snapshot.status);
+  return { disabled: operating || saving, save };
 }

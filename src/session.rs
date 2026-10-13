@@ -36,8 +36,38 @@ impl Drop for ComApartment {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "desktop", derive(serde::Serialize))]
+#[cfg_attr(feature = "desktop", serde(rename_all = "camelCase"))]
+pub struct AudioInfo {
+    pub phase: &'static str,
+    pub error: Option<String>,
+    pub device: Option<String>,
+    pub backend: Option<String>,
+    pub output_device: Option<String>,
+    pub sample_rate: Option<f64>,
+    pub inputs: Option<usize>,
+    pub outputs: Option<usize>,
+    pub frames: Option<u32>,
+    pub period_ms: Option<f64>,
+    pub dsp_ms: Option<f64>,
+    pub input_latency_ms: Option<f64>,
+    pub output_latency_ms: Option<f64>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "desktop", derive(serde::Serialize))]
+#[cfg_attr(feature = "desktop", serde(rename_all = "camelCase"))]
+pub struct AudioLog {
+    pub elapsed_seconds: Option<f64>,
+    pub telemetry: Option<backend::AudioTelemetry>,
+}
+
 pub struct Session {
     worker: Option<JoinHandle<()>>,
+    info: Arc<Mutex<AudioInfo>>,
+    log: Arc<Mutex<AudioLog>>,
+    logging: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     status: Arc<Mutex<String>>,
 }
@@ -45,13 +75,14 @@ impl Session {
     pub fn new() -> Self {
         Self {
             worker: None,
+            info: Arc::new(Mutex::new(AudioInfo {
+                phase: "ready",
+                ..AudioInfo::default()
+            })),
+            log: Arc::new(Mutex::new(AudioLog::default())),
+            logging: Arc::new(AtomicBool::new(false)),
             stop: Arc::new(AtomicBool::new(false)),
-            status: Arc::new(Mutex::new(
-                backend::default_backend()
-                    .err()
-                    .map(|error| error.to_string())
-                    .unwrap_or_else(|| "Ready. Inspect settings or start audio.".into()),
-            )),
+            status: Arc::new(Mutex::new("Ready. Inspect settings or start audio.".into())),
         }
     }
     pub fn start(&mut self, options: Options) -> Result<(), String> {
@@ -61,18 +92,35 @@ impl Session {
         self.stop.store(false, Ordering::Release);
         let stop = Arc::clone(&self.stop);
         let status = Arc::clone(&self.status);
+        let info = Arc::clone(&self.info);
+        let log = Arc::clone(&self.log);
+        *log.lock().unwrap() = AudioLog::default();
+        let logging = Arc::clone(&self.logging);
+        *info.lock().unwrap() = AudioInfo {
+            phase: "opening",
+            ..AudioInfo::default()
+        };
         set_status(&status, "Opening audio device...".into());
         match thread::Builder::new()
             .name("audio-control".into())
             .spawn(move || {
-                let result = run_audio(options, &stop, &status);
+                let result = run_audio(options, &stop, &status, &info, &log, &logging);
                 if let Err(error) = result {
+                    let mut info = info.lock().unwrap();
+                    info.phase = "error";
+                    info.error = Some(error.to_string());
                     let previous = status.lock().unwrap().clone();
                     set_status(&status, format!("ERROR: {error}\n\n{previous}"));
                 }
             }) {
             Ok(worker) => self.worker = Some(worker),
-            Err(error) => return Err(format!("Cannot start audio thread: {error}")),
+            Err(error) => {
+                let message = format!("Cannot start audio thread: {error}");
+                let mut info = self.info.lock().unwrap();
+                info.phase = "error";
+                info.error = Some(message.clone());
+                return Err(message);
+            }
         }
         Ok(())
     }
@@ -84,6 +132,9 @@ impl Session {
             && self.worker.take().unwrap().join().is_err()
         {
             set_status(&self.status, "ERROR: Audio worker panicked.".into());
+            let mut info = self.info.lock().unwrap();
+            info.phase = "error";
+            info.error = Some("Audio worker panicked".into());
         }
         self.worker.is_some()
     }
@@ -96,6 +147,18 @@ impl Default for Session {
 impl Session {
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Release);
+    }
+    pub fn set_logging(&self, logging: bool) {
+        self.logging.store(logging, Ordering::Release);
+    }
+    pub fn info(&self) -> AudioInfo {
+        self.info.lock().unwrap().clone()
+    }
+    pub fn log_info(&self) -> Option<AudioLog> {
+        if !self.logging.load(Ordering::Acquire) {
+            return None;
+        }
+        Some(self.log.lock().unwrap().clone())
     }
     pub fn status(&self) -> String {
         self.status.lock().unwrap().clone()
@@ -119,10 +182,34 @@ fn set_status(status: &Mutex<String>, message: String) {
     *status.lock().unwrap() = message;
 }
 
+fn update_configuration(
+    info: &Mutex<AudioInfo>,
+    config: &backend::AudioConfiguration,
+    options: &Options,
+    phase: &'static str,
+    kind: backend::BackendKind,
+) {
+    *info.lock().unwrap() = AudioInfo {
+        phase,
+        device: Some(config.device.clone()),
+        backend: Some(kind.name().into()),
+        output_device: Some(config.output_device.clone()),
+        sample_rate: Some(config.sample_rate),
+        inputs: Some(config.inputs),
+        outputs: Some(config.outputs),
+        frames: Some(options.frames),
+        period_ms: Some(options.frames as f64 * 1000.0 / config.sample_rate),
+        ..AudioInfo::default()
+    };
+}
+
 fn run_audio(
     options: Options,
     stop: &AtomicBool,
     status: &Mutex<String>,
+    info: &Mutex<AudioInfo>,
+    log: &Mutex<AudioLog>,
+    logging: &AtomicBool,
 ) -> Result<(), Box<dyn Error>> {
     let kind = backend::resolve(options.backend);
     #[cfg(all(windows, feature = "asio"))]
@@ -132,30 +219,47 @@ fn run_audio(
         None
     };
     let backend = backend::select(kind, &options.output_device)?;
-    let details = format!(
-        "Device: {}\n{}",
-        options.device,
-        backend.inspect(&options.device, options.frames)?
-    );
-    set_status(status, details.clone());
     if options.inspect {
+        let inspection = backend.inspect_configuration(&options.device, options.frames)?;
+        update_configuration(info, &inspection.configuration, &options, "inspected", kind);
         set_status(
             status,
-            format!("Inspection OK. No audio buffers created.\n{details}"),
+            format!(
+                "Inspection OK. No audio buffers created.\n{}",
+                inspection.details
+            ),
         );
         return Ok(());
     }
-    // Cancellation during driver initialization must not start playback afterward.
+    // Cancellation before or during driver initialization must not start playback afterward.
     if stop.load(Ordering::Acquire) {
-        set_status(status, format!("Stopped before playback.\n{details}"));
+        info.lock().unwrap().phase = "stopped";
+        set_status(status, "Stopped before playback.".into());
         return Ok(());
     }
     let mut engine = backend.open(&options.device, options.frames, DspSettings::from(&options))?;
+    let configuration = engine.configuration();
+    update_configuration(info, &configuration, &options, "opening", kind);
+    let details = format!("Device: {}\n{}", configuration.device, engine.details());
+    set_status(status, details.clone());
     if stop.load(Ordering::Acquire) {
+        info.lock().unwrap().phase = "stopped";
         set_status(status, format!("Stopped before playback.\n{details}"));
         return Ok(());
     }
     engine.start()?;
+    let (input, output) = engine.latency_ms()?;
+    {
+        let mut info = info.lock().unwrap();
+        info.phase = "running";
+        info.dsp_ms = Some(if options.pitch == 0.0 && options.formant_shift == 0.0 {
+            0.0
+        } else {
+            crate::pitch::LATENCY as f64 * 1000.0 / crate::RATE as f64
+        });
+        info.input_latency_ms = input;
+        info.output_latency_ms = output;
+    }
     let started = Instant::now();
     let mut last_progress = Instant::now();
     let mut last_blocks = 0;
@@ -170,24 +274,30 @@ fn run_audio(
             if last_progress.elapsed() > Duration::from_secs(2) {
                 return Err("No audio callbacks for 2 seconds".into());
             }
-            set_status(status, format!(
-                "Running: {:.1} s | pitch {} semitones | formant {} | shift {} semitones | gate {} | auto level {}\n{details}\nRequested period: {:.3} ms | Input 1 -> output 1\n{}\n\n{}\n\nNonzero input counts indicate signal arrival, not listening quality.\nTimestamp blocks=0 means gap detection is unavailable.",
-                started.elapsed().as_secs_f64(), options.pitch,
-                if options.preserve_formants { "preserve" } else { "off" },
-                options.formant_shift,
-                if options.gate { "on" } else { "off" },
-                if options.level.enabled { "on" } else { "off" },
-                options.frames as f64 * 1000.0 / crate::RATE as f64,
-                engine.latency_summary()?, engine.summary()
-            ));
+            if logging.load(Ordering::Acquire) {
+                let (input, output) = engine.latency_ms()?;
+                let mut info = info.lock().unwrap();
+                *log.lock().unwrap() = AudioLog {
+                    elapsed_seconds: Some(started.elapsed().as_secs_f64()),
+                    telemetry: Some(engine.telemetry()),
+                };
+                info.input_latency_ms = input;
+                info.output_latency_ms = output;
+            }
             thread::sleep(Duration::from_millis(100));
         }
         Ok(())
     })();
     let stop_result = engine.stop();
+    info.lock().unwrap().phase = "stopped";
+    if logging.load(Ordering::Acquire) {
+        *log.lock().unwrap() = AudioLog {
+            elapsed_seconds: Some(started.elapsed().as_secs_f64()),
+            telemetry: Some(engine.telemetry()),
+        };
+    }
     let summary = format!(
-        "Stopped: {:.1} s\n{details}\n{}\n{}",
-        started.elapsed().as_secs_f64(),
+        "Stopped.\n{details}\n{}\n{}",
         engine.latency_summary()?,
         engine.summary()
     );
@@ -195,7 +305,7 @@ fn run_audio(
     result?;
     stop_result?;
     engine.check_events()?;
-    // A user may cancel before callbacks or before CPAL finishes queue priming.
+    // A user cancelling immediately may stop before the first callback.
     if engine.has_playback() {
         engine.check_test_result()?;
     }
@@ -205,6 +315,60 @@ fn run_audio(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn status_uses_opened_devices_and_keeps_requested_period_separate() {
+        let options = Options::parse(
+            ["--backend", "cpal", "--frames", "64"]
+                .into_iter()
+                .map(String::from),
+        )
+        .unwrap();
+        let configuration = backend::AudioConfiguration {
+            device: "Actual microphone".into(),
+            output_device: "Actual headphones".into(),
+            sample_rate: crate::RATE as f64,
+            inputs: 1,
+            outputs: 2,
+        };
+        let info = Mutex::new(AudioInfo::default());
+        update_configuration(
+            &info,
+            &configuration,
+            &options,
+            "opening",
+            backend::BackendKind::Cpal,
+        );
+        let info = info.lock().unwrap();
+        assert_eq!(info.device.as_deref(), Some("Actual microphone"));
+        assert_eq!(info.output_device.as_deref(), Some("Actual headphones"));
+        assert_eq!(info.backend.as_deref(), Some("cpal"));
+        assert_eq!(info.frames, Some(64));
+        assert_eq!(info.period_ms, Some(64.0 * 1000.0 / crate::RATE as f64));
+    }
+
+    #[test]
+    fn logging_is_opt_in_and_keeps_initial_status_stable() {
+        let session = Session::new();
+        assert!(!session.logging.load(Ordering::Acquire));
+        assert_eq!(session.info().phase, "ready");
+        assert!(session.log.lock().unwrap().telemetry.is_none());
+        assert!(session.log_info().is_none());
+        {
+            let mut log = session.log.lock().unwrap();
+            log.elapsed_seconds = Some(1.0);
+            log.telemetry = Some(backend::AudioTelemetry::default());
+        }
+        session.set_logging(true);
+        assert!(session.logging.load(Ordering::Acquire));
+        assert_eq!(session.log_info().unwrap().elapsed_seconds, Some(1.0));
+        let status = session.info();
+        session.log.lock().unwrap().elapsed_seconds = Some(2.0);
+        assert_eq!(session.info(), status);
+        session.set_logging(false);
+        assert!(!session.logging.load(Ordering::Acquire));
+        assert!(session.log_info().is_none());
+        assert_eq!(session.info().phase, "ready");
+    }
     #[test]
     fn stop_and_shutdown_join_worker_without_audio_hardware() {
         let mut session = Session::new();
@@ -231,5 +395,10 @@ mod tests {
         session.worker = Some(worker);
         assert!(!session.poll());
         assert!(session.status().contains("panicked"));
+        assert_eq!(session.info().phase, "error");
+        assert_eq!(
+            session.info().error.as_deref(),
+            Some("Audio worker panicked")
+        );
     }
 }

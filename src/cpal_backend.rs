@@ -128,6 +128,7 @@ fn negotiate(
 }
 
 struct Prepared {
+    configuration: crate::backend::AudioConfiguration,
     input: cpal::Device,
     output: cpal::Device,
     format: SampleFormat,
@@ -146,7 +147,15 @@ impl CpalBackend {
         let details = format!("CPAL {:?}: input '{}' / {} channels / {:?}; output '{}' / {} channels / {:?}; 48000 Hz; format {format:?}. Input 1 -> output 1, other outputs silent. Default periods are chosen by the host and observed during playback.",
             cpal::default_host().id(), input.description()?.name(), input_config.channels, input_config.buffer_size,
             output.description()?.name(), output_config.channels, output_config.buffer_size);
+        let configuration = crate::backend::AudioConfiguration {
+            device: input.description()?.name().to_string(),
+            output_device: output.description()?.name().to_string(),
+            sample_rate: input_config.sample_rate as f64,
+            inputs: input_config.channels as usize,
+            outputs: output_config.channels as usize,
+        };
         Ok(Prepared {
+            configuration,
             input,
             output,
             format,
@@ -163,8 +172,16 @@ impl AudioBackend for CpalBackend {
     fn output_device_names(&self) -> Result<Vec<String>> {
         device_labels(false)
     }
-    fn inspect(&self, name: &str, frames: u32) -> Result<String> {
-        Ok(self.prepare(name, frames)?.details)
+    fn inspect_configuration(
+        &self,
+        name: &str,
+        frames: u32,
+    ) -> Result<crate::backend::AudioInspection> {
+        let prepared = self.prepare(name, frames)?;
+        Ok(crate::backend::AudioInspection {
+            configuration: prepared.configuration,
+            details: prepared.details,
+        })
     }
     fn open(&self, name: &str, frames: u32, dsp: DspSettings) -> Result<Box<dyn AudioStream>> {
         let prepared = self.prepare(name, frames)?;
@@ -417,6 +434,7 @@ fn build<T: Sample + cpal::SizedSample + Send + 'static>(
         input: Some(input),
         metrics,
         details: prepared.details,
+        configuration: prepared.configuration,
         capacity,
         started: false,
         running: false,
@@ -425,6 +443,7 @@ fn build<T: Sample + cpal::SizedSample + Send + 'static>(
 }
 
 struct CpalStream {
+    configuration: crate::backend::AudioConfiguration,
     output: Option<cpal::Stream>,
     input: Option<cpal::Stream>,
     metrics: Arc<Metrics>,
@@ -435,6 +454,12 @@ struct CpalStream {
     started_at: Option<Instant>,
 }
 impl AudioStream for CpalStream {
+    fn configuration(&self) -> crate::backend::AudioConfiguration {
+        self.configuration.clone()
+    }
+    fn details(&self) -> String {
+        self.details.clone()
+    }
     fn start(&mut self) -> Result<()> {
         if self.started {
             return Err("Open a new CPAL stream after stopping".into());
@@ -466,6 +491,40 @@ impl AudioStream for CpalStream {
     }
     fn has_playback(&self) -> bool {
         self.metrics.played_frames.load(Ordering::Relaxed) > 0
+    }
+    fn telemetry(&self) -> crate::backend::AudioTelemetry {
+        let metrics = &self.metrics;
+        crate::backend::AudioTelemetry {
+            blocks: self.blocks(),
+            nonzero_samples: metrics.nonzero.load(Ordering::Relaxed),
+            max_callback_us: metrics
+                .max_input_ns
+                .load(Ordering::Relaxed)
+                .max(metrics.max_output_ns.load(Ordering::Relaxed))
+                as f64
+                / 1000.0,
+            deadline_misses: metrics.deadline_misses.load(Ordering::Relaxed),
+            fault_flags: metrics.faults.load(Ordering::Relaxed),
+            output_blocks: Some(metrics.output_blocks.load(Ordering::Relaxed)),
+            underruns: Some(metrics.underruns.load(Ordering::Relaxed)),
+            overruns: Some(metrics.overruns.load(Ordering::Relaxed)),
+            queue_frames: Some(metrics.queue_depth.load(Ordering::Relaxed)),
+            observed_input_frames: Some(metrics.max_input_frames.load(Ordering::Relaxed)),
+            observed_output_frames: Some(metrics.max_output_frames.load(Ordering::Relaxed)),
+            queue_peak_frames: Some(metrics.queue_peak.load(Ordering::Relaxed)),
+            startup_queue_frames: Some(metrics.prime_frames.load(Ordering::Relaxed)),
+            queue_capacity_frames: Some(self.capacity),
+            max_input_callback_us: Some(
+                metrics.max_input_ns.load(Ordering::Relaxed) as f64 / 1000.0,
+            ),
+            max_output_callback_us: Some(
+                metrics.max_output_ns.load(Ordering::Relaxed) as f64 / 1000.0,
+            ),
+            ..crate::backend::AudioTelemetry::default()
+        }
+    }
+    fn latency_ms(&self) -> Result<(Option<f64>, Option<f64>)> {
+        Ok((None, None))
     }
     fn summary(&self) -> String {
         let m = &self.metrics;
@@ -529,6 +588,45 @@ impl Drop for CpalStream {
 mod tests {
     use super::*;
     use crate::cli::Options;
+
+    #[test]
+    fn structured_log_retains_observed_periods_and_queue_state() {
+        let (mut capture, mut playback, metrics) = callbacks::<f32>(
+            64,
+            1,
+            &["--pitch", "0", "--gate", "off", "--auto-level", "off"],
+        );
+        capture.process(&[0.25; 64]);
+        capture.process(&[0.25; 64]);
+        playback.process(&mut [0.0; 48]);
+        let stream = CpalStream {
+            configuration: crate::backend::AudioConfiguration {
+                device: "input".into(),
+                output_device: "output".into(),
+                sample_rate: RATE as f64,
+                inputs: 1,
+                outputs: 3,
+            },
+            input: None,
+            output: None,
+            metrics,
+            details: String::new(),
+            capacity: 512,
+            started: false,
+            running: false,
+            started_at: None,
+        };
+        let log = stream.telemetry();
+        assert_eq!(log.observed_input_frames, Some(64));
+        assert_eq!(log.observed_output_frames, Some(16));
+        assert_eq!(log.queue_peak_frames, Some(128));
+        assert_eq!(log.startup_queue_frames, Some(128));
+        assert_eq!(log.queue_capacity_frames, Some(512));
+        assert_eq!(log.queue_frames, Some(112));
+        assert_eq!(log.output_blocks, Some(1));
+        assert!(log.max_input_callback_us.is_some());
+        assert!(log.max_output_callback_us.is_some());
+    }
 
     fn callbacks<T: Sample + Send>(
         max_frames: usize,
