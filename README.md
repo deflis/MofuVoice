@@ -43,7 +43,7 @@ Voicemeeter（Banana / Potato）や VB-Audio Matrix でルーティングする�
 
 ### 4. 元の声で接続を確かめる
 
-**Start** を押し、マイクに向かって話します。下部に `Running` と表示され、出力先から元の声が聞こえることを確認してください。PitchとFormant shiftが両方0で、Noise gateとAuto levelがオフのときは、入力をそのまま返します。
+**Start** を押し、マイクに向かって話します。下部に `Running` と表示され、出力先から元の声が聞こえることを確認してください。PitchとFormant shiftが両方0で、低域ノイズ除去・Noise gate・Auto levelがオフのときは、入力をそのまま返します。
 
 ### 5. 声を変える
 
@@ -67,11 +67,17 @@ Voicemeeter（Banana / Potato）や VB-Audio Matrix でルーティングする�
 | **Preserve formants** | オンにすると、ピッチ変更時に元の声の響きを保つ補正を行います。既定オン |
 | **Formant shift** | 声の共鳴の移動量。−12〜+12半音、小数可。既定0。非ゼロではPreserve formantsをオンにします |
 
-Preserve formantsをオフにすると、声の高さとともに響きも変わります。同じPitchでオン・オフを切り替えて聞き比べると違いを確認できます。オフのときにFormant shiftを非ゼロにするとエラーになります。PitchとFormant shiftが両方0で、Noise gateとAuto levelがオフのときは、この設定にかかわらず元の音声を返します。
+Preserve formantsをオフにすると、声の高さとともに響きも変わります。同じPitchでオン・オフを切り替えて聞き比べると違いを確認できます。オフのときにFormant shiftを非ゼロにするとエラーになります。PitchとFormant shiftが両方0で、低域ノイズ除去・Noise gate・Auto levelがオフのときは、この設定にかかわらず元の音声を返します。
 
 大きなフォルマント移動では響きの幅や音量も変わり、歪みが生じる場合があります。まず±2〜3半音程度で聞きながら調整してください。
 
 Framesを小さくすると音声処理の周期が短くなりますが、処理が間に合わず音が途切れる場合があります。まず対応するサイズで安定して使えることを確認し、必要に応じて小さくしてください。
+
+## 低域ノイズ除去
+
+**低域ノイズ除去（80 Hz）** をオンにすると、机やマイクスタンドの振動、空調の低い唸りを抑えます。80 Hz・12 dB/octのハイパスフィルターをゲートと声変換の前に適用します。既定はオフです。低い声の厚みも減るため、聞き比べながら使ってください。破裂音の低域成分は軽減できますが、マイク自体のクリップは修復できません。
+
+CLIでは `--rumble-filter on` / `--rumble-filter off` で指定します。GUIではStop → 設定変更 → Startの順で切り替えます。設定はINIの `rumble_filter=true` / `false` に保存され、キーのない既存INIはオフとして読み込みます。先読みや音声バッファによる追加サンプル遅延はありませんが、周波数に応じた位相変化はあります。
 
 ## 自動音量調整
 
@@ -118,6 +124,7 @@ frames=512
 pitch=0
 formant_shift=0
 preserve_formants=true
+rumble_filter=false
 gate=false
 gate_threshold=auto
 gate_attack_ms=5
@@ -150,7 +157,7 @@ compress_release_ms=150
 
 下部には入力信号の累計、処理回数、ドライバのレイテンシ、異常などが表示されます。`nonzero input samples` が増えていれば入力信号が届いていますが、出力先で聞こえるかは実際に確認してください。
 
-PitchとFormant shiftが両方0で、Noise gateとAuto levelがオフならDSPは遅延なしのバイパスです。ゲートと自動音量調整も追加サンプル遅延は0ですが、オンの場合は音量を変更します。ピッチまたはフォルマント変換では約10.67 msのDSP遅延に、デバイスや音声の接続経路の遅延が加わります。Framesを小さくしてもDSPの合成遅延（512サンプル）は減りません。表示されるドライバのレイテンシは、マイクから出力先までの総遅延とは異なります。
+PitchとFormant shiftが両方0で、低域ノイズ除去・Noise gate・Auto levelがオフならDSPは遅延なしのバイパスです。ゲートと自動音量調整も追加サンプル遅延は0ですが、オンの場合は音量を変更します。ピッチまたはフォルマント変換では約10.67 msのDSP遅延に、デバイスや音声の接続経路の遅延が加わります。Framesを小さくしてもDSPの合成遅延（512サンプル）は減りません。表示されるドライバのレイテンシは、マイクから出力先までの総遅延とは異なります。
 
 ## CLIでの操作
 

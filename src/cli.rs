@@ -12,6 +12,7 @@ pub struct Options {
     pub preserve_formants: bool,
     pub formant_shift: f64,
     pub level: crate::level::LevelSettings,
+    pub rumble_filter: bool,
     pub gate: bool,
     pub gate_threshold: GateThreshold,
     pub gate_attack_ms: f64,
@@ -33,6 +34,7 @@ impl Options {
             preserve_formants: true,
             formant_shift: 0.0,
             level: crate::level::LevelSettings::default(),
+            rumble_filter: false,
             gate: false,
             gate_threshold: GateThreshold::Auto,
             gate_attack_ms: 5.0,
@@ -51,6 +53,7 @@ impl Options {
         let mut shift_given = false;
         let mut level_given = false;
         let mut level_fields = [false; 8];
+        let mut rumble_given = false;
         let mut gate_given = false;
         let mut gate_threshold_given = false;
         let mut gate_attack_given = false;
@@ -98,6 +101,14 @@ impl Options {
                         .parse()?;
                     options.level.set(index, value);
                     level_fields[index] = true;
+                }
+                "--rumble-filter" if !rumble_given => {
+                    options.rumble_filter = match args.next().as_deref() {
+                        Some("on") => true,
+                        Some("off") => false,
+                        _ => return Err("--rumble-filter requires on or off".into()),
+                    };
+                    rumble_given = true;
                 }
                 "--gate" if !gate_given => {
                     options.gate = match args.next().as_deref() {
@@ -204,19 +215,20 @@ impl Options {
                     || shift_given
                     || level_given
                     || level_fields.iter().any(|given| *given)
+                    || rumble_given
                     || gate_given
                     || gate_tuned))
             || (options.help && backend_given)
             || ((options.list || options.help) && (device_given || output_given || frames_given))
         {
-            return Err("Choose one CLI mode: --help, --list-devices, --inspect [--device NAME] [--frames N], or [--device NAME] [--frames N] [--seconds N] [--pitch SEMITONES] [--formant preserve|off] [--formant-shift SEMITONES] [--auto-level on|off] [--level-target DB] [--level-max-gain DB] [--level-floor DB] [--level-response MS] [--compress-threshold DB] [--compress-ratio N] [--compress-attack MS] [--compress-release MS] [--gate on|off] [--gate-threshold auto|DB] [--gate-attack MS] [--gate-release MS]".into());
+            return Err("Choose one CLI mode: --help, --list-devices, --inspect [--device NAME] [--frames N], or [--device NAME] [--frames N] [--seconds N] [--pitch SEMITONES] [--formant preserve|off] [--formant-shift SEMITONES] [--auto-level on|off] [--level-target DB] [--level-max-gain DB] [--level-floor DB] [--level-response MS] [--compress-threshold DB] [--compress-ratio N] [--compress-attack MS] [--compress-release MS] [--rumble-filter on|off] [--gate on|off] [--gate-threshold auto|DB] [--gate-attack MS] [--gate-release MS]".into());
         }
         Ok(options)
     }
     pub fn parse_gui(args: impl IntoIterator<Item = String>) -> Result<Self, Box<dyn Error>> {
         let options = Self::parse(args)?;
         if options.seconds.is_some() || options.inspect || options.list {
-            return Err("GUI accepts device, buffer, pitch, formant, gate and auto-level settings, or --help. Use the CLI for timed runs, inspection or device listing.".into());
+            return Err("GUI accepts device, buffer, pitch, formant, rumble filter, gate and auto-level settings, or --help. Use the CLI for timed runs, inspection or device listing.".into());
         }
         Ok(options)
     }
@@ -316,6 +328,27 @@ mod tests {
         assert!(parse(&["--formant", "off", "--formant-shift", "0"]).is_ok());
     }
 
+    #[test]
+    fn rumble_filter_defaults_and_validation() {
+        assert!(!parse(&[]).unwrap().rumble_filter);
+        assert!(parse(&["--rumble-filter", "on"]).unwrap().rumble_filter);
+        assert!(!parse(&["--rumble-filter", "off"]).unwrap().rumble_filter);
+        for args in [
+            vec!["--rumble-filter"],
+            vec!["--rumble-filter", "maybe"],
+            vec!["--rumble-filter", "on", "--rumble-filter", "off"],
+            vec!["--rumble-filter", "off", "--help"],
+            vec!["--rumble-filter", "on", "--inspect"],
+            vec!["--rumble-filter", "on", "--list-devices"],
+        ] {
+            assert!(parse(&args).is_err(), "{args:?}");
+        }
+        assert!(
+            Options::parse_gui(["--rumble-filter", "on"].map(String::from))
+                .unwrap()
+                .rumble_filter
+        );
+    }
     #[test]
     fn parses_gate_options() {
         let options = parse(&[

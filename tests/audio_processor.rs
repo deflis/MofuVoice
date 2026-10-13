@@ -33,8 +33,10 @@ fn neutral_bypass_preserves_supported_sample_formats() {
 }
 
 #[test]
-fn pipeline_matches_gate_pitch_level_order_across_variable_blocks() {
+fn pipeline_matches_rumble_gate_pitch_level_order_across_variable_blocks() {
     let args = [
+        "--rumble-filter",
+        "on",
         "--pitch",
         "3",
         "--gate",
@@ -45,6 +47,7 @@ fn pipeline_matches_gate_pitch_level_order_across_variable_blocks() {
         "on",
     ];
     let dsp = settings(&args);
+    let mut rumble = rust_low_latency_voice_changer::rumble::RumbleFilter::new(dsp.rumble_filter);
     let mut gate: NoiseGate = dsp.gate.build().unwrap();
     let mut pitch =
         PitchShifter::new(dsp.semitones, dsp.preserve_formants, dsp.formant_shift).unwrap();
@@ -53,7 +56,9 @@ fn pipeline_matches_gate_pitch_level_order_across_variable_blocks() {
     let input: Vec<_> = (0..12000).map(|i| (i as f32 * 0.03).sin() * 0.1).collect();
     let mut gated = vec![0.0; input.len()];
     let mut expected = vec![0.0; input.len()];
-    gate.process_block(&input, &mut gated);
+    let mut filtered = input.clone();
+    rumble.process_in_place(&mut filtered);
+    gate.process_block(&filtered, &mut gated);
     pitch.process_block(&gated, &mut expected);
     level.process_in_place(&mut expected);
     let mut actual = vec![0.0; input.len()];
@@ -91,4 +96,57 @@ fn invalid_configuration_and_buffers_fail_without_advancing_state() {
         fresh.process_block(&[0.1; 64], &mut expected).unwrap();
         assert_eq!(actual, expected);
     }
+}
+
+#[test]
+fn rumble_only_filters_before_neutral_pitch_without_gate_or_level() {
+    let input: Vec<f32> = (0..48000)
+        .map(|i| (0.2 * (std::f64::consts::TAU * 20.0 * i as f64 / RATE as f64).sin()) as f32)
+        .collect();
+    let mut expected = input.clone();
+    rust_low_latency_voice_changer::rumble::RumbleFilter::new(true).process_in_place(&mut expected);
+    let mut processor =
+        AudioProcessor::<f32>::new(RATE, 512, settings(&["--rumble-filter", "on"])).unwrap();
+    let mut actual = vec![0.0; input.len()];
+    for (source, dest) in input.chunks(511).zip(actual.chunks_mut(511)) {
+        processor.process_block(source, dest).unwrap();
+    }
+    assert_eq!(actual, expected);
+    assert!(actual[24000..].iter().all(|x| x.abs() < 0.013));
+}
+
+#[test]
+fn nonzero_input_count_survives_integer_dc_removal() {
+    fn check<T: Sample>() {
+        for gate in ["off", "on"] {
+            let mut processor = AudioProcessor::<T>::new(
+                RATE,
+                512,
+                settings(&["--rumble-filter", "on", "--gate", gate]),
+            )
+            .unwrap();
+            let dc = T::from_normalized(0.1);
+            let mut output = [T::default(); 512];
+            // DC settles below one LSB, but every input sample remains nonzero.
+            for frames in [1, 63, 511, 512].into_iter().cycle().take(200) {
+                assert_eq!(
+                    processor
+                        .process_block(&[dc; 512][..frames], &mut output[..frames])
+                        .unwrap(),
+                    frames as u64
+                );
+            }
+            assert!(output.iter().all(|x| *x == T::default()));
+            // Filter ringing is output activity, not device input activity.
+            assert_eq!(
+                processor
+                    .process_block(&[T::default(); 512], &mut output)
+                    .unwrap(),
+                0
+            );
+            assert!(output.iter().any(|x| *x != T::default()));
+        }
+    }
+    check::<i16>();
+    check::<i32>();
 }

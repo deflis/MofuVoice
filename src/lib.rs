@@ -17,6 +17,7 @@ pub mod level;
 #[cfg(windows)]
 pub mod native_spectrum;
 pub mod pitch;
+pub mod rumble;
 pub mod session;
 pub mod spectrum;
 pub const RATE: u32 = 48_000;

@@ -43,6 +43,7 @@ export function useVoiceSettings() {
     useShallow((state) => {
       const settings = requireSettings(state.settings);
       return {
+        rumbleFilter: settings.rumbleFilter,
         pitch: settings.pitch,
         formantShift: settings.formantShift,
         preserveFormants: settings.preserveFormants,

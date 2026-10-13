@@ -18,6 +18,7 @@ export type Settings = {
   pitch: string;
   formantShift: string;
   preserveFormants: boolean;
+  rumbleFilter: boolean;
   gate: boolean;
   gateThresholdMode: "auto" | "manual";
   gateThresholdDb: string;

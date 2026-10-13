@@ -192,6 +192,15 @@ impl NoiseGate {
         input * self.gain
     }
 
+    pub fn process_in_place<T: Sample>(&mut self, samples: &mut [T]) {
+        if !self.enabled {
+            return;
+        }
+        for sample in samples {
+            *sample = T::from_normalized(self.process_sample(sample.normalized()));
+        }
+    }
+
     pub fn process_block<T: Sample>(&mut self, input: &[T], output: &mut [T]) {
         assert_eq!(
             input.len(),
