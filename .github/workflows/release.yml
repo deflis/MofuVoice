@@ -4,6 +4,13 @@ on:
   push:
     branches: [master]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: windows-latest
@@ -26,6 +33,11 @@ jobs:
 
       - name: Set up LLVM and ASIO SDK
         run: mise run setup:ci
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "26.11.1"
+          cache: pnpm
 
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile

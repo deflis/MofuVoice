@@ -459,6 +459,11 @@ pub fn show_message(message: &str, error: bool) {
         );
     }
 }
+#[cfg(not(windows))]
+pub fn show_message(message: &str, _error: bool) {
+    eprintln!("{message}");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -565,9 +570,4 @@ mod tests {
         settings.frames = "0".into();
         assert!(settings.options().is_err());
     }
-}
-
-#[cfg(not(windows))]
-pub fn show_message(message: &str, _error: bool) {
-    eprintln!("{message}");
 }
