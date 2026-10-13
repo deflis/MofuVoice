@@ -48,6 +48,10 @@ fn portable_processor_does_not_allocate_with_rumble_gate_pitch_and_level_enabled
             "on",
             "--auto-level",
             "on",
+            "--eq",
+            "on",
+            "--eq-band1",
+            "250,-3,0.7",
         ]
         .map(String::from),
     )

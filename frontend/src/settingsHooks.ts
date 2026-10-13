@@ -87,3 +87,14 @@ export function useSaveSettings() {
   );
   return { disabled: operating || saving, save };
 }
+
+export function useEqSettings() {
+  return useSettingsStore(
+    useShallow((state) => ({
+      eq: requireSettings(state.settings).eq,
+      update: state.update,
+      updateBand: state.updateEqBand,
+      reset: state.resetEq,
+    })),
+  );
+}

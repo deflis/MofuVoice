@@ -9,7 +9,15 @@ export type LevelSettings = {
   attackMs: string;
   releaseMs: string;
 };
+export type EqBand = { frequency: string; gainDb: string; q: string };
+export type EqSettings = {
+  enabled: boolean;
+  mode: "simple" | "pro";
+  bands: [EqBand, EqBand, EqBand];
+  outputDb: string;
+};
 export type Settings = {
+  eq: EqSettings;
   level: LevelSettings;
   device: string;
   outputDevice: string;

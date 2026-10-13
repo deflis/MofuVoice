@@ -208,3 +208,47 @@ dd {
     grid-template-columns: 1fr;
   }
 }
+.eq-modes {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  gap: 8px;
+}
+.eq-modes button[aria-pressed="true"] {
+  background: #00c4b4;
+  color: #0a1416;
+}
+.eq-controls {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.eq-simple-band {
+  margin: 18px 0;
+}
+.eq-simple-band > label,
+.eq-scale {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.eq-simple-band input[type="range"] {
+  width: 100%;
+}
+.eq-scale {
+  color: #abb3c0;
+  font-size: 12px;
+}
+.eq-pro-band {
+  border: 1px solid #373c46;
+  border-radius: 6px;
+  margin: 12px 0;
+  min-width: 0;
+}
+.eq-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
