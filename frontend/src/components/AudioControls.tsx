@@ -1,7 +1,7 @@
-import { useAudioControls } from "../settingsHooks";
+import { useAudioControls } from "../audioHooks";
 
 export function AudioControls() {
-  const { startDisabled, stopDisabled, spectrumDisabled, firstLine, start, stop, spectrum } =
+  const { startDisabled, stopDisabled, spectrumDisabled, start, stop, spectrum } =
     useAudioControls();
   return (
     <section>
@@ -19,9 +19,6 @@ export function AudioControls() {
           スペアナ
         </button>
       </div>
-      <p>
-        <output>{firstLine}</output>
-      </p>
     </section>
   );
 }

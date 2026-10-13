@@ -116,6 +116,15 @@ impl Configuration {
             granularity,
         })
     }
+    pub fn audio_configuration(&self) -> crate::backend::AudioConfiguration {
+        crate::backend::AudioConfiguration {
+            device: String::new(),
+            output_device: String::new(),
+            sample_rate: self.rate,
+            inputs: self.inputs,
+            outputs: self.outputs,
+        }
+    }
     pub fn print(&self) {
         println!("{}", self.summary());
     }
@@ -426,12 +435,18 @@ unsafe extern "C" {
 
 pub use crate::audio::DspSettings;
 pub struct Engine {
+    configuration: crate::backend::AudioConfiguration,
+    details: String,
     driver: Driver,
     state: Box<CallbackState>,
     prepared: bool,
     running: bool,
 }
 impl Engine {
+    pub fn set_device_name(&mut self, name: &str) {
+        self.configuration.device = name.to_string();
+        self.configuration.output_device = name.to_string();
+    }
     pub fn open(
         driver: Driver,
         config: Configuration,
@@ -464,6 +479,8 @@ impl Engine {
             scratch: UnsafeCell::new(vec![0.0; frames as usize]),
         });
         let mut engine = Self {
+            configuration: config.audio_configuration(),
+            details: config.summary(),
             driver,
             state,
             prepared: false,
@@ -576,6 +593,12 @@ impl Engine {
     }
 }
 impl crate::backend::AudioStream for Engine {
+    fn configuration(&self) -> crate::backend::AudioConfiguration {
+        self.configuration.clone()
+    }
+    fn details(&self) -> String {
+        self.details.clone()
+    }
     fn start(&mut self) -> Result<()> {
         Engine::start(self)
     }
@@ -584,6 +607,30 @@ impl crate::backend::AudioStream for Engine {
     }
     fn blocks(&self) -> u64 {
         Engine::blocks(self)
+    }
+    fn telemetry(&self) -> crate::backend::AudioTelemetry {
+        let metrics = &self.state.metrics;
+        crate::backend::AudioTelemetry {
+            blocks: self.blocks(),
+            nonzero_samples: metrics.nonzero.load(Ordering::Relaxed),
+            max_callback_us: metrics.max_ns.load(Ordering::Relaxed) as f64 / 1000.0,
+            deadline_misses: metrics.late.load(Ordering::Relaxed),
+            timestamp_blocks: Some(metrics.timestamp_blocks.load(Ordering::Relaxed)),
+            sample_position_gaps: Some(metrics.gaps.load(Ordering::Relaxed)),
+            fault_flags: metrics.faults.load(Ordering::Relaxed),
+            ..crate::backend::AudioTelemetry::default()
+        }
+    }
+    fn latency_ms(&self) -> Result<(Option<f64>, Option<f64>)> {
+        let (mut input, mut output) = (0, 0);
+        check(
+            unsafe { asio_get_latencies(&mut input, &mut output) },
+            "ASIOGetLatencies",
+        )?;
+        Ok((
+            Some(input as f64 * 1000.0 / RATE as f64),
+            Some(output as f64 * 1000.0 / RATE as f64),
+        ))
     }
     fn summary(&self) -> String {
         Engine::summary(self)
