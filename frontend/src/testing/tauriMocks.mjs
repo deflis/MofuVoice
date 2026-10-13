@@ -26,7 +26,8 @@ export const settings = {
   formantShift: "0",
   preserveFormants: true,
   gate: false,
-  gateThreshold: "auto",
+  gateThresholdMode: "auto",
+  gateThresholdDb: "-50",
   gateAttackMs: "1",
   gateReleaseMs: "100",
   level: {

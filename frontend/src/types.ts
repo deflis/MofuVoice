@@ -19,7 +19,8 @@ export type Settings = {
   formantShift: string;
   preserveFormants: boolean;
   gate: boolean;
-  gateThreshold: string;
+  gateThresholdMode: "auto" | "manual";
+  gateThresholdDb: string;
   gateAttackMs: string;
   gateReleaseMs: string;
 };

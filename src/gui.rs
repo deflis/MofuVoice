@@ -47,6 +47,13 @@ impl LevelControls {
     }
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum GateThresholdMode {
+    Auto,
+    Manual,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Settings {
@@ -59,7 +66,8 @@ pub struct Settings {
     formant_shift: String,
     preserve_formants: bool,
     gate: bool,
-    gate_threshold: String,
+    gate_threshold_mode: GateThresholdMode,
+    gate_threshold_db: String,
     gate_attack_ms: String,
     gate_release_ms: String,
 }
@@ -75,8 +83,12 @@ impl Settings {
             formant_shift: options.formant_shift.to_string(),
             preserve_formants: options.preserve_formants,
             gate: options.gate,
-            gate_threshold: match options.gate_threshold {
-                GateThreshold::Auto => "auto".into(),
+            gate_threshold_mode: match options.gate_threshold {
+                GateThreshold::Auto => GateThresholdMode::Auto,
+                GateThreshold::Db(_) => GateThresholdMode::Manual,
+            },
+            gate_threshold_db: match options.gate_threshold {
+                GateThreshold::Auto => "-50".into(),
                 GateThreshold::Db(db) => db.to_string(),
             },
             gate_attack_ms: options.gate_attack_ms.to_string(),
@@ -84,6 +96,19 @@ impl Settings {
         }
     }
     fn options(&self) -> Result<Options, String> {
+        let threshold = match self.gate_threshold_mode {
+            GateThresholdMode::Auto => GateThreshold::Auto,
+            GateThresholdMode::Manual => {
+                let db = self
+                    .gate_threshold_db
+                    .parse::<f64>()
+                    .map_err(|_| "ゲートの手動値には−90〜0 dBFSの数値を指定してください。")?;
+                if !db.is_finite() || !(-90.0..=0.0).contains(&db) {
+                    return Err("ゲートの手動値には−90〜0 dBFSの数値を指定してください。".into());
+                }
+                GateThreshold::Db(db)
+            }
+        };
         let mut args = vec![
             "--backend".into(),
             self.backend.clone(),
@@ -103,7 +128,10 @@ impl Settings {
             "--gate".into(),
             if self.gate { "on" } else { "off" }.into(),
             "--gate-threshold".into(),
-            self.gate_threshold.clone(),
+            match threshold {
+                GateThreshold::Auto => "auto".into(),
+                GateThreshold::Db(db) => db.to_string(),
+            },
             "--gate-attack".into(),
             self.gate_attack_ms.clone(),
             "--gate-release".into(),
@@ -434,6 +462,44 @@ pub fn show_message(message: &str, error: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn gate_mode_and_manual_value_map_to_engine_settings() {
+        let options = Options::parse_gui(Vec::new()).unwrap();
+        let mut settings = Settings::from_options(&options);
+        assert!(matches!(
+            settings.gate_threshold_mode,
+            GateThresholdMode::Auto
+        ));
+        assert_eq!(
+            settings.options().unwrap().gate_threshold,
+            GateThreshold::Auto
+        );
+        settings.gate_threshold_mode = GateThresholdMode::Manual;
+        for value in ["-90", "-35.5", "0"] {
+            settings.gate_threshold_db = value.into();
+            let manual = settings.options().unwrap();
+            assert_eq!(
+                manual.gate_threshold,
+                GateThreshold::Db(value.parse().unwrap())
+            );
+            let restored = Settings::from_options(&manual);
+            assert!(matches!(
+                restored.gate_threshold_mode,
+                GateThresholdMode::Manual
+            ));
+            assert_eq!(restored.gate_threshold_db, value);
+        }
+        for value in ["auto", "", "NaN", "inf", "-91", "1"] {
+            settings.gate_threshold_db = value.into();
+            assert!(settings.options().is_err(), "{value}");
+        }
+        settings.gate_threshold_mode = GateThresholdMode::Auto;
+        assert_eq!(
+            settings.options().unwrap().gate_threshold,
+            GateThreshold::Auto
+        );
+    }
+
     #[test]
     fn auto_level_controls_round_trip_validate_and_persist() {
         let options = Options::parse_gui(

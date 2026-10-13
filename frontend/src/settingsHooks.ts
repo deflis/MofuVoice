@@ -58,7 +58,8 @@ export function useNoiseGateSettings() {
       const settings = requireSettings(state.settings);
       return {
         gate: settings.gate,
-        gateThreshold: settings.gateThreshold,
+        gateThresholdMode: settings.gateThresholdMode,
+        gateThresholdDb: settings.gateThresholdDb,
         gateAttackMs: settings.gateAttackMs,
         gateReleaseMs: settings.gateReleaseMs,
         update: state.update,
