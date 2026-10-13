@@ -199,11 +199,33 @@ impl Fft {
                 data.swap(i, j);
             }
         }
-        let mut size = 2;
-        while size <= N {
-            let half = size / 2;
-            let stride = N / size;
-            for block in data.chunks_exact_mut(size) {
+        // Fixed stage sizes let the compiler specialize strides and butterfly
+        // loops for our power-of-two transforms instead of dividing at runtime.
+        Self::stage::<N, 2>(roots, data);
+        Self::stage::<N, 4>(roots, data);
+        Self::stage::<N, 8>(roots, data);
+        Self::stage::<N, 16>(roots, data);
+        Self::stage::<N, 32>(roots, data);
+        Self::stage::<N, 64>(roots, data);
+        Self::stage::<N, 128>(roots, data);
+        Self::stage::<N, 256>(roots, data);
+        Self::stage::<N, 512>(roots, data);
+        Self::stage::<N, 1024>(roots, data);
+        Self::stage::<N, 2048>(roots, data);
+        if let Some(scale) = scale {
+            for value in data {
+                value.re *= scale;
+                value.im *= scale;
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn stage<const N: usize, const SIZE: usize>(roots: &[Complex], data: &mut [Complex; N]) {
+        if SIZE <= N {
+            let half = SIZE / 2;
+            let stride = N / SIZE;
+            for block in data.as_chunks_mut::<SIZE>().0 {
                 let (left, right) = block.split_at_mut(half);
                 for ((left, right), root) in
                     left.iter_mut().zip(right).zip(roots.iter().step_by(stride))
@@ -221,13 +243,6 @@ impl Fft {
                         im: a.im - im,
                     };
                 }
-            }
-            size *= 2;
-        }
-        if let Some(scale) = scale {
-            for value in data {
-                value.re *= scale;
-                value.im *= scale;
             }
         }
     }
@@ -347,7 +362,18 @@ impl Fft {
 }
 
 fn wrap(phase: f64) -> f64 {
-    (phase + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI
+    // Internal phases are bounded (bin advances, window-centre offsets and
+    // wrapped accumulators). Quotient reduction avoids a floating remainder
+    // call for every analysis bin; roundoff is far below the phase tolerance.
+    let shifted = phase + std::f64::consts::PI;
+    let period = std::f64::consts::TAU;
+    let mut remainder = shifted - (shifted / period).floor() * period;
+    if remainder < 0.0 {
+        remainder += period;
+    } else if remainder >= period {
+        remainder -= period;
+    }
+    remainder - std::f64::consts::PI
 }
 
 pub struct PitchShifter {
@@ -486,13 +512,13 @@ impl PitchShifter {
         }
         if self.preserve_formants {
             // Real cepstral low-pass estimates a smooth envelope without fitting harmonics.
-            for i in 0..WINDOW {
-                let bin = i.min(WINDOW - i);
+            for i in 0..BINS {
                 self.envelope_work[i] = Complex {
-                    re: self.magnitude[bin].max(1e-12).ln(),
+                    re: self.magnitude[i].max(1e-12).ln(),
                     im: 0.0,
                 };
             }
+            // inverse_real reads only the nonnegative-frequency bins.
             self.fft
                 .inverse_real(&mut self.envelope_work, &mut self.fft_work);
             self.envelope_work[CEPSTRUM + 1..WINDOW - CEPSTRUM].fill(Complex::default());
@@ -539,7 +565,7 @@ impl PitchShifter {
         }
         self.previous_peaks[..count].copy_from_slice(&self.peaks[..count]);
         self.previous_peak_count = count;
-        self.shifted.fill(Complex::default());
+        self.shifted[..BINS].fill(Complex::default());
         self.shifted[0] = self.spectrum[0];
         if self.ratio == 1.0 {
             self.shifted[BINS - 1] = self.spectrum[BINS - 1];
@@ -633,12 +659,8 @@ impl PitchShifter {
                 self.shifted[bin].im += value.im;
             }
         }
-        for i in 1..BINS - 1 {
-            self.shifted[WINDOW - i] = Complex {
-                re: self.shifted[i].re,
-                im: -self.shifted[i].im,
-            };
-        }
+        // inverse_real reconstructs the real sequence from the positive half;
+        // it does not need an explicitly mirrored negative-frequency spectrum.
         self.fft.inverse_real(&mut self.shifted, &mut self.fft_work);
         let start = WINDOW - SYNTHESIS;
         for i in start..WINDOW {
@@ -693,6 +715,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn quotient_phase_wrap_matches_remainder_over_internal_range() {
+        let pi = std::f64::consts::PI;
+        let tau = std::f64::consts::TAU;
+        let check = |phase: f64| {
+            let expected = (phase + pi).rem_euclid(tau) - pi;
+            let actual = wrap(phase);
+            assert!((-pi..pi).contains(&actual));
+            let error = (actual - expected).abs();
+            let circular_error = error.min((error - tau).abs());
+            assert!(
+                circular_error < 2e-12,
+                "phase={phase}, error={circular_error}"
+            );
+        };
+        for i in -65536..=65536 {
+            check(i as f64 / 8.0);
+        }
+        for turn in -1024..=1024 {
+            let boundary = turn as f64 * tau - pi;
+            for offset in [-1e-10, -1e-12, 0.0, 1e-12, 1e-10] {
+                check(boundary + offset);
+            }
+        }
+    }
+
+    #[test]
     fn shared_phase_rotation_matches_polar_reference_across_retargeting() {
         let input: Vec<f32> = (0..8192)
             .map(|i| {
@@ -717,6 +765,28 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn inverse_real_ignores_negative_frequency_storage() {
+        let fft = Fft::new();
+        let mut spectrum = std::array::from_fn(|i| Complex {
+            re: (i as f64 * 0.31).sin(),
+            im: 0.0,
+        });
+        let mut work = [Complex::default(); HALF];
+        fft.forward_real(&mut spectrum, &mut work);
+        let mut positive_only = spectrum;
+        positive_only[BINS..].fill(Complex {
+            re: f64::NAN,
+            im: f64::NAN,
+        });
+        fft.inverse_real(&mut spectrum, &mut work);
+        fft.inverse_real(&mut positive_only, &mut work);
+        for (expected, actual) in spectrum.iter().zip(positive_only) {
+            assert_eq!(expected.re.to_bits(), actual.re.to_bits());
+            assert_eq!(expected.im.to_bits(), actual.im.to_bits());
         }
     }
 
