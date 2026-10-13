@@ -247,8 +247,8 @@ impl AudioBackend for AsioBackend {
         let driver = load_driver(name)?;
         let config = crate::asio::Configuration::query(&driver)?;
         config.validate(frames)?;
-        routing.validate(config.inputs, config.outputs)?;
         let mut configuration = config.audio_configuration();
+        routing.validate(configuration.inputs, configuration.outputs)?;
         configuration.device = name.to_string();
         configuration.output_device = name.to_string();
         Ok(AudioInspection {
