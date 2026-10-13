@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
-import type { Bootstrap, DeviceChoices, LevelSettings, Settings } from "./types";
+import type { Bootstrap, DeviceChoices, EqBand, LevelSettings, Settings } from "./types";
 export type { LevelSettings, Settings } from "./types";
 
 type SettingsStore = {
@@ -24,6 +24,8 @@ type SettingsStore = {
   update: <K extends keyof Settings>(key: K, value: Settings[K]) => void;
   updateLevel: <K extends keyof LevelSettings>(key: K, value: LevelSettings[K]) => void;
   resetLevel: () => void;
+  updateEqBand: (index: 0 | 1 | 2, key: keyof EqBand, value: string) => void;
+  resetEq: () => void;
 };
 
 export function requireSettings(settings: Settings | undefined): Settings {
@@ -122,6 +124,32 @@ export const useSettingsStore = create<SettingsStore>()((set, get) => {
         const settings = requireSettings(state.settings);
         return {
           settings: { ...settings, level: { ...settings.level, [key]: value } },
+          notice: "",
+        };
+      }),
+    updateEqBand: (index, key, value) =>
+      set((state) => {
+        const settings = requireSettings(state.settings);
+        const bands: Settings["eq"]["bands"] = [...settings.eq.bands];
+        bands[index] = { ...bands[index], [key]: value };
+        return { settings: { ...settings, eq: { ...settings.eq, bands } }, notice: "" };
+      }),
+    resetEq: () =>
+      set((state) => {
+        const settings = requireSettings(state.settings);
+        return {
+          settings: {
+            ...settings,
+            eq: {
+              ...settings.eq,
+              bands: [
+                { frequency: "250", gainDb: "0", q: "0.7" },
+                { frequency: "3000", gainDb: "0", q: "0.8" },
+                { frequency: "8000", gainDb: "0", q: "0.7" },
+              ],
+              outputDb: "0",
+            },
+          },
           notice: "",
         };
       }),

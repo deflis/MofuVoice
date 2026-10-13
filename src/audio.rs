@@ -7,6 +7,7 @@ use crate::{
 use std::error::Error;
 
 pub struct DspSettings {
+    pub eq: crate::eq::EqSettings,
     pub rumble_filter: bool,
     pub semitones: f64,
     pub preserve_formants: bool,
@@ -18,6 +19,7 @@ pub struct DspSettings {
 impl From<&crate::cli::Options> for DspSettings {
     fn from(options: &crate::cli::Options) -> Self {
         Self {
+            eq: options.eq,
             rumble_filter: options.rumble_filter,
             semitones: options.pitch,
             preserve_formants: options.preserve_formants,
@@ -34,6 +36,7 @@ impl From<&crate::cli::Options> for DspSettings {
 }
 
 pub struct DspChain {
+    eq: crate::eq::Equalizer,
     pub(crate) rumble: crate::rumble::RumbleFilter,
     pub(crate) pitch: PitchShifter,
     pub(crate) gate: NoiseGate,
@@ -43,6 +46,7 @@ pub struct DspChain {
 impl DspChain {
     pub fn new(settings: DspSettings) -> Result<Self, Box<dyn Error>> {
         Ok(Self {
+            eq: settings.eq.build()?,
             rumble: crate::rumble::RumbleFilter::new(settings.rumble_filter),
             pitch: PitchShifter::new(
                 settings.semitones,
@@ -76,6 +80,7 @@ impl DspChain {
         } else {
             self.pitch.process_block(input, output)
         };
+        self.eq.process_in_place(output);
         self.level.process_in_place(output);
         nonzero
     }

@@ -47,6 +47,55 @@ impl LevelControls {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct EqBandControls {
+    frequency: String,
+    gain_db: String,
+    q: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct EqControls {
+    enabled: bool,
+    mode: String,
+    bands: [EqBandControls; 3],
+    output_db: String,
+}
+impl EqControls {
+    fn from_options(options: &Options) -> Self {
+        Self {
+            enabled: options.eq.enabled,
+            mode: options.eq_mode.clone(),
+            bands: options.eq.bands.map(|band| EqBandControls {
+                frequency: band.frequency.to_string(),
+                gain_db: band.gain_db.to_string(),
+                q: band.q.to_string(),
+            }),
+            output_db: options.eq.output_db.to_string(),
+        }
+    }
+    fn arguments(&self) -> [String; 6] {
+        [
+            if self.enabled { "on" } else { "off" }.into(),
+            self.mode.clone(),
+            format!(
+                "{},{},{}",
+                self.bands[0].frequency, self.bands[0].gain_db, self.bands[0].q
+            ),
+            format!(
+                "{},{},{}",
+                self.bands[1].frequency, self.bands[1].gain_db, self.bands[1].q
+            ),
+            format!(
+                "{},{},{}",
+                self.bands[2].frequency, self.bands[2].gain_db, self.bands[2].q
+            ),
+            self.output_db.clone(),
+        ]
+    }
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum GateThresholdMode {
@@ -57,6 +106,7 @@ enum GateThresholdMode {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Settings {
+    eq: EqControls,
     level: LevelControls,
     device: String,
     output_device: String,
@@ -77,6 +127,7 @@ pub struct Settings {
 impl Settings {
     fn from_options(options: &Options) -> Self {
         Self {
+            eq: EqControls::from_options(options),
             level: LevelControls::from_settings(options.level),
             device: options.device.clone(),
             output_device: options.output_device.clone(),
@@ -159,6 +210,9 @@ impl Settings {
         ]);
         for (flag, value) in crate::level::FLAGS.iter().zip(self.level.values()) {
             args.extend([(*flag).into(), value.into()]);
+        }
+        for (flag, value) in crate::eq::FLAGS.iter().zip(self.eq.arguments()) {
+            args.extend([(*flag).into(), value]);
         }
         if !self.device.is_empty() {
             args.extend(["--device".into(), self.device.clone()]);
@@ -600,5 +654,32 @@ mod tests {
         assert_eq!(settings.options().unwrap().pitch, 3.25);
         settings.frames = "0".into();
         assert!(settings.options().is_err());
+    }
+
+    #[test]
+    fn eq_controls_share_settings_across_modes_and_validate() {
+        let options = Options::parse_gui(
+            [
+                "--eq",
+                "on",
+                "--eq-band1",
+                "180,-4,1.2",
+                "--eq-output",
+                "-2",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        let mut controls = Settings::from_options(&options);
+        assert_eq!(controls.options().unwrap(), options);
+        controls.eq.mode = "pro".into();
+        assert_eq!(controls.options().unwrap().eq, options.eq);
+        controls.eq.mode = "simple".into();
+        assert_eq!(controls.options().unwrap().eq, options.eq);
+        controls.eq.bands[1].q = "".into();
+        assert!(controls.options().is_err());
+        controls.eq.bands[1].q = "1".into();
+        controls.eq.output_db = "NaN".into();
+        assert!(controls.options().is_err());
     }
 }

@@ -8,6 +8,7 @@ pub mod backend;
 pub mod cli;
 #[cfg(feature = "cpal-backend")]
 mod cpal_backend;
+pub mod eq;
 pub mod gate;
 #[cfg(feature = "desktop")]
 pub mod gui;

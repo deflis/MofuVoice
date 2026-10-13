@@ -2,6 +2,7 @@ import { useSettingsLocked } from "../settingsHooks";
 import { DeviceSettings } from "./DeviceSettings";
 import { VoiceSettings } from "./VoiceSettings";
 import { NoiseGateSettings } from "./NoiseGateSettings";
+import { EqSettings } from "./EqSettings";
 import { AutoLevelSettings } from "./AutoLevelSettings";
 
 export function SettingsPanel() {
@@ -13,6 +14,7 @@ export function SettingsPanel() {
         <VoiceSettings />
       </div>
       <NoiseGateSettings />
+      <EqSettings />
       <AutoLevelSettings />
     </fieldset>
   );

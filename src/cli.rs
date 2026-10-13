@@ -3,6 +3,8 @@ use std::error::Error;
 
 #[derive(Debug, PartialEq)]
 pub struct Options {
+    pub eq: crate::eq::EqSettings,
+    pub eq_mode: String,
     pub device: String,
     pub output_device: String,
     pub input_channel: usize,
@@ -27,6 +29,8 @@ pub struct Options {
 impl Options {
     pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Self, Box<dyn Error>> {
         let mut options = Self {
+            eq: crate::eq::EqSettings::default(),
+            eq_mode: "simple".into(),
             device: String::new(),
             output_device: String::new(),
             input_channel: 1,
@@ -57,6 +61,7 @@ impl Options {
         let mut pitch_given = false;
         let mut formant_given = false;
         let mut shift_given = false;
+        let mut eq_given = [false; 6];
         let mut level_given = false;
         let mut level_fields = [false; 8];
         let mut rumble_given = false;
@@ -66,6 +71,34 @@ impl Options {
         let mut gate_release_given = false;
         while let Some(arg) = args.next() {
             match arg.as_str() {
+                flag if crate::eq::FLAGS.contains(&flag) => {
+                    let index = crate::eq::FLAGS.iter().position(|f| *f == flag).unwrap();
+                    if eq_given[index] {
+                        return Err(format!("Repeated argument {flag}").into());
+                    }
+                    let value = args
+                        .next()
+                        .ok_or_else(|| format!("{flag} requires a value"))?;
+                    match index {
+                        0 => {
+                            options.eq.enabled = match value.as_str() {
+                                "on" => true,
+                                "off" => false,
+                                _ => return Err("--eq requires on or off".into()),
+                            }
+                        }
+                        1 => {
+                            if !["simple", "pro"].contains(&value.as_str()) {
+                                return Err("--eq-mode requires simple or pro".into());
+                            }
+                            options.eq_mode = value;
+                        }
+                        2..=4 => options.eq.bands[index - 2] = crate::eq::Band::parse(&value)?,
+                        5 => options.eq.output_db = value.parse()?,
+                        _ => unreachable!(),
+                    }
+                    eq_given[index] = true;
+                }
                 "--formant-shift" if !shift_given => {
                     options.formant_shift = args
                         .next()
@@ -217,6 +250,7 @@ impl Options {
         if !options.preserve_formants && options.formant_shift != 0.0 {
             return Err(crate::pitch::InvalidFormant.to_string().into());
         }
+        options.eq.validate()?;
         options.level.validate()?;
         if !(1..=512).contains(&options.input_channel)
             || options.output_channels.is_empty()
@@ -253,6 +287,7 @@ impl Options {
                     || pitch_given
                     || formant_given
                     || shift_given
+                    || eq_given.iter().any(|given| *given)
                     || level_given
                     || level_fields.iter().any(|given| *given)
                     || rumble_given
@@ -266,14 +301,14 @@ impl Options {
                     || input_channel_given
                     || output_channels_given))
         {
-            return Err("Choose one CLI mode: --help, --list-devices, --inspect [--device NAME] [--frames N], or [--device NAME] [--frames N] [--seconds N] [--pitch SEMITONES] [--formant preserve|off] [--formant-shift SEMITONES] [--auto-level on|off] [--level-target DB] [--level-max-gain DB] [--level-floor DB] [--level-response MS] [--compress-threshold DB] [--compress-ratio N] [--compress-attack MS] [--compress-release MS] [--rumble-filter on|off] [--gate on|off] [--gate-threshold auto|DB] [--gate-attack MS] [--gate-release MS]".into());
+            return Err("Choose one CLI mode: --help, --list-devices, --inspect [--device NAME] [--frames N], or [--device NAME] [--frames N] [--seconds N] [--pitch SEMITONES] [--formant preserve|off] [--formant-shift SEMITONES] [--eq on|off] [--eq-mode simple|pro] [--eq-band1 HZ,DB,Q] [--eq-band2 HZ,DB,Q] [--eq-band3 HZ,DB,Q] [--eq-output DB] [--auto-level on|off] [--level-target DB] [--level-max-gain DB] [--level-floor DB] [--level-response MS] [--compress-threshold DB] [--compress-ratio N] [--compress-attack MS] [--compress-release MS] [--rumble-filter on|off] [--gate on|off] [--gate-threshold auto|DB] [--gate-attack MS] [--gate-release MS]".into());
         }
         Ok(options)
     }
     pub fn parse_gui(args: impl IntoIterator<Item = String>) -> Result<Self, Box<dyn Error>> {
         let options = Self::parse(args)?;
         if options.seconds.is_some() || options.inspect || options.list {
-            return Err("GUI accepts device, buffer, pitch, formant, rumble filter, gate and auto-level settings, or --help. Use the CLI for timed runs, inspection or device listing.".into());
+            return Err("GUI accepts device, buffer, pitch, formant, rumble filter, gate, EQ and auto-level settings, or --help. Use the CLI for timed runs, inspection or device listing.".into());
         }
         Ok(options)
     }
