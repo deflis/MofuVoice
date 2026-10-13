@@ -5,6 +5,8 @@ use std::error::Error;
 pub struct Options {
     pub device: String,
     pub output_device: String,
+    pub input_channel: usize,
+    pub output_channels: Vec<usize>,
     pub backend: crate::backend::BackendKind,
     pub seconds: Option<u64>,
     pub frames: u32,
@@ -27,6 +29,8 @@ impl Options {
         let mut options = Self {
             device: String::new(),
             output_device: String::new(),
+            input_channel: 1,
+            output_channels: vec![1],
             backend: crate::backend::BackendKind::default(),
             seconds: None,
             frames: crate::DEFAULT_FRAMES,
@@ -46,6 +50,8 @@ impl Options {
         let mut args = args.into_iter();
         let mut device_given = false;
         let mut output_given = false;
+        let mut input_channel_given = false;
+        let mut output_channels_given = false;
         let mut backend_given = false;
         let mut frames_given = false;
         let mut pitch_given = false;
@@ -141,6 +147,22 @@ impl Options {
                     validate_time_ms(options.gate_release_ms)?;
                     gate_release_given = true;
                 }
+                "--input-channel" if !input_channel_given => {
+                    options.input_channel = args
+                        .next()
+                        .ok_or("--input-channel requires a channel")?
+                        .parse()?;
+                    input_channel_given = true;
+                }
+                "--output-channels" if !output_channels_given => {
+                    options.output_channels = args
+                        .next()
+                        .ok_or("--output-channels requires comma-separated channels")?
+                        .split(',')
+                        .map(str::parse)
+                        .collect::<Result<Vec<usize>, _>>()?;
+                    output_channels_given = true;
+                }
                 "--backend" if !backend_given => {
                     options.backend = crate::backend::BackendKind::parse(
                         &args.next().ok_or("--backend requires auto, cpal or asio")?,
@@ -196,6 +218,24 @@ impl Options {
             return Err(crate::pitch::InvalidFormant.to_string().into());
         }
         options.level.validate()?;
+        if !(1..=512).contains(&options.input_channel)
+            || options.output_channels.is_empty()
+            || options
+                .output_channels
+                .iter()
+                .any(|channel| !(1..=512).contains(channel))
+            || options
+                .output_channels
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                != options.output_channels.len()
+        {
+            return Err(
+                "Select one input and at least one distinct output channel (1..512)".into(),
+            );
+        }
+        options.output_channels.sort_unstable();
         if options.backend == crate::backend::BackendKind::Asio && output_given {
             return Err("ASIO uses one duplex device; --output-device is for CPAL".into());
         }
@@ -219,7 +259,12 @@ impl Options {
                     || gate_given
                     || gate_tuned))
             || (options.help && backend_given)
-            || ((options.list || options.help) && (device_given || output_given || frames_given))
+            || ((options.list || options.help)
+                && (device_given
+                    || output_given
+                    || frames_given
+                    || input_channel_given
+                    || output_channels_given))
         {
             return Err("Choose one CLI mode: --help, --list-devices, --inspect [--device NAME] [--frames N], or [--device NAME] [--frames N] [--seconds N] [--pitch SEMITONES] [--formant preserve|off] [--formant-shift SEMITONES] [--auto-level on|off] [--level-target DB] [--level-max-gain DB] [--level-floor DB] [--level-response MS] [--compress-threshold DB] [--compress-ratio N] [--compress-attack MS] [--compress-release MS] [--rumble-filter on|off] [--gate on|off] [--gate-threshold auto|DB] [--gate-attack MS] [--gate-release MS]".into());
         }
@@ -239,6 +284,31 @@ mod tests {
     use super::*;
     fn parse(args: &[&str]) -> Result<Options, Box<dyn Error>> {
         Options::parse(args.iter().map(|s| (*s).into()))
+    }
+    #[test]
+    fn channel_routing_defaults_and_validation() {
+        let defaults = parse(&[]).unwrap();
+        assert_eq!(defaults.input_channel, 1);
+        assert_eq!(defaults.output_channels, [1]);
+        let routed = parse(&["--input-channel", "2", "--output-channels", "3,1"]).unwrap();
+        assert_eq!(routed.input_channel, 2);
+        assert_eq!(routed.output_channels, [1, 3]);
+        for args in [
+            vec!["--input-channel", "0"],
+            vec!["--input-channel", "513"],
+            vec!["--input-channel", "-1"],
+            vec!["--input-channel"],
+            vec!["--output-channels", ""],
+            vec!["--output-channels", "1,1"],
+            vec!["--output-channels", "1,0"],
+            vec!["--output-channels", "1,513"],
+            vec!["--output-channels", "1,"],
+            vec!["--output-channels", "1.5"],
+            vec!["--output-channels", "1", "--output-channels", "2"],
+            vec!["--input-channel", "1", "--help"],
+        ] {
+            assert!(parse(&args).is_err(), "{args:?}");
+        }
     }
     #[test]
     fn backend_output_selection_defaults_and_validation() {

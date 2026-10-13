@@ -208,3 +208,9 @@ dd {
     grid-template-columns: 1fr;
   }
 }
+
+.channel-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 16px;
+}

@@ -21,3 +21,15 @@ test("settings bootstrap ignores results after disconnect", async () => {
   await setImmediate();
   assert.equal(settingsStore.getState().settings, undefined);
 });
+
+test("channel selections are saved and sent together with the settings", async () => {
+  settingsStore.setState(bootstrap);
+  settingsStore.getState().update("inputChannel", 2);
+  settingsStore.getState().update("outputChannels", [1, 2]);
+  await settingsStore.getState().save();
+  const saved = commands.save_settings.mock.calls[0].arguments[0].settings;
+  assert.equal(saved.inputChannel, 2);
+  assert.deepEqual(saved.outputChannels, [1, 2]);
+  settingsStore.getState().update("outputChannels", [2]);
+  assert.deepEqual(saved.outputChannels, [1, 2]);
+});

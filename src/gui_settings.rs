@@ -20,6 +20,15 @@ fn threshold_text(threshold: GateThreshold) -> String {
 
 fn arguments(options: &Options) -> Vec<String> {
     let mut args = vec![
+        "--input-channel".into(),
+        options.input_channel.to_string(),
+        "--output-channels".into(),
+        options
+            .output_channels
+            .iter()
+            .map(usize::to_string)
+            .collect::<Vec<_>>()
+            .join(","),
         "--backend".into(),
         options.backend.name().into(),
         "--frames".into(),
@@ -83,6 +92,8 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
             "device",
             "backend",
             "output_device",
+            "input_channel",
+            "output_channels",
             "frames",
             "pitch",
             "formant_shift",
@@ -127,6 +138,10 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
         _ => return Err("rumble_filter must be true or false".into()),
     };
     let mut args = vec![
+        "--input-channel",
+        values.get("input_channel").copied().unwrap_or("1"),
+        "--output-channels",
+        values.get("output_channels").copied().unwrap_or("1"),
         "--rumble-filter",
         rumble,
         "--backend",
@@ -187,6 +202,8 @@ pub(crate) fn merge(saved: &Options, args: Vec<String>) -> Result<Options, Box<d
             "--device",
             "--backend",
             "--output-device",
+            "--input-channel",
+            "--output-channels",
             "--frames",
             "--pitch",
             "--formant-shift",
@@ -241,6 +258,16 @@ pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>>
         options.output_device,
         options.level.enabled
     ));
+    text.push_str(&format!(
+        "input_channel={}\noutput_channels={}\n",
+        options.input_channel,
+        options
+            .output_channels
+            .iter()
+            .map(usize::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    ));
     text.push_str(&format!("rumble_filter={}\n", options.rumble_filter));
     for (key, value) in crate::level::KEYS.iter().zip(options.level.values()) {
         text.push_str(&format!("{key}={value}\n"));
@@ -264,6 +291,34 @@ pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>>
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn channel_routing_persists_and_legacy_defaults_are_preserved() {
+        let path = std::env::temp_dir().join(format!("voice-routing-{}.ini", std::process::id()));
+        let options = Options::parse_gui(
+            ["--input-channel", "2", "--output-channels", "1,3"].map(String::from),
+        )
+        .unwrap();
+        save(&path, &options).unwrap();
+        assert_eq!(load(&path).unwrap(), options);
+        let text = fs::read_to_string(&path).unwrap();
+        let legacy = decode(
+            &text
+                .replace("input_channel=2\n", "")
+                .replace("output_channels=1,3\n", ""),
+        )
+        .unwrap();
+        assert_eq!(legacy.input_channel, 1);
+        assert_eq!(legacy.output_channels, [1]);
+        let changed = merge(
+            &options,
+            ["--output-channels", "2"].map(String::from).to_vec(),
+        )
+        .unwrap();
+        assert_eq!(changed.input_channel, 2);
+        assert_eq!(changed.output_channels, [2]);
+        assert!(decode(&text.replace("output_channels=1,3", "output_channels=")).is_err());
+        fs::remove_file(path).unwrap();
+    }
     #[test]
     fn rumble_round_trip_legacy_and_override() {
         let path =

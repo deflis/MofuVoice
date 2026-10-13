@@ -21,6 +21,8 @@ export const settings = {
   device: "ASIO",
   backend: "auto",
   outputDevice: "",
+  inputChannel: 1,
+  outputChannels: [1],
   frames: "64",
   pitch: "0",
   formantShift: "0",
