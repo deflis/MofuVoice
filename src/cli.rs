@@ -3,8 +3,12 @@ use std::error::Error;
 
 #[derive(Debug, PartialEq)]
 pub struct Options {
+    pub eq: crate::eq::EqSettings,
+    pub eq_mode: String,
     pub device: String,
     pub output_device: String,
+    pub input_channel: usize,
+    pub output_channels: Vec<usize>,
     pub backend: crate::backend::BackendKind,
     pub seconds: Option<u64>,
     pub frames: u32,
@@ -25,8 +29,12 @@ pub struct Options {
 impl Options {
     pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Self, Box<dyn Error>> {
         let mut options = Self {
+            eq: crate::eq::EqSettings::default(),
+            eq_mode: "simple".into(),
             device: String::new(),
             output_device: String::new(),
+            input_channel: 1,
+            output_channels: vec![1],
             backend: crate::backend::BackendKind::default(),
             seconds: None,
             frames: crate::DEFAULT_FRAMES,
@@ -46,11 +54,14 @@ impl Options {
         let mut args = args.into_iter();
         let mut device_given = false;
         let mut output_given = false;
+        let mut input_channel_given = false;
+        let mut output_channels_given = false;
         let mut backend_given = false;
         let mut frames_given = false;
         let mut pitch_given = false;
         let mut formant_given = false;
         let mut shift_given = false;
+        let mut eq_given = [false; 6];
         let mut level_given = false;
         let mut level_fields = [false; 8];
         let mut rumble_given = false;
@@ -60,6 +71,34 @@ impl Options {
         let mut gate_release_given = false;
         while let Some(arg) = args.next() {
             match arg.as_str() {
+                flag if crate::eq::FLAGS.contains(&flag) => {
+                    let index = crate::eq::FLAGS.iter().position(|f| *f == flag).unwrap();
+                    if eq_given[index] {
+                        return Err(format!("Repeated argument {flag}").into());
+                    }
+                    let value = args
+                        .next()
+                        .ok_or_else(|| format!("{flag} requires a value"))?;
+                    match index {
+                        0 => {
+                            options.eq.enabled = match value.as_str() {
+                                "on" => true,
+                                "off" => false,
+                                _ => return Err("--eq requires on or off".into()),
+                            }
+                        }
+                        1 => {
+                            if !["simple", "pro"].contains(&value.as_str()) {
+                                return Err("--eq-mode requires simple or pro".into());
+                            }
+                            options.eq_mode = value;
+                        }
+                        2..=4 => options.eq.bands[index - 2] = crate::eq::Band::parse(&value)?,
+                        5 => options.eq.output_db = value.parse()?,
+                        _ => unreachable!(),
+                    }
+                    eq_given[index] = true;
+                }
                 "--formant-shift" if !shift_given => {
                     options.formant_shift = args
                         .next()
@@ -141,6 +180,22 @@ impl Options {
                     validate_time_ms(options.gate_release_ms)?;
                     gate_release_given = true;
                 }
+                "--input-channel" if !input_channel_given => {
+                    options.input_channel = args
+                        .next()
+                        .ok_or("--input-channel requires a channel")?
+                        .parse()?;
+                    input_channel_given = true;
+                }
+                "--output-channels" if !output_channels_given => {
+                    options.output_channels = args
+                        .next()
+                        .ok_or("--output-channels requires comma-separated channels")?
+                        .split(',')
+                        .map(str::parse)
+                        .collect::<Result<Vec<usize>, _>>()?;
+                    output_channels_given = true;
+                }
                 "--backend" if !backend_given => {
                     options.backend = crate::backend::BackendKind::parse(
                         &args.next().ok_or("--backend requires auto, cpal or asio")?,
@@ -195,7 +250,26 @@ impl Options {
         if !options.preserve_formants && options.formant_shift != 0.0 {
             return Err(crate::pitch::InvalidFormant.to_string().into());
         }
+        options.eq.validate()?;
         options.level.validate()?;
+        if !(1..=512).contains(&options.input_channel)
+            || options.output_channels.is_empty()
+            || options
+                .output_channels
+                .iter()
+                .any(|channel| !(1..=512).contains(channel))
+            || options
+                .output_channels
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                != options.output_channels.len()
+        {
+            return Err(
+                "Select one input and at least one distinct output channel (1..512)".into(),
+            );
+        }
+        options.output_channels.sort_unstable();
         if options.backend == crate::backend::BackendKind::Asio && output_given {
             return Err("ASIO uses one duplex device; --output-device is for CPAL".into());
         }
@@ -213,22 +287,28 @@ impl Options {
                     || pitch_given
                     || formant_given
                     || shift_given
+                    || eq_given.iter().any(|given| *given)
                     || level_given
                     || level_fields.iter().any(|given| *given)
                     || rumble_given
                     || gate_given
                     || gate_tuned))
             || (options.help && backend_given)
-            || ((options.list || options.help) && (device_given || output_given || frames_given))
+            || ((options.list || options.help)
+                && (device_given
+                    || output_given
+                    || frames_given
+                    || input_channel_given
+                    || output_channels_given))
         {
-            return Err("Choose one CLI mode: --help, --list-devices, --inspect [--device NAME] [--frames N], or [--device NAME] [--frames N] [--seconds N] [--pitch SEMITONES] [--formant preserve|off] [--formant-shift SEMITONES] [--auto-level on|off] [--level-target DB] [--level-max-gain DB] [--level-floor DB] [--level-response MS] [--compress-threshold DB] [--compress-ratio N] [--compress-attack MS] [--compress-release MS] [--rumble-filter on|off] [--gate on|off] [--gate-threshold auto|DB] [--gate-attack MS] [--gate-release MS]".into());
+            return Err("Choose one CLI mode: --help, --list-devices, --inspect [--device NAME] [--frames N], or [--device NAME] [--frames N] [--seconds N] [--pitch SEMITONES] [--formant preserve|off] [--formant-shift SEMITONES] [--eq on|off] [--eq-mode simple|pro] [--eq-band1 HZ,DB,Q] [--eq-band2 HZ,DB,Q] [--eq-band3 HZ,DB,Q] [--eq-output DB] [--auto-level on|off] [--level-target DB] [--level-max-gain DB] [--level-floor DB] [--level-response MS] [--compress-threshold DB] [--compress-ratio N] [--compress-attack MS] [--compress-release MS] [--rumble-filter on|off] [--gate on|off] [--gate-threshold auto|DB] [--gate-attack MS] [--gate-release MS]".into());
         }
         Ok(options)
     }
     pub fn parse_gui(args: impl IntoIterator<Item = String>) -> Result<Self, Box<dyn Error>> {
         let options = Self::parse(args)?;
         if options.seconds.is_some() || options.inspect || options.list {
-            return Err("GUI accepts device, buffer, pitch, formant, rumble filter, gate and auto-level settings, or --help. Use the CLI for timed runs, inspection or device listing.".into());
+            return Err("GUI accepts device, buffer, pitch, formant, rumble filter, gate, EQ and auto-level settings, or --help. Use the CLI for timed runs, inspection or device listing.".into());
         }
         Ok(options)
     }
@@ -239,6 +319,31 @@ mod tests {
     use super::*;
     fn parse(args: &[&str]) -> Result<Options, Box<dyn Error>> {
         Options::parse(args.iter().map(|s| (*s).into()))
+    }
+    #[test]
+    fn channel_routing_defaults_and_validation() {
+        let defaults = parse(&[]).unwrap();
+        assert_eq!(defaults.input_channel, 1);
+        assert_eq!(defaults.output_channels, [1]);
+        let routed = parse(&["--input-channel", "2", "--output-channels", "3,1"]).unwrap();
+        assert_eq!(routed.input_channel, 2);
+        assert_eq!(routed.output_channels, [1, 3]);
+        for args in [
+            vec!["--input-channel", "0"],
+            vec!["--input-channel", "513"],
+            vec!["--input-channel", "-1"],
+            vec!["--input-channel"],
+            vec!["--output-channels", ""],
+            vec!["--output-channels", "1,1"],
+            vec!["--output-channels", "1,0"],
+            vec!["--output-channels", "1,513"],
+            vec!["--output-channels", "1,"],
+            vec!["--output-channels", "1.5"],
+            vec!["--output-channels", "1", "--output-channels", "2"],
+            vec!["--input-channel", "1", "--help"],
+        ] {
+            assert!(parse(&args).is_err(), "{args:?}");
+        }
     }
     #[test]
     fn backend_output_selection_defaults_and_validation() {

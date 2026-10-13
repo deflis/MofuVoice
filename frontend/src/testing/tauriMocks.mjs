@@ -18,9 +18,21 @@ registerHooks({
 });
 
 export const settings = {
+  eq: {
+    enabled: false,
+    mode: "simple",
+    bands: [
+      { frequency: "250", gainDb: "0", q: "0.7" },
+      { frequency: "3000", gainDb: "0", q: "0.8" },
+      { frequency: "8000", gainDb: "0", q: "0.7" },
+    ],
+    outputDb: "0",
+  },
   device: "ASIO",
   backend: "auto",
   outputDevice: "",
+  inputChannel: 1,
+  outputChannels: [1],
   frames: "64",
   pitch: "0",
   formantShift: "0",

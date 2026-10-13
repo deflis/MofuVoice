@@ -16,7 +16,8 @@ pub const IMAGE_WIDTH: usize = 720;
 pub const IMAGE_HEIGHT: usize = 400;
 pub const BYTES_PER_PIXEL: usize = 4;
 
-const RING: usize = RATE as usize;
+// A power of two keeps slot mapping continuous when absolute counters wrap.
+const RING: usize = (RATE as usize).next_power_of_two();
 const FREQ_MIN: f64 = 20.0;
 const FREQ_MAX: f64 = 8_000.0;
 const DB_MIN: f64 = -80.0;
@@ -28,6 +29,20 @@ const NARROW_HOP: usize = 512;
 
 static ACTIVE: AtomicPtr<Shared> = AtomicPtr::new(ptr::null_mut());
 static IN_USE: AtomicUsize = AtomicUsize::new(0);
+
+struct TapLease;
+impl Drop for TapLease {
+    fn drop(&mut self) {
+        IN_USE.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+struct ProducerGuard<'a>(&'a AtomicBool);
+impl Drop for ProducerGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
 
 #[derive(Clone, Copy, Default)]
 struct Complex {
@@ -185,14 +200,18 @@ struct Shared {
     /// Absolute sample counters; slot = counter % RING. Capacity is RING-1.
     write: AtomicUsize,
     read: AtomicUsize,
-    /// Single-producer (audio) / single-consumer (analyzer) slots.
-    ring: UnsafeCell<Box<[f32]>>,
+    /// Only one producer may own free slots at a time. Contending taps are dropped.
+    producing: AtomicBool,
+    /// Per-slot interior mutability allows producer and consumer to access distinct slots.
+    ring: Box<[UnsafeCell<f32>]>,
     image: Mutex<Vec<u8>>,
     generation: AtomicU64,
     levels: Mutex<MeterLevels>,
 }
 
-// SAFETY: ring is SPSC; image and levels are Mutex-protected; remaining fields are atomics.
+// SAFETY: producing excludes concurrent producers. Release/acquire cursors transfer
+// individual slots between the producer and the sole analyzer consumer. Image and
+// levels are Mutex-protected; remaining fields are atomics.
 unsafe impl Sync for Shared {}
 
 impl Shared {
@@ -204,7 +223,8 @@ impl Shared {
             stop: AtomicBool::new(false),
             write: AtomicUsize::new(0),
             read: AtomicUsize::new(0),
-            ring: UnsafeCell::new(vec![0.0; RING].into_boxed_slice()),
+            producing: AtomicBool::new(false),
+            ring: (0..RING).map(|_| UnsafeCell::new(0.0)).collect(),
             image: Mutex::new(vec![0; IMAGE_WIDTH * IMAGE_HEIGHT * BYTES_PER_PIXEL]),
             generation: AtomicU64::new(0),
             levels: Mutex::new(MeterLevels::default()),
@@ -215,12 +235,17 @@ impl Shared {
         self.open.load(Ordering::Acquire) && !self.frozen.load(Ordering::Acquire)
     }
 
-    #[cfg(test)]
-    fn push_for_test(&self, samples: &[f32]) {
+    fn push<T: crate::pitch::Sample>(&self, samples: &[T]) {
+        if self
+            .producing
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
+            return;
+        }
+        let _guard = ProducerGuard(&self.producing);
         let mut write = self.write.load(Ordering::Relaxed);
         let mut read = self.read.load(Ordering::Acquire);
-        // SAFETY: test-only single producer.
-        let ring = unsafe { &mut *self.ring.get() };
         for &sample in samples {
             if write.wrapping_sub(read) >= RING - 1 {
                 read = self.read.load(Ordering::Acquire);
@@ -228,7 +253,9 @@ impl Shared {
                     continue;
                 }
             }
-            ring[write % RING] = sample;
+            let value = sample.normalized() as f32;
+            // SAFETY: the producer guard owns this free slot until publication.
+            unsafe { *self.ring[write % RING].get() = value };
             write = write.wrapping_add(1);
         }
         self.write.store(write, Ordering::Release);
@@ -237,10 +264,10 @@ impl Shared {
     fn drain(&self, output: &mut Vec<f32>) {
         let write = self.write.load(Ordering::Acquire);
         let mut read = self.read.load(Ordering::Relaxed);
-        // SAFETY: only the analyzer consumer reads slots behind `write`.
-        let ring = unsafe { &*self.ring.get() };
         while read != write {
-            output.push(ring[read % RING]);
+            // SAFETY: the acquired write cursor published this slot. The producer
+            // cannot reuse it until we publish the advanced read cursor below.
+            output.push(unsafe { *self.ring[read % RING].get() });
             read = read.wrapping_add(1);
         }
         self.read.store(read, Ordering::Release);
@@ -260,6 +287,12 @@ impl SpectrumController {
         }
         let shared = Arc::new(Shared::new());
         let worker_shared = Arc::clone(&shared);
+        // Do not publish a pointer until spawning succeeds: a failed spawn must
+        // never free state still borrowed by an audio tap.
+        let worker = thread::Builder::new()
+            .name("spectrum-analyzer".into())
+            .spawn(move || analyzer_loop(worker_shared))
+            .map_err(|error| format!("Cannot start spectrum analyzer thread: {error}"))?;
         let installed = Arc::as_ptr(&shared).cast_mut();
         if ACTIVE
             .compare_exchange(
@@ -270,15 +303,10 @@ impl SpectrumController {
             )
             .is_err()
         {
+            shared.stop.store(true, Ordering::Release);
+            let _ = worker.join();
             return Err("Spectrum window is already open".into());
         }
-        let worker = thread::Builder::new()
-            .name("spectrum-analyzer".into())
-            .spawn(move || analyzer_loop(worker_shared))
-            .map_err(|error| {
-                ACTIVE.store(ptr::null_mut(), Ordering::SeqCst);
-                format!("Cannot start spectrum analyzer thread: {error}")
-            })?;
         Ok(Self {
             shared,
             worker: Some(worker),
@@ -331,27 +359,14 @@ impl Drop for SpectrumController {
 /// Converts in place without heap allocation.
 pub fn push_output_samples<T: crate::pitch::Sample>(samples: &[T]) {
     IN_USE.fetch_add(1, Ordering::SeqCst);
+    let _lease = TapLease;
     let shared = ACTIVE.load(Ordering::SeqCst);
+    // SAFETY: the lease keeps controller teardown from freeing this pointer.
     if let Some(shared) = unsafe { shared.as_ref() } {
         if shared.accepting() {
-            let mut write = shared.write.load(Ordering::Relaxed);
-            let mut read = shared.read.load(Ordering::Acquire);
-            // SAFETY: only the audio producer writes slots ahead of `read`.
-            let ring = unsafe { &mut *shared.ring.get() };
-            for &sample in samples {
-                if write.wrapping_sub(read) >= RING - 1 {
-                    read = shared.read.load(Ordering::Acquire);
-                    if write.wrapping_sub(read) >= RING - 1 {
-                        continue;
-                    }
-                }
-                ring[write % RING] = sample.normalized() as f32;
-                write = write.wrapping_add(1);
-            }
-            shared.write.store(write, Ordering::Release);
+            shared.push(samples);
         }
     }
-    IN_USE.fetch_sub(1, Ordering::SeqCst);
 }
 
 fn hann(size: usize) -> Vec<f64> {
@@ -545,7 +560,7 @@ mod tests {
         let shared = Shared::new();
         let block = vec![0.25_f32; 1024];
         for _ in 0..RING {
-            shared.push_for_test(&block);
+            shared.push(&block);
         }
         let filled = shared
             .write
@@ -556,6 +571,68 @@ mod tests {
         let mut out = Vec::new();
         shared.drain(&mut out);
         assert_eq!(out.len(), filled);
+    }
+
+    #[test]
+    fn ring_transfers_samples_across_counter_overflow() {
+        let shared = Shared::new();
+        shared.write.store(usize::MAX - 1, Ordering::Relaxed);
+        shared.read.store(usize::MAX - 1, Ordering::Relaxed);
+        // Fill across the wrap: a non-power-of-two ring would reuse an unread
+        // pre-wrap slot before reaching its advertised capacity.
+        let input: Vec<_> = (1..RING).map(|i| i as f32).collect();
+        shared.push(&input);
+        let mut output = Vec::new();
+        shared.drain(&mut output);
+        assert_eq!(output, input);
+        shared.push(&[5.0_f32]);
+        output.clear();
+        shared.drain(&mut output);
+        assert_eq!(output, [5.0]);
+    }
+
+    #[test]
+    fn concurrent_taps_keep_each_producers_samples_in_order() {
+        let shared = Arc::new(Shared::new());
+        let done = AtomicUsize::new(0);
+        let mut output = Vec::new();
+        thread::scope(|scope| {
+            for sign in [1.0_f32, -1.0] {
+                let shared = &shared;
+                let done = &done;
+                scope.spawn(move || {
+                    let count = if cfg!(miri) { 32 } else { 10_000 };
+                    for i in 1..=count {
+                        shared.push(&[sign * i as f32]);
+                        thread::yield_now();
+                    }
+                    done.fetch_add(1, Ordering::Release);
+                });
+            }
+            while done.load(Ordering::Acquire) != 2 {
+                shared.drain(&mut output);
+                thread::yield_now();
+            }
+            shared.drain(&mut output);
+        });
+        assert!(!output.is_empty());
+        let mut previous = [0.0; 2];
+        for sample in output {
+            let producer = usize::from(sample < 0.0);
+            assert!(sample.abs() > previous[producer]);
+            previous[producer] = sample.abs();
+        }
+    }
+
+    #[derive(Clone, Copy, Default, PartialEq)]
+    struct PanickingSample;
+    impl crate::pitch::Sample for PanickingSample {
+        fn normalized(self) -> f64 {
+            panic!("test conversion failure");
+        }
+        fn from_normalized(_: f64) -> Self {
+            Self
+        }
     }
 
     #[test]
@@ -581,6 +658,9 @@ mod tests {
         assert_eq!(controller.shared.write.load(Ordering::Acquire), 0);
         assert_eq!(controller.levels(), MeterLevels::default());
         controller.set_frozen(false);
+        assert!(std::panic::catch_unwind(|| push_output_samples(&[PanickingSample])).is_err());
+        assert_eq!(IN_USE.load(Ordering::SeqCst), 0);
+        assert!(!controller.shared.producing.load(Ordering::Acquire));
         push_output_samples(&[0.5_f32; 512]);
         let deadline = Instant::now() + Duration::from_secs(2);
         while controller.levels().peak_db <= -60.0 {

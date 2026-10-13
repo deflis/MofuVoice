@@ -25,6 +25,8 @@ export function useDeviceSettings() {
       return {
         device: settings.device,
         outputDevice: settings.outputDevice,
+        inputChannel: settings.inputChannel,
+        outputChannels: settings.outputChannels,
         backend: settings.backend,
         resolvedBackend: state.resolvedBackend,
         backends: state.backends,
@@ -86,4 +88,15 @@ export function useSaveSettings() {
     useShallow((state) => ({ saving: state.saving || state.switchingBackend, save: state.save })),
   );
   return { disabled: operating || saving, save };
+}
+
+export function useEqSettings() {
+  return useSettingsStore(
+    useShallow((state) => ({
+      eq: requireSettings(state.settings).eq,
+      update: state.update,
+      updateBand: state.updateEqBand,
+      reset: state.resetEq,
+    })),
+  );
 }
