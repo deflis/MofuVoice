@@ -1,5 +1,7 @@
 //! Native spectrogram window. All calls and window messages run on the desktop main thread.
-use crate::spectrum::{SpectrumController, BYTES_PER_PIXEL, IMAGE_HEIGHT, IMAGE_WIDTH};
+use crate::spectrum::{
+    MeterLevels, SpectrumController, BYTES_PER_PIXEL, IMAGE_HEIGHT, IMAGE_WIDTH,
+};
 use std::mem::{size_of, size_of_val};
 use std::sync::atomic::{AtomicIsize, Ordering};
 use windows::{
@@ -66,6 +68,8 @@ struct State {
     narrow_button: HWND,
     freeze_button: HWND,
     view: HWND,
+    meter_view: HWND,
+    levels: MeterLevels,
     dib: HBITMAP,
     bits: *mut core::ffi::c_void,
     pixels: Vec<u8>,
@@ -169,6 +173,130 @@ unsafe fn draw_button(item: &DRAWITEMSTRUCT, state: &State, primary: bool) {
     draw_label(item.hDC, state.font, text, item.rcItem, &mut label);
 }
 
+unsafe fn fill_meter_rect(dc: HDC, rect: RECT, color: COLORREF) {
+    let brush = CreateSolidBrush(color);
+    FillRect(dc, &rect, brush);
+    let _ = DeleteObject(HGDIOBJ(brush.0));
+}
+
+unsafe fn draw_meter(item: &DRAWITEMSTRUCT, state: &State) {
+    FillRect(item.hDC, &item.rcItem, state.bg_brush);
+    let label = |text: &str, top: i32, bottom: i32, color: COLORREF| {
+        let mut text: Vec<u16> = text.encode_utf16().collect();
+        draw_label(
+            item.hDC,
+            state.font,
+            color,
+            RECT {
+                left: 0,
+                top,
+                right: 144,
+                bottom,
+            },
+            &mut text,
+        );
+    };
+    label("Output 1 / dBFS", 0, 24, theme::TEXT);
+    for (left, right, name) in [(4, 44, "RMS"), (44, 82, "Peak")] {
+        let mut text: Vec<u16> = name.encode_utf16().collect();
+        draw_label(
+            item.hDC,
+            state.font,
+            theme::MUTED,
+            RECT {
+                left,
+                top: 24,
+                right,
+                bottom: 46,
+            },
+            &mut text,
+        );
+    }
+    let y = |db: f64| 300 - ((db.clamp(-60.0, 0.0) + 60.0) * 4.2).round() as i32;
+    for (left, right, db) in [
+        (12, 38, state.levels.rms_db),
+        (48, 74, state.levels.peak_db),
+    ] {
+        fill_meter_rect(
+            item.hDC,
+            RECT {
+                left,
+                top: 48,
+                right,
+                bottom: 300,
+            },
+            theme::BUTTON,
+        );
+        for (low, high, color) in [
+            (-60.0_f64, -12.0_f64, theme::ACCENT),
+            (-12.0, -3.0, rgb(235, 185, 60)),
+            (-3.0, 0.0, rgb(235, 75, 75)),
+        ] {
+            if db > low {
+                fill_meter_rect(
+                    item.hDC,
+                    RECT {
+                        left,
+                        top: y(db.min(high)),
+                        right,
+                        bottom: y(low),
+                    },
+                    color,
+                );
+            }
+        }
+    }
+    let hold_y = y(state.levels.hold_db);
+    fill_meter_rect(
+        item.hDC,
+        RECT {
+            left: 46,
+            top: hold_y,
+            right: 76,
+            bottom: hold_y + 2,
+        },
+        theme::TEXT,
+    );
+    for db in [0, -12, -24, -36, -48, -60] {
+        let top = y(db as f64) - 10;
+        let mut text: Vec<u16> = db.to_string().encode_utf16().collect();
+        draw_label(
+            item.hDC,
+            state.font,
+            theme::MUTED,
+            RECT {
+                left: 82,
+                top,
+                right: 140,
+                bottom: top + 20,
+            },
+            &mut text,
+        );
+    }
+    label(
+        &format!("RMS {:.1}", state.levels.rms_db),
+        316,
+        340,
+        theme::TEXT,
+    );
+    label(
+        &format!("Peak {:.1}", state.levels.peak_db),
+        340,
+        364,
+        theme::TEXT,
+    );
+    label(
+        &format!("Hold {:.1}", state.levels.hold_db),
+        364,
+        388,
+        if state.levels.hold_db >= 0.0 {
+            rgb(235, 75, 75)
+        } else {
+            theme::MUTED
+        },
+    );
+}
+
 unsafe fn destroy_dib(state: &mut State) {
     if !state.dib.is_invalid() {
         let _ = DeleteObject(HGDIOBJ(state.dib.0));
@@ -213,6 +341,11 @@ unsafe fn ensure_dib(state: &mut State) -> bool {
 }
 
 unsafe fn update_image(state: &mut State) {
+    let levels = state.controller.levels();
+    if levels != state.levels {
+        state.levels = levels;
+        let _ = InvalidateRect(Some(state.meter_view), None, false);
+    }
     if !ensure_dib(state) {
         state.error = windows::Win32::Foundation::GetLastError().0;
         return;
@@ -310,6 +443,21 @@ unsafe extern "system" fn spectrum_proc(
                 None,
             )
             .unwrap_or_default();
+            state.meter_view = CreateWindowExW(
+                Default::default(),
+                w!("STATIC"),
+                w!(""),
+                WS_CHILD | WS_VISIBLE | SS_OWNERDRAW,
+                IMAGE_WIDTH as i32 + 32,
+                60,
+                144,
+                IMAGE_HEIGHT as i32,
+                Some(window),
+                None,
+                Some(instance.into()),
+                None,
+            )
+            .unwrap_or_default();
             for item in [state.wide_button, state.narrow_button, state.freeze_button] {
                 if item.0.is_null() {
                     state.error = windows::Win32::Foundation::GetLastError().0;
@@ -322,7 +470,7 @@ unsafe extern "system" fn spectrum_proc(
                     Some(LPARAM(1)),
                 );
             }
-            if state.view.0.is_null() {
+            if state.view.0.is_null() || state.meter_view.0.is_null() {
                 state.error = windows::Win32::Foundation::GetLastError().0;
                 return LRESULT(-1);
             }
@@ -390,7 +538,9 @@ unsafe extern "system" fn spectrum_proc(
                 }
                 return LRESULT(1);
             }
-            if item.hwndItem == state.wide_button {
+            if item.hwndItem == state.meter_view {
+                draw_meter(item, state);
+            } else if item.hwndItem == state.wide_button {
                 draw_button(item, state, state.wideband);
             } else if item.hwndItem == state.narrow_button {
                 draw_button(item, state, !state.wideband);
@@ -463,6 +613,8 @@ pub unsafe fn open() -> Result<(), String> {
         narrow_button: HWND::default(),
         freeze_button: HWND::default(),
         view: HWND::default(),
+        meter_view: HWND::default(),
+        levels: MeterLevels::default(),
         dib: HBITMAP::default(),
         bits: core::ptr::null_mut(),
         pixels: Vec::new(),
@@ -498,7 +650,7 @@ pub unsafe fn open() -> Result<(), String> {
     let mut bounds = RECT {
         left: 0,
         top: 0,
-        right: IMAGE_WIDTH as i32 + 32,
+        right: IMAGE_WIDTH as i32 + 192,
         bottom: IMAGE_HEIGHT as i32 + 84,
     };
     let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;

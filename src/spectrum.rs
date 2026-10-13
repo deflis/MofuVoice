@@ -9,7 +9,7 @@ use std::{
         Arc, Mutex,
     },
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 pub const IMAGE_WIDTH: usize = 720;
@@ -94,6 +94,89 @@ impl Fft {
     }
 }
 
+/// Output-channel levels in dBFS; silence is displayed at -60 dBFS.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MeterLevels {
+    pub rms_db: f64,
+    pub peak_db: f64,
+    pub hold_db: f64,
+}
+
+impl Default for MeterLevels {
+    fn default() -> Self {
+        Self {
+            rms_db: -60.0,
+            peak_db: -60.0,
+            hold_db: -60.0,
+        }
+    }
+}
+
+struct LevelMeter {
+    power: f64,
+    peak: f64,
+    hold: f64,
+    hold_seconds: f64,
+}
+
+impl LevelMeter {
+    fn new() -> Self {
+        Self {
+            power: 0.0,
+            peak: 0.0,
+            hold: 0.0,
+            hold_seconds: 0.0,
+        }
+    }
+
+    fn update_hold(&mut self, seconds: f64, decay: f64) {
+        if self.peak >= self.hold {
+            self.hold = self.peak;
+            self.hold_seconds = 1.0;
+        } else {
+            let decay_seconds = (seconds - self.hold_seconds).max(0.0);
+            self.hold_seconds = (self.hold_seconds - seconds).max(0.0);
+            if decay_seconds > 0.0 {
+                let factor = if decay_seconds == seconds {
+                    decay
+                } else {
+                    10.0_f64.powf(-12.0 * decay_seconds / 20.0)
+                };
+                self.hold = (self.hold * factor).max(self.peak);
+            }
+        }
+    }
+
+    fn update(&mut self, samples: &[f32], elapsed: f64) -> MeterLevels {
+        if samples.is_empty() {
+            self.peak *= (-elapsed / 0.3).exp();
+            self.power *= (-elapsed / 0.1).exp();
+            self.update_hold(elapsed, 10.0_f64.powf(-12.0 * elapsed / 20.0));
+        } else {
+            let seconds = 1.0 / RATE as f64;
+            let smoothing = (-seconds / 0.1).exp();
+            let peak_release = (-seconds / 0.3).exp();
+            let hold_release = 10.0_f64.powf(-12.0 * seconds / 20.0);
+            for &sample in samples {
+                let value = if sample.is_finite() {
+                    sample as f64
+                } else {
+                    0.0
+                };
+                self.power = smoothing * self.power + (1.0 - smoothing) * value * value;
+                self.peak = (self.peak * peak_release).max(value.abs());
+                self.update_hold(seconds, hold_release);
+            }
+        }
+        let db = |amplitude: f64| (20.0 * amplitude.max(1e-3).log10()).max(-60.0);
+        MeterLevels {
+            rms_db: db(self.power.sqrt()),
+            peak_db: db(self.peak),
+            hold_db: db(self.hold),
+        }
+    }
+}
+
 struct Shared {
     open: AtomicBool,
     frozen: AtomicBool,
@@ -106,9 +189,10 @@ struct Shared {
     ring: UnsafeCell<Box<[f32]>>,
     image: Mutex<Vec<u8>>,
     generation: AtomicU64,
+    levels: Mutex<MeterLevels>,
 }
 
-// SAFETY: ring is SPSC; image is Mutex-protected; remaining fields are atomics.
+// SAFETY: ring is SPSC; image and levels are Mutex-protected; remaining fields are atomics.
 unsafe impl Sync for Shared {}
 
 impl Shared {
@@ -123,6 +207,7 @@ impl Shared {
             ring: UnsafeCell::new(vec![0.0; RING].into_boxed_slice()),
             image: Mutex::new(vec![0; IMAGE_WIDTH * IMAGE_HEIGHT * BYTES_PER_PIXEL]),
             generation: AtomicU64::new(0),
+            levels: Mutex::new(MeterLevels::default()),
         }
     }
 
@@ -198,6 +283,10 @@ impl SpectrumController {
             shared,
             worker: Some(worker),
         })
+    }
+
+    pub fn levels(&self) -> MeterLevels {
+        *self.shared.levels.lock().expect("spectrum levels lock")
     }
 
     pub fn set_wideband(&self, wideband: bool) {
@@ -316,13 +405,30 @@ fn analyzer_loop(shared: Arc<Shared>) {
     let mut time_domain = Vec::with_capacity(NARROW_FFT * 2);
     let mut column = vec![[0_u8; 4]; IMAGE_HEIGHT];
     let mut using_wide = true;
+    let mut meter = LevelMeter::new();
+    let mut last_meter = Instant::now();
+    let mut last_signal = last_meter;
 
     while !shared.stop.load(Ordering::Acquire) {
         if shared.frozen.load(Ordering::Acquire) {
+            last_meter = Instant::now();
+            last_signal = last_meter;
             thread::sleep(Duration::from_millis(20));
             continue;
         }
         shared.drain(&mut pending);
+        let now = Instant::now();
+        // Brief empty polls are normal between callbacks; do not count them as
+        // extra silence in addition to the sample time already measured.
+        if !pending.is_empty() {
+            let levels = meter.update(&pending, 0.0);
+            *shared.levels.lock().expect("spectrum levels lock") = levels;
+            last_signal = now;
+        } else if now.duration_since(last_signal) >= Duration::from_millis(100) {
+            let levels = meter.update(&[], now.duration_since(last_meter).as_secs_f64());
+            *shared.levels.lock().expect("spectrum levels lock") = levels;
+        }
+        last_meter = now;
         if pending.is_empty() {
             thread::sleep(Duration::from_millis(5));
             continue;
@@ -392,6 +498,49 @@ mod tests {
     use super::*;
 
     #[test]
+    fn meter_measures_dbfs_and_releases_after_stop() {
+        let mut meter = LevelMeter::new();
+        let signal: Vec<f32> = (0..RATE)
+            .map(|i| (0.5 * (std::f64::consts::TAU * 1000.0 * i as f64 / RATE as f64).sin()) as f32)
+            .collect();
+        let levels = meter.update(&signal, 1.0);
+        assert!((levels.peak_db + 6.0206).abs() < 0.01);
+        assert!((levels.rms_db + 9.0309).abs() < 0.1);
+        let silent = meter.update(&[], 0.5);
+        assert_eq!(silent.hold_db, levels.hold_db);
+        assert!(silent.peak_db < levels.peak_db);
+        let silent = meter.update(&[], 10.0);
+        assert_eq!(silent, MeterLevels::default());
+    }
+
+    #[test]
+    fn meter_is_independent_of_block_boundaries() {
+        let mut signal = vec![0.0_f32; RATE as usize * 2];
+        signal[0] = 1.0;
+        signal[6000] = -0.5;
+        let mut whole = LevelMeter::new();
+        let expected = whole.update(&signal, 0.0);
+        for block_size in [1, 64, 512, 2048] {
+            let mut split = LevelMeter::new();
+            let mut actual = MeterLevels::default();
+            for block in signal.chunks(block_size) {
+                actual = split.update(block, 0.0);
+            }
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn meter_handles_nonfinite_and_overload_samples() {
+        let mut meter = LevelMeter::new();
+        assert_eq!(
+            meter.update(&[f32::NAN, f32::INFINITY], 0.0),
+            MeterLevels::default()
+        );
+        assert!(meter.update(&[2.0], 0.0).peak_db > 0.0);
+    }
+
+    #[test]
     fn ring_drops_when_full_without_blocking() {
         let shared = Shared::new();
         let block = vec![0.25_f32; 1024];
@@ -426,7 +575,18 @@ mod tests {
     fn controller_start_stop_clears_active_tap() {
         let controller = SpectrumController::start().unwrap();
         assert!(!ACTIVE.load(Ordering::SeqCst).is_null());
-        push_output_samples(&[0.1_f32, -0.1, 0.2]);
+        assert_eq!(controller.levels(), MeterLevels::default());
+        controller.set_frozen(true);
+        push_output_samples(&[1.0_f32; 512]);
+        assert_eq!(controller.shared.write.load(Ordering::Acquire), 0);
+        assert_eq!(controller.levels(), MeterLevels::default());
+        controller.set_frozen(false);
+        push_output_samples(&[0.5_f32; 512]);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while controller.levels().peak_db <= -60.0 {
+            assert!(Instant::now() < deadline, "analyzer did not publish levels");
+            thread::sleep(Duration::from_millis(1));
+        }
         drop(controller);
         assert!(ACTIVE.load(Ordering::SeqCst).is_null());
         push_output_samples(&[1.0_f32]);
