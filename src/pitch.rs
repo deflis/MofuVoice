@@ -225,7 +225,7 @@ impl Fft {
         if SIZE <= N {
             let half = SIZE / 2;
             let stride = N / SIZE;
-            for block in data.chunks_exact_mut(SIZE) {
+            for block in data.as_chunks_mut::<SIZE>().0 {
                 let (left, right) = block.split_at_mut(half);
                 for ((left, right), root) in
                     left.iter_mut().zip(right).zip(roots.iter().step_by(stride))
