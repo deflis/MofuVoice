@@ -110,6 +110,8 @@ pub struct Settings {
     level: LevelControls,
     device: String,
     output_device: String,
+    input_channel: usize,
+    output_channels: Vec<usize>,
     backend: String,
     frames: String,
     pitch: String,
@@ -129,6 +131,8 @@ impl Settings {
             level: LevelControls::from_settings(options.level),
             device: options.device.clone(),
             output_device: options.output_device.clone(),
+            input_channel: options.input_channel,
+            output_channels: options.output_channels.clone(),
             backend: options.backend.name().into(),
             frames: options.frames.to_string(),
             pitch: options.pitch.to_string(),
@@ -163,6 +167,14 @@ impl Settings {
             }
         };
         let mut args = vec![
+            "--input-channel".into(),
+            self.input_channel.to_string(),
+            "--output-channels".into(),
+            self.output_channels
+                .iter()
+                .map(usize::to_string)
+                .collect::<Vec<_>>()
+                .join(","),
             "--backend".into(),
             self.backend.clone(),
             "--frames".into(),
@@ -525,6 +537,19 @@ pub fn show_message(message: &str, _error: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn channel_controls_round_trip_and_validate() {
+        let options = Options::parse_gui(
+            ["--input-channel", "2", "--output-channels", "1,2"].map(String::from),
+        )
+        .unwrap();
+        let mut settings = Settings::from_options(&options);
+        assert_eq!(settings.options().unwrap(), options);
+        settings.output_channels.clear();
+        assert!(settings.options().is_err());
+        settings.output_channels = vec![2];
+        assert_eq!(settings.options().unwrap().output_channels, [2]);
+    }
     #[test]
     fn gate_mode_and_manual_value_map_to_engine_settings() {
         let options = Options::parse_gui(Vec::new()).unwrap();

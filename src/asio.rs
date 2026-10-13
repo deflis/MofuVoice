@@ -169,6 +169,8 @@ struct Metrics {
     latencies_changed: AtomicBool,
 }
 struct CallbackState {
+    input_channel: usize,
+    output_channels: Vec<usize>,
     buffers: Vec<ffi::ASIOBufferInfo>,
     inputs: usize,
     frames: usize,
@@ -186,14 +188,17 @@ impl CallbackState {
         // SAFETY: open validates distinct, aligned buffers of frames*T bytes. ASIO owns them
         // until dispose; the callback's processing guard excludes simultaneous buffer writers.
         let input = unsafe {
-            std::slice::from_raw_parts(self.buffers[0].buffers[index].cast::<T>(), self.frames)
+            std::slice::from_raw_parts(
+                self.buffers[self.input_channel - 1].buffers[index].cast::<T>(),
+                self.frames,
+            )
         };
         let mut nonzero = 0;
         for (channel, info) in self.buffers[self.inputs..].iter().enumerate() {
             let output = unsafe {
                 std::slice::from_raw_parts_mut(info.buffers[index].cast::<T>(), self.frames)
             };
-            if channel == 0 {
+            if channel == self.output_channels[0] - 1 {
                 // SAFETY: only the callback holding the processing guard accesses DSP.
                 // The control thread never reads or mutates it during streaming.
                 let dsp = unsafe { &mut *self.dsp.get() };
@@ -208,6 +213,15 @@ impl CallbackState {
                 };
                 nonzero = dsp.process_block(input, output, scratch);
                 crate::spectrum::push_output_samples(output);
+            } else if self.output_channels.contains(&(channel + 1)) {
+                let source = unsafe {
+                    std::slice::from_raw_parts(
+                        self.buffers[self.inputs + self.output_channels[0] - 1].buffers[index]
+                            .cast::<T>(),
+                        self.frames,
+                    )
+                };
+                output.copy_from_slice(source);
             } else {
                 output.fill(T::default());
             }
@@ -451,9 +465,14 @@ impl Engine {
         driver: Driver,
         config: Configuration,
         frames: u32,
+        routing: &crate::backend::ChannelRouting,
         dsp: DspSettings,
     ) -> Result<Self> {
         config.validate(frames)?;
+        routing.validate(config.inputs, config.outputs)?;
+        let input_channel = routing.input_channel;
+        let mut output_channels = routing.output_channels.clone();
+        output_channels.sort_unstable();
         let dsp = DspChain::new(dsp)?;
         let mut buffers = Vec::with_capacity(config.inputs + config.outputs);
         for (input, channels) in [(true, config.inputs), (false, config.outputs)] {
@@ -466,6 +485,8 @@ impl Engine {
             }
         }
         let state = Box::new(CallbackState {
+            input_channel,
+            output_channels,
             buffers,
             inputs: config.inputs,
             frames: frames as usize,
@@ -697,6 +718,8 @@ mod tests {
             buffers: [a.cast(), b.cast()],
         };
         let mut state = CallbackState {
+            input_channel: 1,
+            output_channels: vec![1],
             buffers: vec![
                 info(input_a.as_mut_ptr(), input_b.as_mut_ptr()),
                 info(output_a.as_mut_ptr(), output_b.as_mut_ptr()),
@@ -726,6 +749,33 @@ mod tests {
         assert_eq!(unsafe { state.process::<f32>(1) }, 4);
         assert_eq!(input_b, output_b);
         assert_eq!(other_b, [0.0; 4]);
+        // Select input 2, fan out once-processed samples, and silence deselected outputs.
+        let mut selected_input_a = [-0.0_f32, f32::from_bits(1), -0.25, 0.5];
+        let mut selected_input_b = [0.1_f32, 0.2, -0.3, 0.4];
+        state.buffers.insert(
+            1,
+            info(selected_input_a.as_mut_ptr(), selected_input_b.as_mut_ptr()),
+        );
+        state.inputs = 2;
+        state.input_channel = 2;
+        state.output_channels = vec![1, 2];
+        assert_eq!(unsafe { state.process::<f32>(0) }, 3);
+        assert_eq!(
+            output_a.map(f32::to_bits),
+            selected_input_a.map(f32::to_bits)
+        );
+        assert_eq!(
+            other_a.map(f32::to_bits),
+            selected_input_a.map(f32::to_bits)
+        );
+        state.output_channels = vec![2];
+        assert_eq!(unsafe { state.process::<f32>(1) }, 4);
+        assert_eq!(output_b, [0.0; 4]);
+        assert_eq!(other_b, selected_input_b);
+        state.buffers.remove(1);
+        state.inputs = 1;
+        state.input_channel = 1;
+        state.output_channels = vec![1];
         state.dsp.get_mut().pitch = PitchShifter::new(0.0, true, 0.0).unwrap();
         state.dsp.get_mut().gate = GateSettings {
             enabled: true,
@@ -766,7 +816,7 @@ mod tests {
         assert_ne!(input_a.map(f32::to_bits), output_a.map(f32::to_bits));
         assert!(output_a.iter().all(|s| s.is_finite() && s.abs() <= 1.0));
         assert_eq!(other_a, [0.0; 4]);
-        assert_eq!(output_b, input_b); // index 0 never writes index 1.
+        assert_eq!(output_b, [0.0; 4]); // Last index 1 routing muted this output; index 0 leaves it untouched.
         for _ in 0..4096 {
             assert_eq!(unsafe { state.process::<f32>(1) }, 4);
         }

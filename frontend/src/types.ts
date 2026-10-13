@@ -21,6 +21,8 @@ export type Settings = {
   level: LevelSettings;
   device: string;
   outputDevice: string;
+  inputChannel: number;
+  outputChannels: number[];
   backend: string;
   frames: string;
   pitch: string;

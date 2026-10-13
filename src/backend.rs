@@ -37,6 +37,42 @@ pub struct AudioConfiguration {
     pub outputs: usize,
 }
 
+/// Device channel numbers are one-based. Transport configuration stays outside mono DSP.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChannelRouting {
+    pub input_channel: usize,
+    pub output_channels: Vec<usize>,
+}
+impl From<&crate::cli::Options> for ChannelRouting {
+    fn from(options: &crate::cli::Options) -> Self {
+        Self {
+            input_channel: options.input_channel,
+            output_channels: options.output_channels.clone(),
+        }
+    }
+}
+impl ChannelRouting {
+    pub fn validate(&self, inputs: usize, outputs: usize) -> Result<()> {
+        if self.input_channel == 0
+            || self.input_channel > inputs
+            || self.output_channels.is_empty()
+            || self
+                .output_channels
+                .iter()
+                .any(|&channel| channel == 0 || channel > outputs)
+            || self
+                .output_channels
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                != self.output_channels.len()
+        {
+            return Err(format!("Selected input {} or outputs {:?} are invalid for {inputs} inputs / {outputs} outputs; select distinct output channels", self.input_channel, self.output_channels).into());
+        }
+        Ok(())
+    }
+}
+
 pub struct AudioInspection {
     pub configuration: AudioConfiguration,
     pub details: String,
@@ -74,11 +110,22 @@ pub trait AudioBackend {
     fn output_device_names(&self) -> Result<Vec<String>> {
         Ok(Vec::new())
     }
-    fn inspect_configuration(&self, name: &str, frames: u32) -> Result<AudioInspection>;
-    fn inspect(&self, name: &str, frames: u32) -> Result<String> {
-        Ok(self.inspect_configuration(name, frames)?.details)
+    fn inspect_configuration(
+        &self,
+        name: &str,
+        frames: u32,
+        routing: &ChannelRouting,
+    ) -> Result<AudioInspection>;
+    fn inspect(&self, name: &str, frames: u32, routing: &ChannelRouting) -> Result<String> {
+        Ok(self.inspect_configuration(name, frames, routing)?.details)
     }
-    fn open(&self, name: &str, frames: u32, dsp: DspSettings) -> Result<Box<dyn AudioStream>>;
+    fn open(
+        &self,
+        name: &str,
+        frames: u32,
+        routing: &ChannelRouting,
+        dsp: DspSettings,
+    ) -> Result<Box<dyn AudioStream>>;
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -191,22 +238,39 @@ impl AudioBackend for AsioBackend {
     fn device_names(&self) -> Result<Vec<String>> {
         Ok(asio_sys::Asio::new().driver_names())
     }
-    fn inspect_configuration(&self, name: &str, frames: u32) -> Result<AudioInspection> {
+    fn inspect_configuration(
+        &self,
+        name: &str,
+        frames: u32,
+        routing: &ChannelRouting,
+    ) -> Result<AudioInspection> {
         let driver = load_driver(name)?;
         let config = crate::asio::Configuration::query(&driver)?;
         config.validate(frames)?;
         let mut configuration = config.audio_configuration();
+        routing.validate(configuration.inputs, configuration.outputs)?;
         configuration.device = name.to_string();
         configuration.output_device = name.to_string();
         Ok(AudioInspection {
             configuration,
-            details: config.summary(),
+            details: format!(
+                "{}; input {} -> outputs {:?}",
+                config.summary(),
+                routing.input_channel,
+                routing.output_channels
+            ),
         })
     }
-    fn open(&self, name: &str, frames: u32, dsp: DspSettings) -> Result<Box<dyn AudioStream>> {
+    fn open(
+        &self,
+        name: &str,
+        frames: u32,
+        routing: &ChannelRouting,
+        dsp: DspSettings,
+    ) -> Result<Box<dyn AudioStream>> {
         let driver = load_driver(name)?;
         let config = crate::asio::Configuration::query(&driver)?;
-        let mut engine = crate::asio::Engine::open(driver, config, frames, dsp)?;
+        let mut engine = crate::asio::Engine::open(driver, config, frames, routing, dsp)?;
         engine.set_device_name(name);
         Ok(Box::new(engine))
     }
@@ -215,6 +279,26 @@ impl AudioBackend for AsioBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn routing_validates_device_channels_independently_of_dsp() {
+        let selected = ChannelRouting {
+            input_channel: 2,
+            output_channels: vec![3, 1],
+        };
+        assert!(selected.validate(2, 3).is_ok());
+        assert!(selected.validate(1, 3).is_err());
+        assert!(selected.validate(2, 2).is_err());
+        for (input_channel, output_channels) in
+            [(0, vec![1]), (1, vec![]), (1, vec![0]), (1, vec![1, 1])]
+        {
+            assert!(ChannelRouting {
+                input_channel,
+                output_channels
+            }
+            .validate(2, 3)
+            .is_err());
+        }
+    }
     #[test]
     fn auto_prefers_asio_and_explicit_selection_is_respected() {
         assert_eq!(prefer(BackendKind::Auto, true), BackendKind::Asio);

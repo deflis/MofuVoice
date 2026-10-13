@@ -25,6 +25,8 @@ export function useDeviceSettings() {
       return {
         device: settings.device,
         outputDevice: settings.outputDevice,
+        inputChannel: settings.inputChannel,
+        outputChannels: settings.outputChannels,
         backend: settings.backend,
         resolvedBackend: state.resolvedBackend,
         backends: state.backends,

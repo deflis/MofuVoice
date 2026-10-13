@@ -12,7 +12,7 @@ use std::{
 fn main() -> Result<(), Box<dyn Error>> {
     let options = cli::Options::parse(std::env::args().skip(1))?;
     if options.help {
-        println!("Usage: rust-low-latency-voice-changer-cli [--backend auto|cpal|asio] [--device NAME] [--output-device NAME] [--frames N] [--seconds N] [--pitch SEMITONES] [--formant preserve|off] [--formant-shift SEMITONES] [--eq on|off] [--eq-mode simple|pro] [--eq-band1 HZ,DB,Q] [--eq-band2 HZ,DB,Q] [--eq-band3 HZ,DB,Q] [--eq-output DB] [--auto-level on|off] [--level-target DB] [--level-max-gain DB] [--level-floor DB] [--level-response MS] [--compress-threshold DB] [--compress-ratio N] [--compress-attack MS] [--compress-release MS] [--rumble-filter on|off] [--gate on|off] [--gate-threshold auto|DB] [--gate-attack MS] [--gate-release MS]\n       rust-low-latency-voice-changer-cli --inspect --device NAME [--frames N]\n       rust-low-latency-voice-changer-cli --list-devices\nBackend: --backend auto|cpal|asio (default auto, ASIO preferred on Windows when a registered driver is available); CPAL uses the default input/output unless selected with --device INPUT and --output-device OUTPUT.\nSelect a device with --device NAME; use --list-devices to see registered names.\nDefault: 512 frames / pitch 0 / rumble filter off / gate off / EQ off / auto level off. Pitch and formant shift range: -12..12 (fractional allowed). Formant shift defaults to 0; nonzero shift requires preserve.\nAuto level is a post-pitch RMS leveler and soft-knee compressor with a -1 dBFS peak guard. Defaults: target -20 dBFS RMS, max gain +9 dB, activity floor -50 dBFS, response 1500 ms; compression -12 dBFS / 3:1 / attack 5 ms / release 150 ms. All parameters are customizable. No added sample delay.\nRumble filter is an optional pre-gate 80 Hz Butterworth high-pass (default off); no lookahead or buffered sample delay.\nEQ is a post-pitch three-band peaking filter: frequency 40..16000 Hz, gain -12..12 dB, Q 0.2..8; output trim -18..0 dB. Positive gains reserve headroom automatically. No added buffered sample delay. --eq-mode changes GUI controls only.\nGate is a soft pre-pitch expander; threshold defaults to auto noise-floor tracking; attack/release default to 5/80 ms.\nInput 1 -> output 1; other outputs silent. Pitch 0, formant shift 0, rumble filter off, gate off, EQ off, and auto level off: bit-preserving zero-DSP-delay bypass; backend queue and hardware latency are separate.\nWet DSP: spectral phase locking, fixed {LATENCY} samples of delay. Formant correction: cepstral envelope, default preserve; --formant off disables it.\nEnter stops interactive mode.");
+        println!("Usage: rust-low-latency-voice-changer-cli [--backend auto|cpal|asio] [--device NAME] [--output-device NAME] [--input-channel N] [--output-channels N,N] [--frames N] [--seconds N] [--pitch SEMITONES] [--formant preserve|off] [--formant-shift SEMITONES] [--eq on|off] [--eq-mode simple|pro] [--eq-band1 HZ,DB,Q] [--eq-band2 HZ,DB,Q] [--eq-band3 HZ,DB,Q] [--eq-output DB] [--auto-level on|off] [--level-target DB] [--level-max-gain DB] [--level-floor DB] [--level-response MS] [--compress-threshold DB] [--compress-ratio N] [--compress-attack MS] [--compress-release MS] [--rumble-filter on|off] [--gate on|off] [--gate-threshold auto|DB] [--gate-attack MS] [--gate-release MS]\n       rust-low-latency-voice-changer-cli --inspect --device NAME [--frames N]\n       rust-low-latency-voice-changer-cli --list-devices\nBackend: --backend auto|cpal|asio (default auto, ASIO preferred on Windows when a registered driver is available); CPAL uses the default input/output unless selected with --device INPUT and --output-device OUTPUT.\nSelect a device with --device NAME; use --list-devices to see registered names.\nDefault: 512 frames / pitch 0 / rumble filter off / gate off / EQ off / auto level off. Pitch and formant shift range: -12..12 (fractional allowed). Formant shift defaults to 0; nonzero shift requires preserve.\nAuto level is a post-pitch RMS leveler and soft-knee compressor with a -1 dBFS peak guard. Defaults: target -20 dBFS RMS, max gain +9 dB, activity floor -50 dBFS, response 1500 ms; compression -12 dBFS / 3:1 / attack 5 ms / release 150 ms. All parameters are customizable. No added sample delay.\nRumble filter is an optional pre-gate 80 Hz Butterworth high-pass (default off); no lookahead or buffered sample delay.\nEQ is a post-pitch three-band peaking filter: frequency 40..16000 Hz, gain -12..12 dB, Q 0.2..8; output trim -18..0 dB. Positive gains reserve headroom automatically. No added buffered sample delay. --eq-mode changes GUI controls only.\nGate is a soft pre-pitch expander; threshold defaults to auto noise-floor tracking; attack/release default to 5/80 ms.\nRouting: --input-channel N --output-channels 1,2 (default 1 -> 1); other outputs silent. Pitch 0, formant shift 0, rumble filter off, gate off, EQ off, and auto level off: bit-preserving zero-DSP-delay bypass; backend queue and hardware latency are separate.\nWet DSP: spectral phase locking, fixed {LATENCY} samples of delay. Formant correction: cepstral envelope, default preserve; --formant off disables it.\nEnter stops interactive mode.");
         return Ok(());
     }
     if !options.list
@@ -33,7 +33,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         return Ok(());
     }
-    let details = backend.inspect(&options.device, options.frames)?;
+    let routing = backend::ChannelRouting::from(&options);
+    let details = backend.inspect(&options.device, options.frames, &routing)?;
     println!(
         "Selected: {}\n{details}",
         if options.device.is_empty() {
@@ -49,7 +50,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         );
         return Ok(());
     }
-    let mut engine = backend.open(&options.device, options.frames, DspSettings::from(&options))?;
+    let mut engine = backend.open(
+        &options.device,
+        options.frames,
+        &routing,
+        DspSettings::from(&options),
+    )?;
     engine.print_latencies()?;
     println!(
         "Rumble filter: {}; 80 Hz high-pass; no lookahead or buffered sample delay.",
@@ -66,7 +72,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         if options.level.enabled { "on" } else { "off" }
     );
     if options.pitch == 0.0 && options.formant_shift == 0.0 {
-        println!("Pitch/formant DSP=0 samples; rumble filter, gate, EQ and auto level add 0 buffered samples; backend queue latency is reported separately. Input 1 -> output 1.");
+        println!("Pitch/formant DSP=0 samples; rumble filter, gate, EQ and auto level add 0 buffered samples; backend queue latency is reported separately. Selected input -> selected outputs.");
     } else {
         println!(
             "Pitch={} semitones; spectral wet DSP delay={LATENCY} samples ({:.3} ms).",

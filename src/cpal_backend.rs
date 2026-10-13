@@ -2,7 +2,7 @@
 use crate::{
     audio::{AudioProcessor, DspSettings},
     audio_queue::{self, Consumer, Producer},
-    backend::{AudioBackend, AudioStream, Result},
+    backend::{AudioBackend, AudioStream, ChannelRouting, Result},
     pitch::{Sample, LATENCY},
     RATE,
 };
@@ -127,6 +127,42 @@ fn negotiate(
     Err("Input and output need a common f32/i32/i16 format at 48000 Hz and a supported period. No implicit resampling or format conversion is performed.".into())
 }
 
+fn negotiate_routing(
+    input: &[SupportedStreamConfigRange],
+    output: &[SupportedStreamConfigRange],
+    frames: u32,
+    routing: &ChannelRouting,
+) -> Result<(SampleFormat, StreamConfig, StreamConfig)> {
+    routing.validate(
+        input
+            .iter()
+            .map(|c| c.channels() as usize)
+            .max()
+            .unwrap_or(0),
+        output
+            .iter()
+            .map(|c| c.channels() as usize)
+            .max()
+            .unwrap_or(0),
+    )?;
+    let input: Vec<_> = input
+        .iter()
+        .filter(|c| c.channels() as usize >= routing.input_channel)
+        .cloned()
+        .collect();
+    let required_outputs = *routing
+        .output_channels
+        .iter()
+        .max()
+        .expect("validated routing");
+    let output: Vec<_> = output
+        .iter()
+        .filter(|c| c.channels() as usize >= required_outputs)
+        .cloned()
+        .collect();
+    negotiate(&input, &output, frames)
+}
+
 struct Prepared {
     configuration: crate::backend::AudioConfiguration,
     input: cpal::Device,
@@ -137,14 +173,16 @@ struct Prepared {
     details: String,
 }
 impl CpalBackend {
-    fn prepare(&self, input_name: &str, frames: u32) -> Result<Prepared> {
+    fn prepare(&self, input_name: &str, frames: u32, routing: &ChannelRouting) -> Result<Prepared> {
         let input = select_device(true, input_name)?;
         let output = select_device(false, &self.output_device)?;
         let input_ranges: Vec<_> = input.supported_input_configs()?.collect();
         let output_ranges: Vec<_> = output.supported_output_configs()?.collect();
         let (format, input_config, output_config) =
-            negotiate(&input_ranges, &output_ranges, frames)?;
-        let details = format!("CPAL {:?}: input '{}' / {} channels / {:?}; output '{}' / {} channels / {:?}; 48000 Hz; format {format:?}. Input 1 -> output 1, other outputs silent. Default periods are chosen by the host and observed during playback.",
+            negotiate_routing(&input_ranges, &output_ranges, frames, routing)?;
+        let input_channel = routing.input_channel;
+        let output_channels = &routing.output_channels;
+        let details = format!("CPAL {:?}: input '{}' / {} channels / {:?}; output '{}' / {} channels / {:?}; 48000 Hz; format {format:?}. Selected input {input_channel} -> outputs {output_channels:?}, other outputs silent. Default periods are chosen by the host and observed during playback.",
             cpal::default_host().id(), input.description()?.name(), input_config.channels, input_config.buffer_size,
             output.description()?.name(), output_config.channels, output_config.buffer_size);
         let configuration = crate::backend::AudioConfiguration {
@@ -176,19 +214,26 @@ impl AudioBackend for CpalBackend {
         &self,
         name: &str,
         frames: u32,
+        routing: &ChannelRouting,
     ) -> Result<crate::backend::AudioInspection> {
-        let prepared = self.prepare(name, frames)?;
+        let prepared = self.prepare(name, frames, routing)?;
         Ok(crate::backend::AudioInspection {
             configuration: prepared.configuration,
             details: prepared.details,
         })
     }
-    fn open(&self, name: &str, frames: u32, dsp: DspSettings) -> Result<Box<dyn AudioStream>> {
-        let prepared = self.prepare(name, frames)?;
+    fn open(
+        &self,
+        name: &str,
+        frames: u32,
+        routing: &ChannelRouting,
+        dsp: DspSettings,
+    ) -> Result<Box<dyn AudioStream>> {
+        let prepared = self.prepare(name, frames, routing)?;
         match prepared.format {
-            SampleFormat::F32 => build::<f32>(prepared, frames, dsp),
-            SampleFormat::I32 => build::<i32>(prepared, frames, dsp),
-            SampleFormat::I16 => build::<i16>(prepared, frames, dsp),
+            SampleFormat::F32 => build::<f32>(prepared, frames, routing, dsp),
+            SampleFormat::I32 => build::<i32>(prepared, frames, routing, dsp),
+            SampleFormat::I16 => build::<i16>(prepared, frames, routing, dsp),
             _ => Err("Unsupported negotiated sample format".into()),
         }
     }
@@ -248,6 +293,7 @@ impl Metrics {
 }
 
 struct Capture<T: Sample> {
+    input_channel: usize,
     processor: AudioProcessor<T>,
     mono: Vec<T>,
     processed: Vec<T>,
@@ -283,7 +329,7 @@ impl<T: Sample> Capture<T> {
                 .iter_mut()
                 .zip(chunk.chunks_exact(self.channels))
             {
-                *sample = frame[0];
+                *sample = frame[self.input_channel - 1];
             }
             let nonzero = self
                 .processor
@@ -317,6 +363,7 @@ impl<T: Sample> Capture<T> {
 }
 
 struct Playback<T> {
+    output_channels: Vec<usize>,
     channels: usize,
     queue: Consumer<T>,
     metrics: Arc<Metrics>,
@@ -371,7 +418,10 @@ impl<T: Sample> Playback<T> {
         }
         for frame in data.chunks_exact_mut(self.channels) {
             // The unique consumer already checked availability; producer only adds samples.
-            frame[0] = self.queue.pop().unwrap_or_default();
+            let sample = self.queue.pop().unwrap_or_default();
+            for &channel in &self.output_channels {
+                frame[channel - 1] = sample;
+            }
         }
         let elapsed = start.elapsed().as_nanos().min(u64::MAX as u128) as u64;
         self.metrics
@@ -392,12 +442,15 @@ impl<T: Sample> Playback<T> {
 fn build<T: Sample + cpal::SizedSample + Send + 'static>(
     prepared: Prepared,
     frames: u32,
+    routing: &ChannelRouting,
     dsp: DspSettings,
 ) -> Result<Box<dyn AudioStream>> {
     let capacity = (frames as usize * 8).max(32768).next_power_of_two();
     let (producer, consumer) = audio_queue::channel::<T>(capacity);
     let metrics = Arc::new(Metrics::new(frames as usize * 2));
+    let output_channels = routing.output_channels.clone();
     let mut capture = Capture {
+        input_channel: routing.input_channel,
         processor: AudioProcessor::new(RATE, frames as usize, dsp)?,
         mono: vec![T::default(); frames as usize],
         processed: vec![T::default(); frames as usize],
@@ -406,6 +459,7 @@ fn build<T: Sample + cpal::SizedSample + Send + 'static>(
         metrics: metrics.clone(),
     };
     let mut playback = Playback {
+        output_channels,
         channels: prepared.output_config.channels as usize,
         queue: consumer,
         metrics: metrics.clone(),
@@ -640,6 +694,7 @@ mod tests {
         metrics.active.store(true, Ordering::Release);
         (
             Capture {
+                input_channel: options.input_channel,
                 processor: AudioProcessor::new(RATE, max_frames, DspSettings::from(&options))
                     .unwrap(),
                 mono: vec![T::default(); max_frames],
@@ -649,6 +704,7 @@ mod tests {
                 metrics: metrics.clone(),
             },
             Playback {
+                output_channels: options.output_channels.clone(),
                 channels: 3,
                 queue: consumer,
                 metrics: metrics.clone(),
@@ -679,6 +735,41 @@ mod tests {
         output
     }
 
+    #[test]
+    fn selected_input_is_duplicated_to_selected_outputs_in_all_formats() {
+        fn verify<T: Sample + Send + std::fmt::Debug>(samples: &[T]) -> Vec<T> {
+            let (mut capture, mut playback, metrics) =
+                callbacks::<T>(2, 2, &["--input-channel", "2", "--output-channels", "1,3"]);
+            let interleaved: Vec<_> = samples.iter().flat_map(|&s| [T::default(), s]).collect();
+            capture.process(&interleaved);
+            let mut output = vec![T::default(); samples.len() * 3];
+            for block in output.chunks_mut(6) {
+                playback.process(block);
+            }
+            for (frame, &sample) in output.as_chunks::<3>().0.iter().zip(samples) {
+                assert_eq!(*frame, [sample, T::default(), sample]);
+            }
+            assert_eq!(metrics.faults.load(Ordering::Relaxed), 0);
+            output
+        }
+        verify(&[i16::MIN, -1, 0, i16::MAX]);
+        verify(&[i32::MIN, -1, 0, i32::MAX]);
+        let samples = [-0.0_f32, f32::from_bits(1), -0.25, 1.0];
+        let output = verify(&samples);
+        for (frame, sample) in output.as_chunks::<3>().0.iter().zip(samples) {
+            assert_eq!(frame[0].to_bits(), sample.to_bits());
+            assert_eq!(frame[2].to_bits(), sample.to_bits());
+        }
+        let (mut capture, mut playback, metrics) =
+            callbacks::<i16>(2, 2, &["--output-channels", "2"]);
+        capture.process(&[7, 99, -8, 99, 9, 99, -10, 99]);
+        let mut output = [99; 12];
+        for block in output.chunks_mut(6) {
+            playback.process(block);
+        }
+        assert_eq!(output, [0, 7, 0, 0, -8, 0, 0, 9, 0, 0, -10, 0]);
+        assert_eq!(metrics.faults.load(Ordering::Relaxed), 0);
+    }
     #[test]
     fn bypass_mapping_preserves_all_formats_and_silences_other_outputs() {
         mapping(&[i16::MIN, -1, 0, 1, i16::MAX, 7, 13, -12]);
@@ -745,6 +836,35 @@ mod tests {
         buffer: SupportedBufferSize,
     ) -> SupportedStreamConfigRange {
         SupportedStreamConfigRange::new(channels, rate, rate, buffer, format)
+    }
+    #[test]
+    fn inspection_and_open_negotiate_the_requested_channel_layout() {
+        let input = [
+            range(SampleFormat::F32, 1, RATE, SupportedBufferSize::Unknown),
+            range(SampleFormat::F32, 2, RATE, SupportedBufferSize::Unknown),
+        ];
+        let output = [
+            range(SampleFormat::F32, 1, RATE, SupportedBufferSize::Unknown),
+            range(SampleFormat::F32, 3, RATE, SupportedBufferSize::Unknown),
+        ];
+        let routing = ChannelRouting {
+            input_channel: 2,
+            output_channels: vec![1, 3],
+        };
+        let (_, input_config, output_config) =
+            negotiate_routing(&input, &output, 128, &routing).unwrap();
+        assert_eq!(input_config.channels, 2);
+        assert_eq!(output_config.channels, 3);
+        assert!(negotiate_routing(&input[..1], &output, 128, &routing).is_err());
+        assert!(negotiate_routing(&input, &output[..1], 128, &routing).is_err());
+        let mono = ChannelRouting {
+            input_channel: 1,
+            output_channels: vec![1],
+        };
+        let (_, input_config, output_config) =
+            negotiate_routing(&input, &output, 128, &mono).unwrap();
+        assert_eq!(input_config.channels, 1);
+        assert_eq!(output_config.channels, 1);
     }
     #[test]
     fn negotiation_validates_common_format_rate_and_period() {
