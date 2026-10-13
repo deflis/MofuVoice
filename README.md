@@ -191,3 +191,7 @@ pnpm desktop:build
 `target/release/` に実行ファイルが生成されます。React画面の開発には `pnpm desktop:dev`、CLIだけのビルドには `cargo build --release --locked` を使います。
 
 整形は `mise run fmt`、チェックは `mise run check` で実行します。
+
+## ライセンス
+
+本プロジェクトは[MITライセンス](LICENSE)で公開しています。依存ライブラリおよびASIO SDKには、それぞれのライセンスが適用されます。
