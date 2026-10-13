@@ -1,7 +1,9 @@
 :root {
   font-family: system-ui, sans-serif;
   font-size: 13px;
-  color-scheme: light dark;
+  color-scheme: dark;
+  color: #e6e8ec;
+  background: #16181c;
 }
 body {
   margin: 0;
@@ -109,4 +111,100 @@ pre {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0 12px;
+}
+
+button {
+  border: 1px solid #373c46;
+  border-radius: 6px;
+  background: #2a2e36;
+  color: #e6e8ec;
+  cursor: pointer;
+}
+button:hover:not(:disabled) {
+  background: #343a44;
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.actions button:first-child {
+  background: #00c4b4;
+  color: #0a1416;
+}
+input:not([type="range"]):not([type="checkbox"]),
+select {
+  background: #20242a;
+  color: #e6e8ec;
+  border: 1px solid #373c46;
+  border-radius: 4px;
+}
+input {
+  accent-color: #00c4b4;
+}
+:focus-visible {
+  outline: 2px solid #00c4b4;
+  outline-offset: 2px;
+}
+.status-badge {
+  color: #00c4b4;
+  background: #20242a;
+  border-radius: 12px;
+  padding: 4px 10px;
+}
+.status-panel {
+  background: #20242a;
+  border: 1px solid #373c46;
+  border-radius: 8px;
+  padding: 16px;
+}
+.device-name {
+  font-weight: 600;
+}
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin: 16px 0;
+}
+dt,
+.muted {
+  color: #8c94a0;
+  font-size: 12px;
+}
+dd {
+  margin: 4px 0 0;
+  font-variant-numeric: tabular-nums;
+}
+.log-panel {
+  border-top: 1px solid #373c46;
+}
+.settings-window {
+  box-sizing: border-box;
+  width: 560px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 32px);
+  padding: 20px;
+  background: #16181c;
+  color: #e6e8ec;
+  border: 1px solid #373c46;
+  border-radius: 8px;
+}
+.settings-window::backdrop {
+  background: #0008;
+}
+.settings-window header {
+  border-bottom: 1px solid #373c46;
+  padding-bottom: 12px;
+}
+.settings-window h1 {
+  margin: 0;
+}
+.settings-window footer {
+  border-top: 1px solid #373c46;
+  padding-top: 12px;
+}
+@media (max-width: 500px) {
+  .gate-fields {
+    grid-template-columns: 1fr;
+  }
 }

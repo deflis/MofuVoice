@@ -165,11 +165,11 @@ struct Desktop {
     closing: bool,
 }
 type DesktopState = Mutex<Desktop>;
-#[derive(Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Snapshot {
     busy: bool,
-    status: String,
+    info: crate::session::AudioInfo,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -246,8 +246,17 @@ fn audio_status(state: State<'_, DesktopState>) -> Result<Snapshot, String> {
     let mut desktop = state.lock().map_err(|error| error.to_string())?;
     Ok(Snapshot {
         busy: desktop.session.poll(),
-        status: desktop.session.status(),
+        info: desktop.session.info(),
     })
+}
+#[tauri::command]
+fn set_logging(
+    logging: bool,
+    state: State<'_, DesktopState>,
+) -> Result<Option<crate::session::AudioLog>, String> {
+    let desktop = state.lock().map_err(|error| error.to_string())?;
+    desktop.session.set_logging(logging);
+    Ok(desktop.session.log_info())
 }
 #[tauri::command]
 fn start_audio(
@@ -362,12 +371,58 @@ pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
             bootstrap,
             device_choices,
             audio_status,
+            set_logging,
             start_audio,
             stop_audio,
             save_settings,
             open_spectrum,
             close_application
         ])
+        .setup(|app| {
+            let handle = app.handle().clone();
+            std::thread::Builder::new()
+                .name("desktop-status".into())
+                .spawn(move || {
+                    let mut previous = None;
+                    let mut previous_log = None;
+                    loop {
+                        let (snapshot, log) = {
+                            let state = handle.state::<DesktopState>();
+                            let Ok(mut desktop) = state.lock() else {
+                                break;
+                            };
+                            if desktop.closing {
+                                break;
+                            }
+                            (
+                                Snapshot {
+                                    busy: desktop.session.poll(),
+                                    info: desktop.session.info(),
+                                },
+                                desktop.session.log_info(),
+                            )
+                        };
+                        if previous.as_ref() != Some(&snapshot) {
+                            if let Err(error) = handle.emit("audio-status", &snapshot) {
+                                eprintln!("Cannot emit audio status: {error}");
+                            }
+                            previous = Some(snapshot);
+                        }
+                        if let Some(log) = log {
+                            if previous_log.as_ref() != Some(&log) {
+                                if let Err(error) = handle.emit("audio-log", &log) {
+                                    eprintln!("Cannot emit audio log: {error}");
+                                }
+                                previous_log = Some(log);
+                            }
+                        } else {
+                            previous_log = None;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    }
+                })?;
+            Ok(())
+        })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
