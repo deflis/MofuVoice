@@ -33,7 +33,7 @@ fn neutral_bypass_preserves_supported_sample_formats() {
 }
 
 #[test]
-fn pipeline_matches_rumble_gate_pitch_level_order_across_variable_blocks() {
+fn pipeline_matches_rumble_gate_pitch_eq_level_order_across_variable_blocks() {
     let args = [
         "--rumble-filter",
         "on",
@@ -45,12 +45,19 @@ fn pipeline_matches_rumble_gate_pitch_level_order_across_variable_blocks() {
         "-40",
         "--auto-level",
         "on",
+        "--eq",
+        "on",
+        "--eq-band1",
+        "250,-3,0.7",
+        "--eq-band2",
+        "3000,2,0.8",
     ];
     let dsp = settings(&args);
     let mut rumble = rust_low_latency_voice_changer::rumble::RumbleFilter::new(dsp.rumble_filter);
     let mut gate: NoiseGate = dsp.gate.build().unwrap();
     let mut pitch =
         PitchShifter::new(dsp.semitones, dsp.preserve_formants, dsp.formant_shift).unwrap();
+    let mut eq = dsp.eq.build().unwrap();
     let mut level = dsp.level.build().unwrap();
     let mut processor = AudioProcessor::<f32>::new(RATE, 512, dsp).unwrap();
     let input: Vec<_> = (0..12000).map(|i| (i as f32 * 0.03).sin() * 0.1).collect();
@@ -60,6 +67,7 @@ fn pipeline_matches_rumble_gate_pitch_level_order_across_variable_blocks() {
     rumble.process_in_place(&mut filtered);
     gate.process_block(&filtered, &mut gated);
     pitch.process_block(&gated, &mut expected);
+    eq.process_in_place(&mut expected);
     level.process_in_place(&mut expected);
     let mut actual = vec![0.0; input.len()];
     let mut offset = 0;

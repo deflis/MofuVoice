@@ -43,3 +43,7 @@ tauri-build = { version = "2", optional = true , features = [] }
 [[bench]]
 name = "spectral"
 harness = false
+
+[[bench]]
+name = "eq"
+harness = false
