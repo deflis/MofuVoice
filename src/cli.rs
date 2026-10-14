@@ -122,7 +122,8 @@ impl Options {
                     formant_given = true;
                 }
                 "--pitch" if !pitch_given => {
-                    options.pitch.semitones = args.next().ok_or("--pitch requires semitones")?.parse()?;
+                    options.pitch.semitones =
+                        args.next().ok_or("--pitch requires semitones")?.parse()?;
                     crate::pitch::pitch_ratio(options.pitch.semitones)?;
                     pitch_given = true;
                 }
