@@ -2,9 +2,16 @@
 rust = { version = "1.99.0", components = ["rustfmt", "clippy"] }
 node = "26.11.1"
 pnpm = "12.11.2"
+"http:asiosdk" = {
+  version = "2.3.4",
+  url = "https://download.steinberg.net/sdk_downloads/ASIO-SDK_2.3.4_2025-10-15.zip",
+  checksum = "sha256:d5ebf0c20dd2c5f43771fd0c1418f4b361bf52434ee670097cfa6b3a335e2eca",
+  strip_components = 1,
+  os = ["windows"],
+}
 
 [env]
-CPAL_ASIO_DIR = "{{config_root}}/.tools/asiosdk"
+CPAL_ASIO_DIR = { value = "{% if tools.asiosdk %}{{ tools.asiosdk.path }}{% endif %}", tools = true }
 
 [tasks.fmt]
 description = "Format Rust and frontend files"
@@ -53,62 +60,8 @@ description = "Check frontend formatting, lint and types"
 depends = ["fmt:web:check", "lint:web", "typecheck"]
 
 [tasks."setup:ci"]
-description = "Install LLVM and ASIO SDK for GitHub Actions"
-depends = ["setup:ci:llvm", "setup:asio"]
-
-[tasks."setup:asio"]
-description = "Fetch the ASIO SDK"
-shell = "pwsh -NoProfile -Command"
-run = '''
-$ErrorActionPreference = 'Stop'
-$ProgressPreference = 'SilentlyContinue'
-
-$Url = 'https://download.steinberg.net/sdk_downloads/ASIO-SDK_2.3.4_2025-10-15.zip'
-$Destination = Join-Path '{{config_root}}' '.tools/asiosdk'
-
-$asioHeader = Join-Path $Destination 'common\asio.h'
-if (Test-Path -LiteralPath $asioHeader -PathType Leaf) {
-    Write-Host "ASIO SDK already present at $Destination"
-    exit 0
-}
-
-$toolsDir = Split-Path -Parent $Destination
-if (-not (Test-Path -LiteralPath $toolsDir)) {
-    New-Item -ItemType Directory -Path $toolsDir | Out-Null
-}
-if (Test-Path -LiteralPath $Destination) {
-    Remove-Item -LiteralPath $Destination -Recurse -Force
-}
-
-$tempZip = Join-Path ([System.IO.Path]::GetTempPath()) ("asio-sdk-" + [Guid]::NewGuid().ToString('N') + '.zip')
-$tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("asio-sdk-" + [Guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory -Path $tempDir | Out-Null
-try {
-    Write-Host "Downloading ASIO SDK from $Url"
-    Invoke-WebRequest -Uri $Url -OutFile $tempZip
-    Expand-Archive -LiteralPath $tempZip -DestinationPath $tempDir -Force
-
-    $topLevel = @(Get-ChildItem -LiteralPath $tempDir)
-    if ($topLevel.Count -eq 0) {
-        throw "ASIO SDK zip from $Url extracted to an empty directory"
-    }
-    if ($topLevel.Count -eq 1 -and $topLevel[0].PSIsContainer) {
-        Move-Item -LiteralPath $topLevel[0].FullName -Destination $Destination
-    } else {
-        New-Item -ItemType Directory -Path $Destination | Out-Null
-        Move-Item -Path (Join-Path $tempDir '*') -Destination $Destination
-    }
-
-    if (-not (Test-Path -LiteralPath $asioHeader -PathType Leaf)) {
-        throw "ASIO SDK incomplete at ${Destination}: missing common\asio.h"
-    }
-    Write-Host "ASIO SDK installed at $Destination"
-}
-finally {
-    if (Test-Path -LiteralPath $tempZip) { Remove-Item -LiteralPath $tempZip -Force }
-    if (Test-Path -LiteralPath $tempDir) { Remove-Item -LiteralPath $tempDir -Recurse -Force }
-}
-'''
+description = "Install LLVM for GitHub Actions"
+depends = ["setup:ci:llvm"]
 
 [tasks."setup:ci:llvm"]
 description = "Install LLVM 23.1.3 and export libclang for GitHub Actions"

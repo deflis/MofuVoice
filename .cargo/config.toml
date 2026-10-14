@@ -1,4 +1,0 @@
-[env]
-# ASIO SDK root relative to the package directory (must contain common/asio.h).
-# A real environment variable still wins unless force is set.
-CPAL_ASIO_DIR = { value = ".tools/asiosdk", relative = true }

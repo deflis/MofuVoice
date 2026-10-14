@@ -2,6 +2,8 @@
 /.tools/
 /logs/
 /mise.local.toml
+*.pdb
+
 
 
 /node_modules/
