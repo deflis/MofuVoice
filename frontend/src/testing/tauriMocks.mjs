@@ -85,7 +85,9 @@ mock.module("@tauri-apps/api/event", { exports: { listen } });
 export const { useSettingsStore: settingsStore } = await import("../settingsStore.ts");
 export const { useAudioStore: audioStore } = await import("../audioStore.ts");
 export const { useAudioLogStore: logStore } = await import("../audioLogStore.ts");
-export const { connectApplication } = await import("../applicationConnection.ts");
+export const { connectMain } = await import("../windows/main/connect.ts");
+export const { connectSettings } = await import("../windows/settings/connect.ts");
+export const { connectLog } = await import("../windows/log/connect.ts");
 export let connection;
 export function setConnection(value) {
   connection = value;
@@ -124,7 +126,9 @@ beforeEach(() => {
     "stop_audio",
     "save_settings",
     "open_spectrum",
+    "open_log",
     "close_settings",
+    "close_log",
     "close_application",
   ]) {
     commands[name] = mock.fn(async () => {});
@@ -141,5 +145,5 @@ afterEach(async () => {
   await setImmediate();
 });
 export function callback(event) {
-  return listen.mock.calls.find((call) => call.arguments[0] === event).arguments[1];
+  return listen.mock.calls.findLast((call) => call.arguments[0] === event).arguments[1];
 }

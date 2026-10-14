@@ -493,23 +493,85 @@ fn stop_audio(state: State<'_, DesktopState>) -> Result<(), String> {
         .stop();
     Ok(())
 }
-#[tauri::command]
-fn open_settings(app: tauri::AppHandle) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window("settings") {
+struct WindowSize {
+    width: f64,
+    height: f64,
+    min_width: f64,
+    min_height: f64,
+}
+
+fn show_or_create_window(
+    app: &tauri::AppHandle,
+    label: &str,
+    title: &str,
+    path: &str,
+    size: WindowSize,
+) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(label) {
         window.show().map_err(|error| error.to_string())?;
         return window.set_focus().map_err(|error| error.to_string());
     }
-    tauri::WebviewWindowBuilder::new(
-        &app,
-        "settings",
-        tauri::WebviewUrl::App("index.html?window=settings".into()),
-    )
-    .title("設定 — Voice Changer")
-    .inner_size(820.0, 740.0)
-    .min_inner_size(560.0, 460.0)
-    .build()
-    .map_err(|error| error.to_string())?;
+    tauri::WebviewWindowBuilder::new(app, label, tauri::WebviewUrl::App(path.into()))
+        .title(title)
+        .inner_size(size.width, size.height)
+        .min_inner_size(size.min_width, size.min_height)
+        .build()
+        .map_err(|error| error.to_string())?;
     Ok(())
+}
+
+async fn open_window_on_main(
+    app: tauri::AppHandle,
+    open: impl FnOnce(&tauri::AppHandle) -> Result<(), String> + Send + 'static,
+) -> Result<(), String> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        let _ = sender.send(open(&handle));
+    })
+    .map_err(|error| error.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || receiver.recv())
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn open_settings(app: tauri::AppHandle) -> Result<(), String> {
+    open_window_on_main(app, |app| {
+        show_or_create_window(
+            app,
+            "settings",
+            "設定 — Voice Changer",
+            "index.html?window=settings",
+            WindowSize {
+                width: 820.0,
+                height: 740.0,
+                min_width: 560.0,
+                min_height: 460.0,
+            },
+        )
+    })
+    .await
+}
+
+#[tauri::command]
+async fn open_log(app: tauri::AppHandle) -> Result<(), String> {
+    open_window_on_main(app, |app| {
+        show_or_create_window(
+            app,
+            "log",
+            "ログ — Voice Changer",
+            "index.html?window=log",
+            WindowSize {
+                width: 640.0,
+                height: 720.0,
+                min_width: 480.0,
+                min_height: 520.0,
+            },
+        )
+    })
+    .await
 }
 #[tauri::command]
 fn acknowledge_application_close(
@@ -547,6 +609,13 @@ fn fallback_application_close(
 #[tauri::command]
 fn close_settings(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("settings") {
+        window.hide().map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+#[tauri::command]
+fn close_log(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("log") {
         window.hide().map_err(|error| error.to_string())?;
     }
     Ok(())
@@ -651,6 +720,8 @@ pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
             save_settings,
             open_settings,
             close_settings,
+            open_log,
+            close_log,
             acknowledge_application_close,
             fallback_application_close,
             open_spectrum,

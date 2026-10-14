@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --config frontend/vite.config.ts",
-    "test:web": "node --experimental-test-module-mocks --test frontend/src/*.test.mjs",
+    "test:web": "node --experimental-test-module-mocks --test frontend/src/**/*.test.mjs",
     "build": "vite build --config frontend/vite.config.ts",
     "desktop:dev": "tauri dev --features desktop",
     "desktop:build": "tauri build --features desktop -- --locked"
