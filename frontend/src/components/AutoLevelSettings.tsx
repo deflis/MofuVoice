@@ -6,7 +6,7 @@ const levelFields: {
   min: number;
   max: number;
 }[] = [
-  { key: "targetDb", label: "Target RMS (dBFS)", min: -36, max: -6 },
+  { key: "targetDb", label: "Target loudness (LUFS)", min: -36, max: -6 },
   { key: "maxGainDb", label: "Max gain (dB)", min: 0, max: 18 },
   { key: "floorDb", label: "Activity floor (dBFS)", min: -90, max: -30 },
   { key: "responseMs", label: "Level response (ms)", min: 100, max: 10000 },

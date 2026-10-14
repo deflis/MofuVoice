@@ -1,4 +1,4 @@
-//! Causal RMS leveling, soft-knee peak compression and a zero-lookahead peak guard.
+//! Causal momentary-LUFS leveling, soft-knee peak compression and a zero-lookahead peak guard.
 //! Envelope response times change gain, not sample positions. No audio is buffered.
 use crate::{pitch::Sample, RATE};
 use std::{error::Error, fmt};
@@ -27,6 +27,7 @@ pub const KEYS: [&str; 8] = [
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LevelSettings {
     pub enabled: bool,
+    /// Mono K-weighted momentary loudness target in LUFS.
     pub target_db: f64,
     pub max_gain_db: f64,
     pub floor_db: f64,
@@ -40,7 +41,7 @@ impl Default for LevelSettings {
     fn default() -> Self {
         Self {
             enabled: false,
-            target_db: -20.0,
+            target_db: -14.0,
             max_gain_db: 9.0,
             floor_db: -50.0,
             response_ms: 1500.0,
@@ -105,7 +106,7 @@ impl LevelSettings {
         }
         if self.floor_db >= self.target_db {
             return Err(InvalidLevel(
-                "level floor must be below target RMS level".into(),
+                "level floor must be below target loudness level".into(),
             ));
         }
         Ok(())
@@ -115,6 +116,7 @@ impl LevelSettings {
         Ok(AutoLevel {
             settings: self,
             power: 0.0,
+            loudness: MomentaryLoudness::new(),
             peak: 0.0,
             level_gain_db: 0.0,
             compression_db: 0.0,
@@ -146,9 +148,60 @@ fn reduction(level: f64, threshold: f64, ratio: f64) -> f64 {
         slope * over
     }
 }
+// ITU-R BS.1770 K-weighting coefficients for the engine's fixed 48 kHz mono signal.
+// The ring stores detector energy only; audio samples are never delayed.
+struct Biquad {
+    b: [f64; 3],
+    a: [f64; 2],
+    z: [f64; 2],
+}
+impl Biquad {
+    fn process(&mut self, input: f64) -> f64 {
+        let output = self.b[0] * input + self.z[0];
+        self.z[0] = self.b[1] * input - self.a[0] * output + self.z[1];
+        self.z[1] = self.b[2] * input - self.a[1] * output;
+        output
+    }
+}
+struct MomentaryLoudness {
+    shelf: Biquad,
+    high_pass: Biquad,
+    energy: Box<[f64]>,
+    position: usize,
+    sum: f64,
+}
+impl MomentaryLoudness {
+    fn new() -> Self {
+        Self {
+            shelf: Biquad {
+                b: [1.53512485958697, -2.69169618940638, 1.19839281085285],
+                a: [-1.69065929318241, 0.73248077421585],
+                z: [0.0; 2],
+            },
+            high_pass: Biquad {
+                b: [1.0, -2.0, 1.0],
+                a: [-1.99004745483398, 0.99007225036621],
+                z: [0.0; 2],
+            },
+            energy: vec![0.0; RATE as usize * 2 / 5].into_boxed_slice(),
+            position: 0,
+            sum: 0.0,
+        }
+    }
+    fn process(&mut self, input: f64) -> f64 {
+        let weighted = self.high_pass.process(self.shelf.process(input));
+        let energy = weighted * weighted;
+        self.sum += energy - self.energy[self.position];
+        self.energy[self.position] = energy;
+        self.position = (self.position + 1) % self.energy.len();
+        -0.691 + 10.0 * (self.sum / self.energy.len() as f64).max(1e-24).log10()
+    }
+}
+
 pub struct AutoLevel {
     settings: LevelSettings,
     power: f64,
+    loudness: MomentaryLoudness,
     peak: f64,
     level_gain_db: f64,
     compression_db: f64,
@@ -173,9 +226,11 @@ impl AutoLevel {
             };
             self.power += (input * input - self.power) * self.rms_rate;
             let rms_db = db(self.power.sqrt());
+            let input_lufs = self.loudness.process(input);
             if rms_db > self.settings.floor_db && db(input.abs()) > self.settings.floor_db {
-                let target =
-                    (self.settings.target_db - rms_db).clamp(-18.0, self.settings.max_gain_db);
+                // Compensate compressor attenuation so the target describes its output.
+                let target = (self.settings.target_db - input_lufs + self.compression_db)
+                    .clamp(-18.0, self.settings.max_gain_db);
                 self.level_gain_db += (target - self.level_gain_db) * self.level_rate;
             }
             let leveled = input * amplitude(self.level_gain_db);
@@ -220,6 +275,38 @@ mod tests {
         (samples.iter().map(|x| (*x as f64).powi(2)).sum::<f64>() / samples.len() as f64).sqrt()
     }
     #[test]
+    fn k_weighted_meter_matches_reference_tones() {
+        // Analytic steady-state K-filter response, amplitude 0.1 (-23.0103 dBFS RMS).
+        // Frequency dependence catches an accidental unweighted RMS detector.
+        for (frequency, expected) in [(100.0, -24.8348), (1000.0, -23.0036), (10000.0, -19.6594)] {
+            let mut meter = MomentaryLoudness::new();
+            let mut measured = 0.0;
+            for i in 0..RATE * 2 {
+                let input =
+                    0.1 * (std::f64::consts::TAU * frequency * i as f64 / RATE as f64).sin();
+                measured = meter.process(input);
+            }
+            assert!(
+                (measured - expected).abs() < 0.02,
+                "{frequency}: {measured}"
+            );
+        }
+    }
+    #[test]
+    fn default_target_is_reached_with_compression() {
+        let mut dsp = active().build().unwrap();
+        let mut meter = MomentaryLoudness::new();
+        let mut measured = 0.0;
+        for i in 0..RATE * 30 {
+            let mut sample =
+                [0.15 * (std::f64::consts::TAU * 1000.0 * i as f64 / RATE as f64).sin() as f32];
+            dsp.process_in_place(&mut sample);
+            measured = meter.process(sample[0] as f64);
+        }
+        assert!((measured + 14.0).abs() < 0.2, "{measured}");
+        assert!(dsp.compression_db > 1.0);
+    }
+    #[test]
     fn invalid_settings_fail_even_when_disabled() {
         for i in 0..8 {
             for value in [f64::NAN, f64::INFINITY, -100000.0, 100000.0] {
@@ -260,11 +347,21 @@ mod tests {
     }
     #[test]
     fn levels_quiet_speech_without_raising_silence_or_low_noise() {
-        let mut dsp = active().build().unwrap();
-        let mut quiet = tone(0.05, 12);
+        let mut dsp = LevelSettings {
+            max_gain_db: 18.0,
+            ..active()
+        }
+        .build()
+        .unwrap();
+        let mut quiet = tone(0.08, 30);
         dsp.process_in_place(&mut quiet);
         let last = &quiet[quiet.len() - RATE as usize..];
-        assert!((db(rms(last)) + 20.0).abs() < 1.5, "{}", db(rms(last)));
+        let mut meter = MomentaryLoudness::new();
+        let mut measured = 0.0;
+        for sample in last {
+            measured = meter.process(*sample as f64);
+        }
+        assert!((measured + 14.0).abs() < 0.3, "{measured}");
         let gain = dsp.level_gain_db;
         let mut silence = vec![0.0_f32; RATE as usize * 5];
         dsp.process_in_place(&mut silence);
