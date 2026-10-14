@@ -1,4 +1,8 @@
-# 設定ガイド
+# 利用ガイド
+
+[GUIの簡単な使い方](../README.md#guiでの使い方) / [詳細な使い方・トラブル対処・CLI](usage.md)
+
+## 音声の接続ガイド
 
 [Rust Low-Latency Voice Changer](../README.md) を Voicemeeter または VB-Audio Matrix と組み合わせる手順です。いずれも **ASIO** で接続し、アプリ側は **入力1 → 出力1**（モノラル1本）だけを処理します。
 
