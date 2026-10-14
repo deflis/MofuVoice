@@ -1,3 +1,6 @@
+import { openSettings, type SettingsSection } from "./settingsNavigation";
+import { useSettingsStore } from "./settingsStore";
+import { useAudioStore } from "./audioStore";
 import { useEffect, useReducer } from "react";
 import { connectApplication } from "./applicationConnection";
 import { useSettingsReady, useSettingsLoadFailed } from "./settingsHooks";
@@ -5,12 +8,13 @@ import { AudioControls } from "./components/AudioControls";
 import { SettingsWindow } from "./components/SettingsWindow";
 import { AppHeader } from "./components/AppHeader";
 import { Notifications } from "./components/Notifications";
-import { StatusDetails } from "./components/StatusDetails";
 
 function ApplicationConnection() {
-  useEffect(() => connectApplication().disconnect, []);
+  useEffect(() => connectApplication(settingsWindow).disconnect, []);
   return null;
 }
+
+const settingsWindow = new URLSearchParams(window.location.search).get("window") === "settings";
 
 export function App() {
   const ready = useSettingsReady();
@@ -20,7 +24,7 @@ export function App() {
   return (
     <main>
       <ApplicationConnection key={connectionAttempt} />
-      <AppHeader />
+      {!settingsWindow && <AppHeader />}
       <Notifications />
       {!ready ? (
         <div>
@@ -34,11 +38,68 @@ export function App() {
         </div>
       ) : (
         <>
-          <AudioControls />
-          <SettingsWindow />
-          <StatusDetails />
+          {settingsWindow ? (
+            <SettingsWindow />
+          ) : (
+            <>
+              <AudioControls />
+              <div className="home-settings-actions">
+                <OpenSettingsButton section="voice">声を調整する</OpenSettingsButton>
+                <OpenSettingsButton section="devices">設定</OpenSettingsButton>
+              </div>
+              <DeviceSetupGuidance />
+            </>
+          )}
         </>
       )}
     </main>
+  );
+}
+
+function OpenSettingsButton({ section, children }: { section: SettingsSection; children: string }) {
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        void openSettings(section).catch((error: unknown) =>
+          useAudioStore.setState({ error: String(error) }),
+        );
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function DeviceSetupGuidance() {
+  const reason = useSettingsStore((state) => {
+    const settings = state.settings;
+    if (!settings || state.switchingBackend) {
+      return "";
+    }
+    if (!state.audioAvailable) {
+      return "使える音声機器が見つかりません。接続と設定を確認してください。";
+    }
+    if (state.resolvedBackend === "asio" && !settings.device) {
+      return "最初に、入力・出力デバイスを設定してください。";
+    }
+    if (
+      (settings.device && !state.devices.includes(settings.device)) ||
+      (state.resolvedBackend === "cpal" &&
+        settings.outputDevice &&
+        !state.outputDevices.includes(settings.outputDevice))
+    ) {
+      return "前回使った音声機器が見つかりません。入力・出力デバイスを確認してください。";
+    }
+    return "";
+  });
+  if (!reason) {
+    return null;
+  }
+  return (
+    <aside className="setup-guidance">
+      <p>{reason}</p>
+      <OpenSettingsButton section="devices">入力・出力デバイスを確認する</OpenSettingsButton>
+    </aside>
   );
 }

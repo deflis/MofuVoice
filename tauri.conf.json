@@ -14,10 +14,10 @@
       {
         "label": "main",
         "title": "Voice Changer",
-        "width": 600,
-        "height": 560,
-        "minWidth": 480,
-        "minHeight": 460
+        "width": 480,
+        "height": 280,
+        "minWidth": 420,
+        "minHeight": 240
       }
     ],
     "security": {

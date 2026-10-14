@@ -112,6 +112,8 @@ beforeEach(() => {
     deviceError: "",
     resolvedBackend: "cpal",
   }));
+  commands.acknowledge_application_close = mock.fn(async () => true);
+  commands.fallback_application_close = mock.fn(async () => {});
   commands.audio_status = mock.fn(async () => ({ busy: false, info: { phase: "ready" } }));
   commands.set_logging = mock.fn(async ({ logging }) =>
     logging ? { elapsedSeconds: 0, telemetry: null } : null,
@@ -121,6 +123,7 @@ beforeEach(() => {
     "stop_audio",
     "save_settings",
     "open_spectrum",
+    "close_settings",
     "close_application",
   ]) {
     commands[name] = mock.fn(async () => {});

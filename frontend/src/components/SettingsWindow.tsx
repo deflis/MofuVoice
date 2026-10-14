@@ -1,26 +1,18 @@
-import { useRef } from "react";
 import { SettingsPanel } from "./SettingsPanel";
-import { Notifications } from "./Notifications";
 import { SaveSettingsButton } from "./SaveSettingsButton";
+import { useAudioStore } from "../audioStore";
 
 export function SettingsWindow() {
-  const dialog = useRef<HTMLDialogElement>(null);
+  const busy = useAudioStore((state) => state.snapshot.busy || state.pending);
   return (
-    <>
-      <button type="button" onClick={() => dialog.current?.showModal()}>
-        設定
-      </button>
-      <dialog ref={dialog} className="settings-window" aria-labelledby="settings-title">
-        <header>
-          <h1 id="settings-title">Settings</h1>
-          <button type="button" onClick={() => dialog.current?.close()} aria-label="設定を閉じる">
-            閉じる
-          </button>
-        </header>
-        <Notifications />
-        <SettingsPanel />
-        <SaveSettingsButton />
-      </dialog>
-    </>
+    <div className="settings-window">
+      <header>
+        <h1>設定</h1>
+        <span className="muted">Voice Changer</span>
+      </header>
+      {busy && <output>音声を停止すると設定を変更できます。</output>}
+      <SettingsPanel />
+      <SaveSettingsButton />
+    </div>
   );
 }

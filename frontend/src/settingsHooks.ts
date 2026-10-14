@@ -32,6 +32,7 @@ export function useDeviceSettings() {
         backends: state.backends,
         outputDevices: state.outputDevices,
         updateBackend: state.updateBackend,
+        updateRouting: state.updateRouting,
         frames: settings.frames,
         devices: state.devices,
         update: state.update,

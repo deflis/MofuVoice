@@ -21,6 +21,7 @@ type SettingsStore = {
   connect: () => () => void;
   save: () => Promise<void>;
   updateBackend: (backend: string) => Promise<void>;
+  updateRouting: (inputChannel: number, outputChannels: number[]) => void;
   update: <K extends keyof Settings>(key: K, value: Settings[K]) => void;
   updateLevel: <K extends keyof LevelSettings>(key: K, value: LevelSettings[K]) => void;
   resetLevel: () => void;
@@ -114,6 +115,15 @@ export const useSettingsStore = create<SettingsStore>()((set, get) => {
         set({ switchingBackend: false });
       }
     },
+    updateRouting: (inputChannel, outputChannels) =>
+      set((state) => ({
+        settings: {
+          ...requireSettings(state.settings),
+          inputChannel,
+          outputChannels: [...outputChannels],
+        },
+        notice: "",
+      })),
     update: (key, value) =>
       set((state) => ({
         settings: { ...requireSettings(state.settings), [key]: value },

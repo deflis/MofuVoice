@@ -1,34 +1,65 @@
+import { DetailsPopup } from "./DetailsPopup";
 import { useVoiceSettings } from "../settingsHooks";
 import { SemitonesInput } from "./SemitonesInput";
 
 export function VoiceSettings() {
-  const { rumbleFilter, pitch, formantShift, preserveFormants, update } = useVoiceSettings();
+  const { pitch, formantShift, preserveFormants, update } = useVoiceSettings();
   return (
     <section>
-      <h2>声の調整</h2>
-      <label className="check">
-        <input
-          type="checkbox"
-          checked={rumbleFilter}
-          onChange={(event) => update("rumbleFilter", event.target.checked)}
-        />
-        低域ノイズ除去（80 Hz）
-      </label>
-      <p>机の振動や空調の低い唸りを抑えます。低い声が薄くなる場合はオフにしてください。</p>
-      <SemitonesInput label="Pitch" value={pitch} onChange={(value) => update("pitch", value)} />
+      <h2>声の変換</h2>
       <SemitonesInput
-        label="Formant shift"
-        value={formantShift}
-        onChange={(value) => update("formantShift", value)}
+        label="声の高さ（ピッチ）"
+        value={pitch}
+        onChange={(value) => update("pitch", value)}
       />
-      <label className="check">
-        <input
-          type="checkbox"
-          checked={preserveFormants}
-          onChange={(event) => update("preserveFormants", event.target.checked)}
+      <fieldset className="settings" disabled={!preserveFormants}>
+        <SemitonesInput
+          label="声の響き（フォルマント）"
+          lowerLabel="太く"
+          upperLabel="明るく"
+          value={formantShift}
+          onChange={(value) => update("formantShift", value)}
         />
-        Preserve formants
-      </label>
+      </fieldset>
+      <button
+        type="button"
+        onClick={() => {
+          update("pitch", "0");
+          update("formantShift", "0");
+        }}
+      >
+        元の声に戻す
+      </button>
+      <DetailsPopup title="声の変換">
+        <SemitonesInput
+          precise
+          label="声の高さ（ピッチ）"
+          value={pitch}
+          onChange={(value) => update("pitch", value)}
+        />
+        <fieldset className="settings" disabled={!preserveFormants}>
+          <SemitonesInput
+            precise
+            label="声の響き（フォルマント）"
+            value={formantShift}
+            onChange={(value) => update("formantShift", value)}
+          />
+        </fieldset>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={preserveFormants}
+            onChange={(event) => {
+              update("preserveFormants", event.target.checked);
+              if (!event.target.checked) {
+                update("formantShift", "0");
+              }
+            }}
+          />
+          声の響きを独立して調整する
+        </label>
+        <p>オフでは高さの変更に合わせて響きも変わります。響きの調整値は0に戻ります。</p>
+      </DetailsPopup>
     </section>
   );
 }
