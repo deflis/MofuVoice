@@ -8,7 +8,7 @@ type AudioStore = {
   pending: boolean;
   closing: boolean;
   error: string;
-  connect: (onClose: () => void) => () => void;
+  connect: () => () => void;
   start: (settings: Settings, inspect: boolean) => Promise<void>;
   stop: () => Promise<void>;
   spectrum: () => Promise<void>;
@@ -40,7 +40,7 @@ export const useAudioStore = create<AudioStore>()((set, get) => {
     pending: false,
     closing: false,
     error: "",
-    connect: (onClose) => {
+    connect: () => {
       let disposed = false;
       const reportError = (failure: unknown) => {
         if (!disposed) {
@@ -65,22 +65,12 @@ export const useAudioStore = create<AudioStore>()((set, get) => {
           return undefined;
         })
         .catch(reportError);
-      const unlistenClose = listen("request-close", () => {
-        if (!disposed) {
-          onClose();
-        }
-      });
-      void unlistenClose.catch(reportError);
       return () => {
         if (disposed) {
           return;
         }
         disposed = true;
         void unlistenStatus.then(
-          (remove) => remove(),
-          () => {},
-        );
-        void unlistenClose.then(
           (remove) => remove(),
           () => {},
         );

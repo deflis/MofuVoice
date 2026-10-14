@@ -4,6 +4,7 @@ import { AudioLogPanel } from "./AudioLogPanel";
 
 const ms = (value: number | null | undefined) =>
   value === null || value === undefined ? "—" : `${value.toFixed(2)} ms`;
+
 export function StatusDetails() {
   const info = useStatusDetails();
   const [logging, setLogging] = useState(false);

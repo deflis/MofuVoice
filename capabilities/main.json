@@ -1,6 +1,6 @@
 {
   "identifier": "main",
-  "description": "Main and settings windows can listen for audio, settings and shutdown events.",
-  "windows": ["main", "settings"],
+  "description": "Main, settings, and log windows can listen for audio, settings and shutdown events.",
+  "windows": ["main", "settings", "log"],
   "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
 }

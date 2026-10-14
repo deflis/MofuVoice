@@ -181,11 +181,22 @@ dd {
 main:has(.settings-window) {
   max-width: 1000px;
 }
-.settings-window header {
+main:has(.log-window) {
+  max-width: 720px;
+}
+main:has(.home-layout) {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+.settings-window header,
+.log-window header {
   border-bottom: 1px solid #373c46;
   padding-bottom: 12px;
 }
-.settings-window h1 {
+.settings-window h1,
+.log-window h1 {
   margin: 0;
 }
 .settings-guidance {
@@ -414,19 +425,27 @@ main:has(.settings-window) {
   display: none !important;
 }
 
+.home-layout {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
 .home-settings-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
 }
-.home-settings-actions button:first-child {
+.home-primary-action {
   flex: 1;
+  min-width: 8rem;
   padding: 12px;
 }
-.home-settings-actions button:last-child {
+.home-secondary-action {
   color: #abb3c0;
 }
 .setup-guidance {
-  margin-top: 16px;
   border-top: 1px solid #373c46;
   padding-top: 8px;
 }
