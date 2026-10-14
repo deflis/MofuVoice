@@ -48,3 +48,7 @@ harness = false
 [[bench]]
 name = "eq"
 harness = false
+
+[[bench]]
+name = "gate"
+harness = false
