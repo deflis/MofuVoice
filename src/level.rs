@@ -3,6 +3,8 @@
 use crate::{pitch::Sample, RATE};
 use std::{error::Error, fmt};
 
+const LOUDNESS_WINDOW_FRAMES: usize = RATE as usize * 2 / 5;
+
 pub const FLAGS: [&str; 8] = [
     "--level-target",
     "--level-max-gain",
@@ -117,6 +119,8 @@ impl LevelSettings {
             settings: self,
             power: 0.0,
             loudness: MomentaryLoudness::new(),
+            loudness_warmup_frames: 0,
+            below_floor_frames: 0,
             peak: 0.0,
             level_gain_db: 0.0,
             compression_db: 0.0,
@@ -189,7 +193,7 @@ impl MomentaryLoudness {
                 a: [-1.99004745483398, 0.99007225036621],
                 z: [0.0; 2],
             },
-            energy: vec![0.0; RATE as usize * 2 / 5].into_boxed_slice(),
+            energy: vec![0.0; LOUDNESS_WINDOW_FRAMES].into_boxed_slice(),
             position: 0,
             sum: 0.0,
         }
@@ -208,6 +212,8 @@ pub struct AutoLevel {
     settings: LevelSettings,
     power: f64,
     loudness: MomentaryLoudness,
+    loudness_warmup_frames: usize,
+    below_floor_frames: usize,
     peak: f64,
     level_gain_db: f64,
     compression_db: f64,
@@ -233,7 +239,25 @@ impl AutoLevel {
             self.power += (input * input - self.power) * self.rms_rate;
             let rms_db = db(self.power.sqrt());
             let input_lufs = self.loudness.process(input);
-            if rms_db > self.settings.floor_db && db(input.abs()) > self.settings.floor_db {
+            let above_floor = db(input.abs()) > self.settings.floor_db;
+            if above_floor {
+                self.below_floor_frames = 0;
+            } else {
+                self.below_floor_frames = (self.below_floor_frames + 1).min(LOUDNESS_WINDOW_FRAMES);
+            }
+            // Start a full detector window at the first active sample. After a
+            // window of silence/low noise, hold the existing gain until refilled.
+            // Count zero crossings too; they are part of the active waveform.
+            if self.below_floor_frames == LOUDNESS_WINDOW_FRAMES {
+                self.loudness_warmup_frames = 0;
+            } else if above_floor || self.loudness_warmup_frames > 0 {
+                self.loudness_warmup_frames =
+                    (self.loudness_warmup_frames + 1).min(LOUDNESS_WINDOW_FRAMES);
+            }
+            if self.loudness_warmup_frames == LOUDNESS_WINDOW_FRAMES
+                && rms_db > self.settings.floor_db
+                && above_floor
+            {
                 // Compensate compressor attenuation so the target describes its output.
                 let target = (self.settings.target_db - input_lufs + self.compression_db)
                     .clamp(-18.0, self.settings.max_gain_db);
@@ -317,6 +341,41 @@ mod tests {
         assert_eq!(meter.shelf.z, [0.0; 2]);
         // Independently flushing states may leave a negligible normal limit cycle.
         assert!(meter.high_pass.z.iter().all(|state| state.abs() < 1e-26));
+    }
+    #[test]
+    fn loud_onsets_do_not_level_from_zero_padded_windows() {
+        let settings = LevelSettings {
+            response_ms: 100.0,
+            ratio: 1.0,
+            ..active()
+        };
+        // Exercise both immediate startup and speech after a full window of silence.
+        for initial_silence in [0, RATE as usize / 2] {
+            let mut dsp = settings.build().unwrap();
+            dsp.process_in_place(&mut vec![0.0_f32; initial_silence]);
+            let mut onset = tone(0.5, 1);
+            let warmup = RATE as usize * 2 / 5 - 1;
+            dsp.process_in_place(&mut onset[..warmup]);
+            assert_eq!(
+                dsp.level_gain_db, 0.0,
+                "startup must not boost a loud onset"
+            );
+            dsp.process_in_place(&mut onset[warmup..]);
+            assert!(
+                dsp.level_gain_db < -3.0,
+                "leveling must resume after warmup"
+            );
+
+            for silence_frames in [RATE as usize * 2 / 5, RATE as usize] {
+                let held_gain = dsp.level_gain_db;
+                dsp.process_in_place(&mut vec![0.0_f32; silence_frames]);
+                let mut resumed = tone(0.5, 1);
+                dsp.process_in_place(&mut resumed[..warmup]);
+                assert_eq!(dsp.level_gain_db, held_gain, "hold gain on resumed onset");
+                dsp.process_in_place(&mut resumed[warmup..]);
+                assert!(dsp.level_gain_db < -3.0);
+            }
+        }
     }
     #[test]
     fn default_target_is_reached_with_compression() {
