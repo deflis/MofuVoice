@@ -168,9 +168,9 @@ impl Settings {
             output_channels: options.output_channels.clone(),
             backend: options.backend.name().into(),
             frames: options.frames.to_string(),
-            pitch: options.pitch.to_string(),
-            formant_shift: options.formant_shift.to_string(),
-            preserve_formants: options.preserve_formants,
+            pitch: options.pitch.semitones.to_string(),
+            formant_shift: options.pitch.formant_shift.to_string(),
+            preserve_formants: options.pitch.preserve_formants,
             rumble_filter: options.rumble_filter,
             deesser: options.deesser,
             deesser_mode: if options.deesser_pro { "pro" } else { "simple" }.into(),
@@ -771,7 +771,7 @@ mod tests {
         settings.preserve_formants = false;
         assert!(settings.options().is_err());
         settings.preserve_formants = true;
-        assert_eq!(settings.options().unwrap().pitch, 3.25);
+        assert_eq!(settings.options().unwrap().pitch.semitones, 3.25);
         settings.frames = "0".into();
         assert!(settings.options().is_err());
     }
