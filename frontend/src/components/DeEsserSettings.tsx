@@ -74,7 +74,7 @@ export function DeEsserSettings() {
     update("deesserParameters", { ...parameters, [key]: nextValue });
   return (
     <section aria-labelledby={`${id}-title`}>
-      <h2 id={`${id}-title`}>ディエッサー</h2>
+      <h2 id={`${id}-title`}>サ行をやわらかくする</h2>
       <label className="check">
         <input
           type="checkbox"
