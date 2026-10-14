@@ -46,15 +46,20 @@ pub struct DspChain {
 
 impl DspChain {
     pub fn new(settings: DspSettings) -> Result<Self, Box<dyn Error>> {
+        Self::with_sample_rate(settings, crate::RATE)
+    }
+    pub fn with_sample_rate(settings: DspSettings, rate: u32) -> Result<Self, Box<dyn Error>> {
+        crate::validate_sample_rate(rate)?;
         Ok(Self {
-            eq: settings.eq.build()?,
-            rumble: crate::rumble::RumbleFilter::new(settings.rumble_filter),
+            eq: settings.eq.build_with_sample_rate(rate)?,
+            rumble: crate::rumble::RumbleFilter::with_sample_rate(settings.rumble_filter, rate),
             pitch: settings.pitch.build()?,
-            gate: settings.gate.build()?,
-            level: settings.level.build()?,
-            deesser: crate::deesser::DeEsser::with_parameters(
+            gate: settings.gate.build_with_sample_rate(rate)?,
+            level: settings.level.build_with_sample_rate(rate)?,
+            deesser: crate::deesser::DeEsser::with_sample_rate(
                 settings.deesser,
                 settings.deesser_parameters,
+                rate,
             )?,
         })
     }
@@ -94,17 +99,18 @@ pub struct AudioProcessor<T: Sample> {
     scratch: Vec<T>,
 }
 impl<T: Sample> AudioProcessor<T> {
-    /// The engine currently supports only 48 kHz. Never silently reinterpret another rate.
+    /// Configure DSP for the actual device rate; no implicit resampling.
     pub fn new(
         rate: u32,
         max_frames: usize,
         settings: DspSettings,
     ) -> Result<Self, Box<dyn Error>> {
-        if rate != crate::RATE || !(1..=8192).contains(&max_frames) {
-            return Err("DSP requires 48000 Hz and a maximum block size of 1..8192 frames".into());
+        crate::validate_sample_rate(rate)?;
+        if !(1..=8192).contains(&max_frames) {
+            return Err("DSP requires a maximum block size of 1..8192 frames".into());
         }
         Ok(Self {
-            chain: DspChain::new(settings)?,
+            chain: DspChain::with_sample_rate(settings, rate)?,
             scratch: vec![T::default(); max_frames],
         })
     }

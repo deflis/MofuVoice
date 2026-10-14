@@ -34,6 +34,7 @@ export function useDeviceSettings() {
         updateBackend: state.updateBackend,
         updateRouting: state.updateRouting,
         frames: settings.frames,
+        sampleRate: settings.sampleRate,
         devices: state.devices,
         update: state.update,
       };

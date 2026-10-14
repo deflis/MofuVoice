@@ -34,6 +34,7 @@ export const settings = {
   inputChannel: 1,
   outputChannels: [1],
   frames: "64",
+  sampleRate: "48000",
   pitch: "0",
   formantShift: "0",
   preserveFormants: true,

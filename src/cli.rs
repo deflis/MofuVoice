@@ -12,6 +12,7 @@ pub struct Options {
     pub backend: crate::backend::BackendKind,
     pub seconds: Option<u64>,
     pub frames: u32,
+    pub sample_rate: u32,
     pub pitch: crate::pitch::PitchSettings,
     pub level: crate::level::LevelSettings,
     pub rumble_filter: bool,
@@ -39,6 +40,7 @@ impl Options {
             backend: crate::backend::BackendKind::default(),
             seconds: None,
             frames: crate::DEFAULT_FRAMES,
+            sample_rate: crate::RATE,
             pitch: crate::pitch::PitchSettings::default(),
             level: crate::level::LevelSettings::default(),
             rumble_filter: false,
@@ -60,6 +62,7 @@ impl Options {
         let mut output_channels_given = false;
         let mut backend_given = false;
         let mut frames_given = false;
+        let mut rate_given = false;
         let mut pitch_given = false;
         let mut formant_given = false;
         let mut shift_given = false;
@@ -257,6 +260,12 @@ impl Options {
                     }
                     device_given = true;
                 }
+                "--sample-rate" if !rate_given => {
+                    options.sample_rate =
+                        args.next().ok_or("--sample-rate requires Hz")?.parse()?;
+                    crate::validate_sample_rate(options.sample_rate)?;
+                    rate_given = true;
+                }
                 "--frames" if !frames_given => {
                     let frames = args
                         .next()
@@ -339,10 +348,11 @@ impl Options {
                 && (device_given
                     || output_given
                     || frames_given
+                    || rate_given
                     || input_channel_given
                     || output_channels_given))
         {
-            return Err("Choose one CLI mode: --help, --list-devices, --inspect [--device NAME] [--frames N], or [--device NAME] [--frames N] [--seconds N] [--pitch SEMITONES] [--formant preserve|off] [--formant-shift SEMITONES] [--eq on|off] [--eq-mode simple|pro] [--eq-band1 HZ,DB,Q] [--eq-band2 HZ,DB,Q] [--eq-band3 HZ,DB,Q] [--eq-output DB] [--auto-level on|off] [--level-target DB] [--level-max-gain DB] [--level-floor DB] [--level-response MS] [--compress-threshold DB] [--compress-ratio N] [--compress-attack MS] [--compress-release MS] [--deesser on|off] [--deesser-mode simple|pro] [--deesser-frequency HZ] [--deesser-threshold DBFS] [--deesser-range DB] [--deesser-attack MS] [--deesser-release MS] [--rumble-filter on|off] [--gate on|off] [--gate-threshold auto|DB] [--gate-attack MS] [--gate-release MS]".into());
+            return Err("Choose one CLI mode: --help, --list-devices, --inspect [--device NAME] [--frames N] [--sample-rate HZ], or [--device NAME] [--frames N] [--sample-rate HZ] [--seconds N] [--pitch SEMITONES] [--formant preserve|off] [--formant-shift SEMITONES] [--eq on|off] [--eq-mode simple|pro] [--eq-band1 HZ,DB,Q] [--eq-band2 HZ,DB,Q] [--eq-band3 HZ,DB,Q] [--eq-output DB] [--auto-level on|off] [--level-target DB] [--level-max-gain DB] [--level-floor DB] [--level-response MS] [--compress-threshold DB] [--compress-ratio N] [--compress-attack MS] [--compress-release MS] [--deesser on|off] [--deesser-mode simple|pro] [--deesser-frequency HZ] [--deesser-threshold DBFS] [--deesser-range DB] [--deesser-attack MS] [--deesser-release MS] [--rumble-filter on|off] [--gate on|off] [--gate-threshold auto|DB] [--gate-attack MS] [--gate-release MS]".into());
         }
         Ok(options)
     }
@@ -360,6 +370,28 @@ mod tests {
     use super::*;
     fn parse(args: &[&str]) -> Result<Options, Box<dyn Error>> {
         Options::parse(args.iter().map(|s| (*s).into()))
+    }
+    #[test]
+    fn sample_rate_defaults_selection_and_invalid_arguments() {
+        assert_eq!(parse(&[]).unwrap().sample_rate, crate::RATE);
+        for rate in crate::SAMPLE_RATES {
+            let value = rate.to_string();
+            assert_eq!(parse(&["--sample-rate", &value]).unwrap().sample_rate, rate);
+            assert!(parse(&["--inspect", "--sample-rate", &value]).is_ok());
+            assert!(Options::parse_gui(["--sample-rate", &value].map(String::from)).is_ok());
+        }
+        for args in [
+            vec!["--sample-rate"],
+            vec!["--sample-rate", "0"],
+            vec!["--sample-rate", "32000"],
+            vec!["--sample-rate", "NaN"],
+            vec!["--sample-rate", "48000.5"],
+            vec!["--sample-rate", "44100", "--sample-rate", "48000"],
+            vec!["--help", "--sample-rate", "48000"],
+            vec!["--list-devices", "--sample-rate", "48000"],
+        ] {
+            assert!(parse(&args).is_err(), "{args:?}");
+        }
     }
     #[test]
     fn channel_routing_defaults_and_validation() {

@@ -50,3 +50,12 @@ test("routing shortcut replaces a custom mapping in one update without changing 
   await settingsStore.getState().save();
   assert.deepEqual(commands.save_settings.mock.calls[0].arguments[0].settings, changes[0]);
 });
+
+test("sample rate is sent to saved settings and survives a backend switch", async () => {
+  settingsStore.setState({ ...bootstrap });
+  settingsStore.getState().update("sampleRate", "44100");
+  await settingsStore.getState().save();
+  assert.equal(commands.save_settings.mock.calls[0].arguments[0].settings.sampleRate, "44100");
+  await settingsStore.getState().updateBackend("cpal");
+  assert.equal(settingsStore.getState().settings.sampleRate, "44100");
+});

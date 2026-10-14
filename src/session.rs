@@ -218,7 +218,8 @@ fn run_audio(
     } else {
         None
     };
-    let backend = backend::select(kind, &options.output_device)?;
+    let backend =
+        backend::select_with_sample_rate(kind, &options.output_device, options.sample_rate)?;
     let routing = backend::ChannelRouting::from(&options);
     if options.inspect {
         let inspection =
@@ -254,6 +255,8 @@ fn run_audio(
         set_status(status, format!("Stopped before playback.\n{details}"));
         return Ok(());
     }
+    #[cfg(windows)]
+    crate::spectrum::set_sample_rate(options.sample_rate);
     engine.start()?;
     let (input, output) = engine.latency_ms()?;
     {
@@ -263,7 +266,7 @@ fn run_audio(
             if options.pitch.semitones == 0.0 && options.pitch.formant_shift == 0.0 {
                 0.0
             } else {
-                crate::pitch::LATENCY as f64 * 1000.0 / crate::RATE as f64
+                crate::pitch::LATENCY as f64 * 1000.0 / configuration.sample_rate
             },
         );
         info.input_latency_ms = input;

@@ -22,7 +22,16 @@ pub mod pitch;
 pub mod rumble;
 pub mod session;
 pub mod spectrum;
+/// Default sample rate; runtime sessions carry their selected rate separately.
 pub const RATE: u32 = 48_000;
+pub const SAMPLE_RATES: [u32; 6] = [44_100, 48_000, 88_200, 96_000, 176_400, 192_000];
+pub fn validate_sample_rate(rate: u32) -> Result<(), &'static str> {
+    if SAMPLE_RATES.contains(&rate) {
+        Ok(())
+    } else {
+        Err("Sample rate must be 44100, 48000, 88200, 96000, 176400 or 192000 Hz")
+    }
+}
 pub const DEFAULT_FRAMES: u32 = 512;
 pub const TARGET_FRAMES: u32 = 64;
 

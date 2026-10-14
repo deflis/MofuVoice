@@ -132,9 +132,13 @@ impl Configuration {
         format!("Input/output: {}/{} channels, {:?}, {} Hz; buffer min/max/preferred={}/{}/{}, granularity={}", self.inputs, self.outputs, self.format, self.rate, self.min, self.max, self.preferred, self.granularity)
     }
     pub fn validate(&self, frames: u32) -> Result<()> {
-        if self.rate != RATE as f64 {
+        self.validate_rate(frames, RATE)
+    }
+    pub fn validate_rate(&self, frames: u32, rate: u32) -> Result<()> {
+        crate::validate_sample_rate(rate)?;
+        if self.rate != rate as f64 {
             return Err(format!(
-                "Driver currently runs at {} Hz; configure the audio engine for 48000 Hz",
+                "Driver currently runs at {} Hz; set the ASIO driver to {rate} Hz to match the selected sample rate",
                 self.rate
             )
             .into());
@@ -169,6 +173,7 @@ struct Metrics {
     latencies_changed: AtomicBool,
 }
 struct CallbackState {
+    sample_rate: u32,
     input_channel: usize,
     output_channels: Vec<usize>,
     buffers: Vec<ffi::ASIOBufferInfo>,
@@ -333,7 +338,7 @@ fn process_callback(index: i32, position: Option<u64>) {
     }
     let ns = start.elapsed().as_nanos().min(u64::MAX as u128) as u64;
     state.metrics.max_ns.fetch_max(ns, Ordering::Relaxed);
-    if ns > state.frames as u64 * 1_000_000_000 / RATE as u64 {
+    if ns > state.frames as u64 * 1_000_000_000 / state.sample_rate as u64 {
         state.metrics.late.fetch_add(1, Ordering::Relaxed);
     }
     state.metrics.blocks.fetch_add(1, Ordering::Relaxed);
@@ -345,7 +350,7 @@ extern "C" fn buffer_switch(index: i32, _: i32) {
 extern "C" fn rate_changed(rate: f64) {
     let lease = Lease::acquire();
     if let Some(state) = lease.state() {
-        if rate != RATE as f64 {
+        if rate != state.sample_rate as f64 {
             state
                 .metrics
                 .faults
@@ -408,7 +413,7 @@ extern "C" fn buffer_switch_time(
         }
         let lease = Lease::acquire();
         if let Some(state) = lease.state() {
-            if timing.flags & 4 != 0 && timing.sample_rate != RATE as f64 {
+            if timing.flags & 4 != 0 && timing.sample_rate != state.sample_rate as f64 {
                 state
                     .metrics
                     .faults
@@ -445,6 +450,25 @@ static CALLBACKS: RawCallbacks = RawCallbacks {
 unsafe extern "C" {
     #[link_name = "\x01?ASIOGetLatencies@@YAJPEAJ0@Z"]
     fn asio_get_latencies(input: *mut i32, output: *mut i32) -> i32;
+    // Native ASIOSampleRate is double; bindgen represents it as opaque bytes.
+    #[link_name = "\x01?ASIOCanSampleRate@@YAJN@Z"]
+    fn asio_can_sample_rate(rate: f64) -> i32;
+}
+
+/// Query only; never change the driver's clock or allocate audio buffers.
+/// The caller keeps the initialized driver alive and excludes an active stream.
+pub(crate) fn supported_sample_rates() -> Result<Vec<u32>> {
+    let mut rates = Vec::new();
+    for rate in crate::SAMPLE_RATES {
+        // SAFETY: the control thread owns an initialized driver for the entire query.
+        let code = unsafe { asio_can_sample_rate(rate as f64) };
+        match code {
+            OK | SUCCESS => rates.push(rate),
+            -995 => {} // ASE_NoClock: this clock frequency is unsupported.
+            _ => check(code, "ASIOCanSampleRate")?,
+        }
+    }
+    Ok(rates)
 }
 
 pub use crate::audio::DspSettings;
@@ -468,12 +492,22 @@ impl Engine {
         routing: &crate::backend::ChannelRouting,
         dsp: DspSettings,
     ) -> Result<Self> {
-        config.validate(frames)?;
+        Self::open_with_sample_rate(driver, config, frames, routing, dsp, RATE)
+    }
+    pub fn open_with_sample_rate(
+        driver: Driver,
+        config: Configuration,
+        frames: u32,
+        routing: &crate::backend::ChannelRouting,
+        dsp: DspSettings,
+        rate: u32,
+    ) -> Result<Self> {
+        config.validate_rate(frames, rate)?;
         routing.validate(config.inputs, config.outputs)?;
         let input_channel = routing.input_channel;
         let mut output_channels = routing.output_channels.clone();
         output_channels.sort_unstable();
-        let dsp = DspChain::new(dsp)?;
+        let dsp = DspChain::with_sample_rate(dsp, rate)?;
         let mut buffers = Vec::with_capacity(config.inputs + config.outputs);
         for (input, channels) in [(true, config.inputs), (false, config.outputs)] {
             for channel in 0..channels {
@@ -485,6 +519,7 @@ impl Engine {
             }
         }
         let state = Box::new(CallbackState {
+            sample_rate: rate,
             input_channel,
             output_channels,
             buffers,
@@ -541,7 +576,7 @@ impl Engine {
             matches!(unsafe { ffi::ASIOOutputReady() }, OK | SUCCESS),
             Ordering::Relaxed,
         );
-        if engine.driver.sample_rate()? != RATE as f64 {
+        if engine.driver.sample_rate()? != rate as f64 {
             return Err("Driver rate changed during buffer preparation".into());
         }
         Ok(engine)
@@ -572,7 +607,7 @@ impl Engine {
     }
     pub fn summary(&self) -> String {
         let metrics = &self.state.metrics;
-        format!("duplex blocks={}; frames={}; spectral wet DSP={LATENCY} samples ({:.2} ms), neutral bypass=0; nonzero input samples={}; max callback={:.3} us; deadline misses={}; timestamp blocks={}; sample-position gaps={}; fault flags=0x{:x}", self.blocks(), self.state.frames, LATENCY as f64 * 1000.0 / RATE as f64, metrics.nonzero.load(Ordering::Relaxed), metrics.max_ns.load(Ordering::Relaxed) as f64 / 1000.0, metrics.late.load(Ordering::Relaxed), metrics.timestamp_blocks.load(Ordering::Relaxed), metrics.gaps.load(Ordering::Relaxed), metrics.faults.load(Ordering::Relaxed))
+        format!("duplex blocks={}; frames={}; spectral wet DSP={LATENCY} samples ({:.2} ms), neutral bypass=0; nonzero input samples={}; max callback={:.3} us; deadline misses={}; timestamp blocks={}; sample-position gaps={}; fault flags=0x{:x}", self.blocks(), self.state.frames, LATENCY as f64 * 1000.0 / self.configuration.sample_rate, metrics.nonzero.load(Ordering::Relaxed), metrics.max_ns.load(Ordering::Relaxed) as f64 / 1000.0, metrics.late.load(Ordering::Relaxed), metrics.timestamp_blocks.load(Ordering::Relaxed), metrics.gaps.load(Ordering::Relaxed), metrics.faults.load(Ordering::Relaxed))
     }
     pub fn print_latencies(&self) -> Result<()> {
         println!("{}", self.latency_summary()?);
@@ -584,7 +619,7 @@ impl Engine {
             unsafe { asio_get_latencies(&mut input, &mut output) },
             "ASIOGetLatencies",
         )?;
-        Ok(format!("Driver-reported ASIO latency: input={input} samples ({:.3} ms), output={output} samples ({:.3} ms). Not a microphone round-trip measurement.", input as f64 * 1000.0 / RATE as f64, output as f64 * 1000.0 / RATE as f64))
+        Ok(format!("Driver-reported ASIO latency: input={input} samples ({:.3} ms), output={output} samples ({:.3} ms). Not a microphone round-trip measurement.", input as f64 * 1000.0 / self.configuration.sample_rate, output as f64 * 1000.0 / self.configuration.sample_rate))
     }
     pub fn check_events(&self) -> Result<()> {
         let faults = self.state.metrics.faults.load(Ordering::Relaxed);
@@ -649,8 +684,8 @@ impl crate::backend::AudioStream for Engine {
             "ASIOGetLatencies",
         )?;
         Ok((
-            Some(input as f64 * 1000.0 / RATE as f64),
-            Some(output as f64 * 1000.0 / RATE as f64),
+            Some(input as f64 * 1000.0 / self.configuration.sample_rate),
+            Some(output as f64 * 1000.0 / self.configuration.sample_rate),
         ))
     }
     fn summary(&self) -> String {
@@ -696,6 +731,24 @@ mod tests {
     use super::*;
     use crate::{gate::GateSettings, pitch::PitchShifter};
     #[test]
+    fn validates_selected_rate_without_reinterpreting_driver_samples() {
+        for rate in crate::SAMPLE_RATES {
+            let config = Configuration {
+                inputs: 1,
+                outputs: 1,
+                format: Format::F32,
+                rate: rate as f64,
+                min: 64,
+                max: 512,
+                preferred: 512,
+                granularity: -1,
+            };
+            assert!(config.validate_rate(128, rate).is_ok());
+            let other = if rate == RATE { 44100 } else { RATE };
+            assert!(config.validate_rate(128, other).is_err());
+        }
+    }
+    #[test]
     fn validates_fixed_power_of_two_and_stepped_buffers() {
         assert!(buffer_supported(512, 512, 512, 512, 0));
         assert!(!buffer_supported(64, 512, 512, 512, 0));
@@ -718,6 +771,7 @@ mod tests {
             buffers: [a.cast(), b.cast()],
         };
         let mut state = CallbackState {
+            sample_rate: RATE,
             input_channel: 1,
             output_channels: vec![1],
             buffers: vec![

@@ -17,7 +17,7 @@ pub const IMAGE_HEIGHT: usize = 400;
 pub const BYTES_PER_PIXEL: usize = 4;
 
 // A power of two keeps slot mapping continuous when absolute counters wrap.
-const RING: usize = (RATE as usize).next_power_of_two();
+const RING: usize = 262_144; // More than one second at the highest supported rate.
 const FREQ_MIN: f64 = 20.0;
 const FREQ_MAX: f64 = 8_000.0;
 const DB_MIN: f64 = -80.0;
@@ -27,6 +27,12 @@ const WIDE_HOP: usize = 128;
 const NARROW_FFT: usize = 2048;
 const NARROW_HOP: usize = 512;
 
+static SAMPLE_RATE: AtomicUsize = AtomicUsize::new(RATE as usize);
+/// Set on the control thread before starting a new stream.
+pub fn set_sample_rate(rate: u32) {
+    assert!(crate::validate_sample_rate(rate).is_ok());
+    SAMPLE_RATE.store(rate as usize, Ordering::Release);
+}
 static ACTIVE: AtomicPtr<Shared> = AtomicPtr::new(ptr::null_mut());
 static IN_USE: AtomicUsize = AtomicUsize::new(0);
 
@@ -162,13 +168,17 @@ impl LevelMeter {
         }
     }
 
+    #[cfg(test)]
     fn update(&mut self, samples: &[f32], elapsed: f64) -> MeterLevels {
+        self.update_at_rate(samples, elapsed, RATE)
+    }
+    fn update_at_rate(&mut self, samples: &[f32], elapsed: f64, rate: u32) -> MeterLevels {
         if samples.is_empty() {
             self.peak *= (-elapsed / 0.3).exp();
             self.power *= (-elapsed / 0.1).exp();
             self.update_hold(elapsed, 10.0_f64.powf(-12.0 * elapsed / 20.0));
         } else {
-            let seconds = 1.0 / RATE as f64;
+            let seconds = 1.0 / rate as f64;
             let smoothing = (-seconds / 0.1).exp();
             let peak_release = (-seconds / 0.3).exp();
             let hold_release = 10.0_f64.powf(-12.0 * seconds / 20.0);
@@ -382,8 +392,8 @@ fn db_to_bgra(db: f64) -> [u8; 4] {
     [v, v, v, 255]
 }
 
-fn magnitude_at(bins: &[f64], fft_size: usize, hz: f64) -> f64 {
-    let bin = hz * fft_size as f64 / RATE as f64;
+fn magnitude_at(bins: &[f64], fft_size: usize, hz: f64, rate: u32) -> f64 {
+    let bin = hz * fft_size as f64 / rate as f64;
     if bin <= 0.0 {
         return bins[0];
     }
@@ -423,6 +433,7 @@ fn analyzer_loop(shared: Arc<Shared>) {
     let mut meter = LevelMeter::new();
     let mut last_meter = Instant::now();
     let mut last_signal = last_meter;
+    let mut rate = SAMPLE_RATE.load(Ordering::Acquire) as u32;
 
     while !shared.stop.load(Ordering::Acquire) {
         if shared.frozen.load(Ordering::Acquire) {
@@ -431,16 +442,25 @@ fn analyzer_loop(shared: Arc<Shared>) {
             thread::sleep(Duration::from_millis(20));
             continue;
         }
+        let selected_rate = SAMPLE_RATE.load(Ordering::Acquire) as u32;
+        if rate != selected_rate {
+            rate = selected_rate;
+            time_domain.clear();
+            meter = LevelMeter::new();
+            let mut image = shared.image.lock().expect("spectrum image lock");
+            image.fill(0);
+        }
         shared.drain(&mut pending);
         let now = Instant::now();
         // Brief empty polls are normal between callbacks; do not count them as
         // extra silence in addition to the sample time already measured.
         if !pending.is_empty() {
-            let levels = meter.update(&pending, 0.0);
+            let levels = meter.update_at_rate(&pending, 0.0, rate);
             *shared.levels.lock().expect("spectrum levels lock") = levels;
             last_signal = now;
         } else if now.duration_since(last_signal) >= Duration::from_millis(100) {
-            let levels = meter.update(&[], now.duration_since(last_meter).as_secs_f64());
+            let levels =
+                meter.update_at_rate(&[], now.duration_since(last_meter).as_secs_f64(), rate);
             *shared.levels.lock().expect("spectrum levels lock") = levels;
         }
         last_meter = now;
@@ -489,7 +509,7 @@ fn analyzer_loop(shared: Arc<Shared>) {
             for (y, pixel) in column.iter_mut().enumerate() {
                 let t = 1.0 - y as f64 / (IMAGE_HEIGHT - 1) as f64;
                 let hz = FREQ_MIN + (FREQ_MAX - FREQ_MIN) * t;
-                let mag = magnitude_at(bins, fft_size, hz);
+                let mag = magnitude_at(bins, fft_size, hz, rate);
                 let db = 20.0 * (mag.max(1e-12)).log10();
                 *pixel = db_to_bgra(db);
             }
@@ -511,6 +531,31 @@ fn analyzer_loop(shared: Arc<Shared>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frequency_mapping_and_meter_timing_follow_selected_rate() {
+        for rate in crate::SAMPLE_RATES {
+            let fft = Fft::new(NARROW_FFT);
+            let hz = rate as f64 * 43.0 / NARROW_FFT as f64;
+            let mut data: Vec<_> = (0..NARROW_FFT)
+                .map(|i| Complex {
+                    re: (std::f64::consts::TAU * hz * i as f64 / rate as f64).sin(),
+                    im: 0.0,
+                })
+                .collect();
+            fft.forward(&mut data);
+            let bins: Vec<_> = data[..=NARROW_FFT / 2]
+                .iter()
+                .map(|c| c.re.hypot(c.im))
+                .collect();
+            assert!(magnitude_at(&bins, NARROW_FFT, hz, rate) > NARROW_FFT as f64 * 0.49);
+            let levels =
+                LevelMeter::new().update_at_rate(&vec![0.1; rate as usize / 10], 0.0, rate);
+            // After 100 ms the RMS meter has passed one time constant at every rate.
+            let expected = 10.0 * (0.01 * (1.0 - (-1.0_f64).exp())).log10();
+            assert!((levels.rms_db - expected).abs() < 0.0001);
+        }
+    }
 
     #[test]
     fn meter_measures_dbfs_and_releases_after_stop() {

@@ -32,6 +32,7 @@ export type Settings = {
   outputChannels: number[];
   backend: string;
   frames: string;
+  sampleRate: string;
   pitch: string;
   formantShift: string;
   preserveFormants: boolean;
@@ -97,3 +98,5 @@ export type Bootstrap = DeviceChoices & {
   backends: string[];
   spectrumAvailable: boolean;
 };
+
+export type DeviceSampleRates = { input: number[]; output: number[]; common: number[] };

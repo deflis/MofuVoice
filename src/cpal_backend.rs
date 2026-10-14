@@ -1,10 +1,11 @@
 //! CPAL owns platform device access. DSP, channel mapping and bounded transport are ours.
+#[cfg(test)]
+use crate::RATE;
 use crate::{
     audio::{AudioProcessor, DspSettings},
     audio_queue::{self, Consumer, Producer},
     backend::{AudioBackend, AudioStream, ChannelRouting, Result},
     pitch::{Sample, LATENCY},
-    RATE,
 };
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
@@ -23,11 +24,13 @@ const DEVICE_ERROR: u32 = 8;
 
 pub(crate) struct CpalBackend {
     output_device: String,
+    sample_rate: u32,
 }
 impl CpalBackend {
-    pub(crate) fn new(output_device: &str) -> Self {
+    pub(crate) fn new(output_device: &str, sample_rate: u32) -> Self {
         Self {
             output_device: output_device.into(),
+            sample_rate,
         }
     }
 }
@@ -84,21 +87,28 @@ fn select_device(input: bool, name: &str) -> Result<cpal::Device> {
     }
 }
 
-fn usable(config: &SupportedStreamConfigRange, frames: u32, format: SampleFormat) -> bool {
+fn usable(
+    config: &SupportedStreamConfigRange,
+    frames: u32,
+    format: SampleFormat,
+    rate: u32,
+) -> bool {
     config.channels() > 0
         && config.sample_format() == format
-        && config.min_sample_rate() <= RATE
-        && config.max_sample_rate() >= RATE
+        && config.min_sample_rate() <= rate
+        && config.max_sample_rate() >= rate
         && match config.buffer_size() {
             SupportedBufferSize::Range { min, max } => (*min..=*max).contains(&frames),
             SupportedBufferSize::Unknown => true,
         }
 }
-fn negotiate(
+fn negotiate_at_rate(
     input: &[SupportedStreamConfigRange],
     output: &[SupportedStreamConfigRange],
     frames: u32,
+    rate: u32,
 ) -> Result<(SampleFormat, StreamConfig, StreamConfig)> {
+    crate::validate_sample_rate(rate)?;
     if !(1..=8192).contains(&frames) {
         return Err("Frames must be 1..8192".into());
     }
@@ -107,7 +117,7 @@ fn negotiate(
         let best = |configs: &[SupportedStreamConfigRange]| {
             configs
                 .iter()
-                .filter(|c| usable(c, frames, format))
+                .filter(|c| usable(c, frames, format, rate))
                 .min_by_key(|c| c.channels())
                 .cloned()
         };
@@ -117,21 +127,30 @@ fn negotiate(
                     SupportedBufferSize::Range { .. } => cpal::BufferSize::Fixed(frames),
                     SupportedBufferSize::Unknown => cpal::BufferSize::Default,
                 };
-                let mut config = range.with_sample_rate(RATE).config();
+                let mut config = range.with_sample_rate(rate).config();
                 config.buffer_size = buffer_size;
                 config
             };
             return Ok((format, convert(input), convert(output)));
         }
     }
-    Err("Input and output need a common f32/i32/i16 format at 48000 Hz and a supported period. No implicit resampling or format conversion is performed.".into())
+    Err(format!("Input and output need a common f32/i32/i16 format at {rate} Hz and a supported period. No implicit resampling or format conversion is performed.").into())
 }
 
-fn negotiate_routing(
+#[cfg(test)]
+fn negotiate(
+    input: &[SupportedStreamConfigRange],
+    output: &[SupportedStreamConfigRange],
+    frames: u32,
+) -> Result<(SampleFormat, StreamConfig, StreamConfig)> {
+    negotiate_at_rate(input, output, frames, RATE)
+}
+fn negotiate_routing_at_rate(
     input: &[SupportedStreamConfigRange],
     output: &[SupportedStreamConfigRange],
     frames: u32,
     routing: &ChannelRouting,
+    rate: u32,
 ) -> Result<(SampleFormat, StreamConfig, StreamConfig)> {
     routing.validate(
         input
@@ -160,9 +179,18 @@ fn negotiate_routing(
         .filter(|c| c.channels() as usize >= required_outputs)
         .cloned()
         .collect();
-    negotiate(&input, &output, frames)
+    negotiate_at_rate(&input, &output, frames, rate)
 }
 
+#[cfg(test)]
+fn negotiate_routing(
+    input: &[SupportedStreamConfigRange],
+    output: &[SupportedStreamConfigRange],
+    frames: u32,
+    routing: &ChannelRouting,
+) -> Result<(SampleFormat, StreamConfig, StreamConfig)> {
+    negotiate_routing_at_rate(input, output, frames, routing, RATE)
+}
 struct Prepared {
     configuration: crate::backend::AudioConfiguration,
     input: cpal::Device,
@@ -178,11 +206,17 @@ impl CpalBackend {
         let output = select_device(false, &self.output_device)?;
         let input_ranges: Vec<_> = input.supported_input_configs()?.collect();
         let output_ranges: Vec<_> = output.supported_output_configs()?.collect();
-        let (format, input_config, output_config) =
-            negotiate_routing(&input_ranges, &output_ranges, frames, routing)?;
+        let (format, input_config, output_config) = negotiate_routing_at_rate(
+            &input_ranges,
+            &output_ranges,
+            frames,
+            routing,
+            self.sample_rate,
+        )?;
         let input_channel = routing.input_channel;
         let output_channels = &routing.output_channels;
-        let details = format!("CPAL {:?}: input '{}' / {} channels / {:?}; output '{}' / {} channels / {:?}; 48000 Hz; format {format:?}. Selected input {input_channel} -> outputs {output_channels:?}, other outputs silent. Default periods are chosen by the host and observed during playback.",
+        let rate = self.sample_rate;
+        let details = format!("CPAL {:?}: input '{}' / {} channels / {:?}; output '{}' / {} channels / {:?}; {rate} Hz; format {format:?}. Selected input {input_channel} -> outputs {output_channels:?}, other outputs silent. Default periods are chosen by the host and observed during playback.",
             cpal::default_host().id(), input.description()?.name(), input_config.channels, input_config.buffer_size,
             output.description()?.name(), output_config.channels, output_config.buffer_size);
         let configuration = crate::backend::AudioConfiguration {
@@ -203,7 +237,49 @@ impl CpalBackend {
         })
     }
 }
+fn supported_rates(
+    input: &[SupportedStreamConfigRange],
+    output: &[SupportedStreamConfigRange],
+) -> crate::backend::DeviceSampleRates {
+    let formats_at = |ranges: &[SupportedStreamConfigRange], rate: u32| -> Vec<SampleFormat> {
+        ranges
+            .iter()
+            .filter(|c| {
+                c.channels() > 0 && c.min_sample_rate() <= rate && c.max_sample_rate() >= rate
+            })
+            .map(|c| c.sample_format())
+            .filter(|f| matches!(f, SampleFormat::F32 | SampleFormat::I32 | SampleFormat::I16))
+            .collect()
+    };
+    let mut rates = crate::backend::DeviceSampleRates {
+        input: Vec::new(),
+        output: Vec::new(),
+        common: Vec::new(),
+    };
+    for rate in crate::SAMPLE_RATES {
+        let input = formats_at(input, rate);
+        let output = formats_at(output, rate);
+        if !input.is_empty() {
+            rates.input.push(rate);
+        }
+        if !output.is_empty() {
+            rates.output.push(rate);
+        }
+        if input.iter().any(|format| output.contains(format)) {
+            rates.common.push(rate);
+        }
+    }
+    rates
+}
+
 impl AudioBackend for CpalBackend {
+    fn supported_sample_rates(&self, name: &str) -> Result<crate::backend::DeviceSampleRates> {
+        let input = select_device(true, name)?;
+        let output = select_device(false, &self.output_device)?;
+        let input_ranges: Vec<_> = input.supported_input_configs()?.collect();
+        let output_ranges: Vec<_> = output.supported_output_configs()?.collect();
+        Ok(supported_rates(&input_ranges, &output_ranges))
+    }
     fn device_names(&self) -> Result<Vec<String>> {
         device_labels(true)
     }
@@ -240,6 +316,7 @@ impl AudioBackend for CpalBackend {
 }
 
 struct Metrics {
+    sample_rate: u32,
     active: AtomicBool,
     faults: AtomicU32,
     input_blocks: AtomicU64,
@@ -261,8 +338,13 @@ struct Metrics {
     origin: Instant,
 }
 impl Metrics {
+    #[cfg(test)]
     fn new(prime_frames: usize) -> Self {
+        Self::with_sample_rate(prime_frames, RATE)
+    }
+    fn with_sample_rate(prime_frames: usize, sample_rate: u32) -> Self {
         Self {
+            sample_rate,
             active: AtomicBool::new(false),
             faults: AtomicU32::new(0),
             input_blocks: AtomicU64::new(0),
@@ -356,7 +438,7 @@ impl<T: Sample> Capture<T> {
         self.metrics
             .max_input_ns
             .fetch_max(elapsed, Ordering::Relaxed);
-        if elapsed > frames as u64 * 1_000_000_000 / RATE as u64 {
+        if elapsed > frames as u64 * 1_000_000_000 / self.metrics.sample_rate as u64 {
             self.metrics.deadline_misses.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -427,7 +509,7 @@ impl<T: Sample> Playback<T> {
         self.metrics
             .max_output_ns
             .fetch_max(elapsed, Ordering::Relaxed);
-        if elapsed > frames as u64 * 1_000_000_000 / RATE as u64 {
+        if elapsed > frames as u64 * 1_000_000_000 / self.metrics.sample_rate as u64 {
             self.metrics.deadline_misses.fetch_add(1, Ordering::Relaxed);
         }
         self.metrics
@@ -447,11 +529,12 @@ fn build<T: Sample + cpal::SizedSample + Send + 'static>(
 ) -> Result<Box<dyn AudioStream>> {
     let capacity = (frames as usize * 8).max(32768).next_power_of_two();
     let (producer, consumer) = audio_queue::channel::<T>(capacity);
-    let metrics = Arc::new(Metrics::new(frames as usize * 2));
+    let rate = prepared.input_config.sample_rate;
+    let metrics = Arc::new(Metrics::with_sample_rate(frames as usize * 2, rate));
     let output_channels = routing.output_channels.clone();
     let mut capture = Capture {
         input_channel: routing.input_channel,
-        processor: AudioProcessor::new(RATE, frames as usize, dsp)?,
+        processor: AudioProcessor::new(rate, frames as usize, dsp)?,
         mono: vec![T::default(); frames as usize],
         processed: vec![T::default(); frames as usize],
         channels: prepared.input_config.channels as usize,
@@ -593,8 +676,8 @@ impl AudioStream for CpalStream {
         let target = self.metrics.prime_frames.load(Ordering::Relaxed);
         let queued = self.metrics.queue_depth.load(Ordering::Relaxed);
         Ok(format!("CPAL driver latency unavailable through this adapter; queue startup target={target} frames ({:.3} ms), queued snapshot={queued} frames ({:.3} ms), capacity={} frames; wet DSP={LATENCY} samples ({:.3} ms), neutral DSP=0. Hardware round-trip latency is unmeasured. Separate device clock drift is not corrected.",
-            target as f64 * 1000.0 / RATE as f64, queued as f64 * 1000.0 / RATE as f64, self.capacity,
-            LATENCY as f64 * 1000.0 / RATE as f64))
+            target as f64 * 1000.0 / self.configuration.sample_rate, queued as f64 * 1000.0 / self.configuration.sample_rate, self.capacity,
+            LATENCY as f64 * 1000.0 / self.configuration.sample_rate))
     }
     fn check_events(&self) -> Result<()> {
         let faults = self.metrics.faults.load(Ordering::Relaxed);
@@ -837,6 +920,71 @@ mod tests {
     ) -> SupportedStreamConfigRange {
         SupportedStreamConfigRange::new(channels, rate, rate, buffer, format)
     }
+    #[test]
+    fn device_rates_include_only_engine_formats_and_require_a_common_format() {
+        let buffer = SupportedBufferSize::Unknown;
+        let input = [
+            SupportedStreamConfigRange::new(1, 44100, 96000, buffer, SampleFormat::F32),
+            range(SampleFormat::I16, 1, 192000, buffer),
+            range(SampleFormat::U16, 1, 176400, buffer),
+        ];
+        let output = [
+            range(SampleFormat::F32, 2, 48000, buffer),
+            range(SampleFormat::I16, 2, 96000, buffer),
+            range(SampleFormat::I16, 2, 192000, buffer),
+        ];
+        let rates = supported_rates(&input, &output);
+        assert_eq!(rates.input, [44100, 48000, 88200, 96000, 192000]);
+        assert_eq!(rates.output, [48000, 96000, 192000]);
+        assert_eq!(rates.common, [48000, 192000]);
+        // Rate overlap alone is insufficient: 96 kHz uses different sample formats.
+        let empty = supported_rates(&[], &output);
+        assert!(empty.input.is_empty() && empty.common.is_empty());
+        assert_eq!(empty.output, rates.output);
+        assert!(
+            supported_rates(&[range(SampleFormat::F32, 0, 48000, buffer)], &output)
+                .common
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn negotiates_selected_rate_and_rejects_mismatched_devices() {
+        let buffer = SupportedBufferSize::Range { min: 64, max: 512 };
+        for rate in crate::SAMPLE_RATES {
+            let input = [range(SampleFormat::F32, 2, rate, buffer)];
+            let output = [range(SampleFormat::F32, 2, rate, buffer)];
+            let (_, input_config, output_config) =
+                negotiate_at_rate(&input, &output, 128, rate).unwrap();
+            assert_eq!(input_config.sample_rate, rate);
+            assert_eq!(output_config.sample_rate, rate);
+            let other = if rate == 48000 { 44100 } else { 48000 };
+            assert!(negotiate_at_rate(&input, &output, 128, other).is_err());
+            assert!(negotiate_at_rate(
+                &input,
+                &[range(SampleFormat::F32, 2, other, buffer)],
+                128,
+                rate
+            )
+            .is_err());
+        }
+        let broad = [SupportedStreamConfigRange::new(
+            2,
+            44100,
+            192000,
+            buffer,
+            SampleFormat::F32,
+        )];
+        assert_eq!(
+            negotiate_at_rate(&broad, &broad, 64, 96000)
+                .unwrap()
+                .1
+                .sample_rate,
+            96000
+        );
+        assert!(negotiate_at_rate(&broad, &broad, 64, 0).is_err());
+    }
+
     #[test]
     fn inspection_and_open_negotiate_the_requested_channel_layout() {
         let input = [

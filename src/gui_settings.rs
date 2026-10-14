@@ -31,6 +31,8 @@ fn arguments(options: &Options) -> Vec<String> {
             .join(","),
         "--backend".into(),
         options.backend.name().into(),
+        "--sample-rate".into(),
+        options.sample_rate.to_string(),
         "--frames".into(),
         options.frames.to_string(),
         "--pitch".into(),
@@ -113,6 +115,7 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
             "input_channel",
             "output_channels",
             "frames",
+            "sample_rate",
             "pitch",
             "formant_shift",
             "preserve_formants",
@@ -175,6 +178,8 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
         rumble,
         "--backend",
         values.get("backend").copied().unwrap_or("asio"),
+        "--sample-rate",
+        values.get("sample_rate").copied().unwrap_or("48000"),
         "--frames",
         value("frames")?,
         "--pitch",
@@ -251,6 +256,7 @@ pub(crate) fn merge(saved: &Options, args: Vec<String>) -> Result<Options, Box<d
             "--input-channel",
             "--output-channels",
             "--frames",
+            "--sample-rate",
             "--pitch",
             "--formant-shift",
             "--formant",
@@ -318,6 +324,7 @@ pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>>
             .collect::<Vec<_>>()
             .join(",")
     ));
+    text.push_str(&format!("sample_rate={}\n", options.sample_rate));
     text.push_str(&format!("rumble_filter={}\n", options.rumble_filter));
     text.push_str(&format!("deesser={}\n", options.deesser));
     text.push_str(&format!(
@@ -358,6 +365,33 @@ pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>>
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn sample_rate_persists_overrides_and_defaults_for_legacy_ini() {
+        let path =
+            std::env::temp_dir().join(format!("voice-sample-rate-{}.ini", std::process::id()));
+        let options = Options::parse_gui(["--sample-rate", "44100"].map(String::from)).unwrap();
+        save(&path, &options).unwrap();
+        assert_eq!(load(&path).unwrap(), options);
+        let text = fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            decode(&text.replace("sample_rate=44100\n", ""))
+                .unwrap()
+                .sample_rate,
+            crate::RATE
+        );
+        assert_eq!(
+            merge(
+                &options,
+                ["--sample-rate", "96000"].map(String::from).to_vec()
+            )
+            .unwrap()
+            .sample_rate,
+            96000
+        );
+        assert!(decode(&text.replace("sample_rate=44100", "sample_rate=0")).is_err());
+        assert!(decode(&format!("{text}sample_rate=48000\n")).is_err());
+        fs::remove_file(path).unwrap();
+    }
     #[test]
     fn channel_routing_persists_and_legacy_defaults_are_preserved() {
         let path = std::env::temp_dir().join(format!("voice-routing-{}.ini", std::process::id()));
