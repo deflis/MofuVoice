@@ -484,6 +484,24 @@ fn open_settings(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 #[tauri::command]
+fn open_log(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("log") {
+        window.show().map_err(|error| error.to_string())?;
+        return window.set_focus().map_err(|error| error.to_string());
+    }
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        "log",
+        tauri::WebviewUrl::App("index.html?window=log".into()),
+    )
+    .title("ログ — Voice Changer")
+    .inner_size(640.0, 720.0)
+    .min_inner_size(480.0, 520.0)
+    .build()
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+#[tauri::command]
 fn acknowledge_application_close(
     request_id: u32,
     window: tauri::WebviewWindow,
@@ -519,6 +537,13 @@ fn fallback_application_close(
 #[tauri::command]
 fn close_settings(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("settings") {
+        window.hide().map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+#[tauri::command]
+fn close_log(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("log") {
         window.hide().map_err(|error| error.to_string())?;
     }
     Ok(())
@@ -622,6 +647,8 @@ pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
             save_settings,
             open_settings,
             close_settings,
+            open_log,
+            close_log,
             acknowledge_application_close,
             fallback_application_close,
             open_spectrum,

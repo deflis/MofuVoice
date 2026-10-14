@@ -17,7 +17,7 @@ test("audio commands preserve command names and settings payloads", async () => 
   assert.deepEqual(commands.open_spectrum.mock.calls[0].arguments, [undefined]);
 });
 test("status is pushed without polling or subscribing to logs", async () => {
-  cleanups.push(audioStore.getState().connect(() => {}));
+  cleanups.push(audioStore.getState().connect());
   await setImmediate();
   assert.equal(
     listen.mock.calls.some((call) => call.arguments[0] === "audio-log"),
@@ -33,7 +33,7 @@ test("disconnect before status subscription resolves skips initial status fetch"
   const subscription = deferred();
   const remove = mock.fn();
   listen.mock.mockImplementationOnce(() => subscription.promise);
-  const disconnect = audioStore.getState().connect(() => {});
+  const disconnect = audioStore.getState().connect();
   disconnect();
   subscription.resolve(remove);
   await setImmediate();
@@ -45,7 +45,7 @@ test("initial and command status responses cannot overwrite newer pushed status"
   for (const initial of [true, false]) {
     const status = deferred();
     commands.audio_status.mock.mockImplementationOnce(() => status.promise);
-    const disconnect = audioStore.getState().connect(() => {});
+    const disconnect = audioStore.getState().connect();
     cleanups.push(disconnect);
     await setImmediate();
     if (!initial) {
@@ -56,7 +56,7 @@ test("initial and command status responses cannot overwrite newer pushed status"
       const operation = audioStore.getState().start(settings, false);
       await setImmediate();
       const pushed = { busy: true, info: { phase: "running" } };
-      listen.mock.calls.at(-2).arguments[1]({ payload: pushed });
+      callback("audio-status")({ payload: pushed });
       commandStatus.resolve({ busy: false, info: { phase: "opening" } });
       await operation;
       assert.equal(audioStore.getState().snapshot, pushed);
