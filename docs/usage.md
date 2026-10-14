@@ -122,11 +122,12 @@ CLIでは `--deesser on` / `--deesser off`、表示モードは `--deesser-mode 
 
 ## 自動音量調整
 
-**Auto level** をオンにすると、声の変換後に緩やかなRMS音量補正とソフトニーコンプレッサーを適用します。既定ではオフです。まず既定値で使い、必要なときだけ **詳細設定** を開いて調整してください。**既定値に戻す** は詳細設定を既定値に戻します。オフにすると詳細設定を保持したまま、この処理をバイパスします。
+**Auto level** をオンにすると、声の変換後に選択した単位に応じた緩やかな音量補正とソフトニーコンプレッサーを適用します。既定ではオフです。まず既定値で使い、必要なときだけ **詳細設定** を開いて調整してください。**既定値に戻す** は詳細設定を既定値に戻します。オフにすると詳細設定を保持したまま、この処理をバイパスします。
 
 | 詳細設定 | 既定値 | 範囲・効果 | CLI |
 | --- | --- | --- | --- |
-| Target RMS dB | −20 dBFS | −36〜−6。会話の目標RMS音量 | `--level-target` |
+| 目標値の単位 | LUFS | LUFS / dBFS（RMS） | `--level-unit` |
+| Target loudness / Target RMS | −14 LUFS | −36〜−6。選択した単位での目標音量 | `--level-target` |
 | Max gain dB | +9 dB | 0〜18。小声の最大増幅量 | `--level-max-gain` |
 | Activity floor dB | −50 dBFS | −90〜−30。これ以下では音量補正を更新しない。目標音量より低くする | `--level-floor` |
 | Level response ms | 1500 ms | 100〜10000。音量補正の応答。長いほどゆっくり | `--level-response` |
@@ -135,12 +136,18 @@ CLIでは `--deesser on` / `--deesser off`、表示モードは `--deesser-mode 
 | Attack ms | 5 ms | 0.1〜100。大声の圧縮速度 | `--compress-attack` |
 | Release ms | 150 ms | 10〜2000。圧縮とピーク保護の回復速度 | `--compress-release` |
 
-GUIの詳細値は保存・復元され、CLI指定は各項目だけを上書きします。設定変更はStop → 変更 → Startの順です。GUI設定INIには `auto_level` と、表の順に `level_target_db`、`level_max_gain_db`、`level_floor_db`、`level_response_ms`、`compress_threshold_db`、`compress_ratio`、`compress_attack_ms`、`compress_release_ms` を保存します。既存のINIにはこれらのキーが必要です。起動エラーが出た場合はキーを追加するか、INIを削除して既定値で起動してください。
+**目標値の単位** で LUFS と dBFS（RMS）を選びます。切り替え時に目標値の数値は保持されるため、単位に合わせて調整してください。LUFSはK-weighting・400 ms窓のモーメンタリーラウドネス、dBFSは従来のコンプレッサー前のRMS音量です。CLIでは `--level-unit lufs` / `--level-unit dbfs` で指定し、目標値を省略した場合はそれぞれ−14 / −20になります。GUIの **既定値に戻す** はLUFS・−14に戻します。
+
+LUFSの音量補正はコンプレッサーの減衰も補いますが、最大増幅量・ピーク保護・後段のディエッサーや発話の休止により、配信全体のIntegrated LUFSが目標値に一致するとは限りません。INIには `level_unit=lufs` または `level_unit=dbfs` を保存します。このキーのない旧INIは従来のdBFS（RMS）として読み込みます。−14 LUFSにするには単位をLUFS・目標値を−14に変更するか、**既定値に戻す** を使ってください。
+
+GUIの詳細値は保存・復元され、CLI指定は各項目だけを上書きします。設定変更はStop → 変更 → Startの順です。GUI設定INIには `auto_level`、`level_unit` と、表の順に `level_target_db`、`level_max_gain_db`、`level_floor_db`、`level_response_ms`、`compress_threshold_db`、`compress_ratio`、`compress_attack_ms`、`compress_release_ms` を保存します。`level_unit` 以外のこれらのキーは既存のINIにも必要です。起動エラーが出た場合はキーを追加するか、INIを削除して既定値で起動してください。
 
 ```powershell
 .\target\release\rust-low-latency-voice-changer-cli.exe --backend asio --device "ASIOデバイス名" --auto-level on
-.\target\release\rust-low-latency-voice-changer-cli.exe --backend asio --device "ASIOデバイス名" --auto-level on --level-target -18 --level-max-gain 6 --compress-ratio 4
+.\target\release\rust-low-latency-voice-changer-cli.exe --backend asio --device "ASIOデバイス名" --auto-level on --level-unit dbfs --level-target -20 --level-max-gain 6 --compress-ratio 4
 ```
+
+LUFSモードでは開始時と、発話判定の下限以下が400 ms以上続いた後は、発話が始まってから400 msの測定窓が埋まるまで音量補正量を保持します。短い発話では補正量を更新しない場合があります。この間もコンプレッサーとピーク保護は動作し、音声自体は遅らせません。
 
 無音では補正量を保持し、下限を超えるノイズも声として扱うため、発話判定の下限と最大増幅量を環境に合わせて調整してください。前段のゲートとも併用できます。音量補正の減衰は最大18 dB、後段のピーク保護は−1 dBFSで固定です。突発ピークは即時にゲインを下げるため、強い過渡音では波形に影響があります。入力やピッチ変換ですでにクリップした波形は復元しません。
 
@@ -184,7 +191,8 @@ gate_threshold=auto
 gate_attack_ms=5
 gate_release_ms=80
 auto_level=false
-level_target_db=-20
+level_unit=lufs
+level_target_db=-14
 level_max_gain_db=9
 level_floor_db=-50
 level_response_ms=1500

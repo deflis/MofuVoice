@@ -10,6 +10,7 @@ use tauri::{Emitter, Manager, State};
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct LevelControls {
     enabled: bool,
+    unit: String,
     target_db: String,
     max_gain_db: String,
     floor_db: String,
@@ -23,6 +24,7 @@ impl LevelControls {
     fn from_settings(settings: crate::level::LevelSettings) -> Self {
         Self {
             enabled: settings.enabled,
+            unit: settings.unit.name().into(),
             target_db: settings.target_db.to_string(),
             max_gain_db: settings.max_gain_db.to_string(),
             floor_db: settings.floor_db.to_string(),
@@ -247,6 +249,8 @@ impl Settings {
         args.extend([
             "--auto-level".into(),
             if self.level.enabled { "on" } else { "off" }.into(),
+            "--level-unit".into(),
+            self.level.unit.clone(),
         ]);
         for (flag, value) in crate::deesser::FLAGS
             .iter()
@@ -670,6 +674,8 @@ mod tests {
                 "on",
                 "--auto-level",
                 "on",
+                "--level-unit",
+                "dbfs",
                 "--level-target",
                 "-18",
                 "--level-max-gain",
@@ -701,6 +707,18 @@ mod tests {
             controls.options().unwrap().level.values(),
             options.level.values()
         );
+        controls.level.unit = "lufs".into();
+        assert_eq!(
+            controls.options().unwrap().level.unit,
+            crate::level::LevelUnit::Lufs
+        );
+        assert_eq!(
+            controls.options().unwrap().level.values(),
+            options.level.values()
+        );
+        controls.level.unit = "peak".into();
+        assert!(controls.options().is_err());
+        controls.level.unit = "dbfs".into();
         controls.level.ratio = "NaN".into();
         assert!(controls.options().is_err());
         controls.level.ratio = "4".into();

@@ -60,6 +60,8 @@ fn arguments(options: &Options) -> Vec<String> {
     args.extend([
         "--auto-level".into(),
         if options.level.enabled { "on" } else { "off" }.into(),
+        "--level-unit".into(),
+        options.level.unit.name().into(),
     ]);
     args.extend([
         "--deesser-mode".into(),
@@ -126,6 +128,7 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
         ]
         .contains(&key)
             && !crate::eq::KEYS.contains(&key)
+            && key != "level_unit"
             && key != "auto_level"
             && !crate::level::KEYS.contains(&key)
             && !crate::deesser::KEYS.contains(&key)
@@ -212,6 +215,10 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
         _ => return Err("auto_level must be true or false".into()),
     };
     args.extend(["--auto-level", level]);
+    args.extend([
+        "--level-unit",
+        values.get("level_unit").copied().unwrap_or("dbfs"),
+    ]);
     for (flag, key) in crate::level::FLAGS.iter().zip(crate::level::KEYS) {
         args.extend([*flag, value(key)?]);
     }
@@ -264,6 +271,7 @@ pub(crate) fn merge(saved: &Options, args: Vec<String>) -> Result<Options, Box<d
         ]
         .contains(&flag.as_str())
             && !crate::eq::FLAGS.contains(&flag.as_str())
+            && flag != "--level-unit"
             && flag != "--auto-level"
             && !crate::level::FLAGS.contains(&flag.as_str())
             && !crate::deesser::FLAGS.contains(&flag.as_str())
@@ -330,6 +338,7 @@ pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>>
     {
         text.push_str(&format!("{key}={value}\n"));
     }
+    text.push_str(&format!("level_unit={}\n", options.level.unit.name()));
     for (key, value) in crate::level::KEYS.iter().zip(options.level.values()) {
         text.push_str(&format!("{key}={value}\n"));
     }
@@ -358,6 +367,38 @@ pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>>
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn level_unit_round_trip_legacy_and_override() {
+        use crate::level::LevelUnit;
+        let path =
+            std::env::temp_dir().join(format!("voice-level-unit-{}.ini", std::process::id()));
+        for (unit, name) in [(LevelUnit::Lufs, "lufs"), (LevelUnit::Dbfs, "dbfs")] {
+            let options = Options::parse_gui(
+                ["--level-unit", name, "--level-target", "-18"].map(String::from),
+            )
+            .unwrap();
+            save(&path, &options).unwrap();
+            assert_eq!(load(&path).unwrap(), options);
+            assert_eq!(options.level.unit, unit);
+            let text = fs::read_to_string(&path).unwrap();
+            let legacy = decode(&text.replace(&format!("level_unit={name}\n"), "")).unwrap();
+            assert_eq!(legacy.level.unit, LevelUnit::Dbfs);
+            assert_eq!(legacy.level.target_db, -18.0);
+            assert!(
+                decode(&text.replace(&format!("level_unit={name}"), "level_unit=peak")).is_err()
+            );
+            let switched = merge(
+                &options,
+                ["--level-unit", if name == "lufs" { "dbfs" } else { "lufs" }]
+                    .map(String::from)
+                    .to_vec(),
+            )
+            .unwrap();
+            assert_ne!(switched.level.unit, unit);
+            assert_eq!(switched.level.values(), options.level.values());
+        }
+        fs::remove_file(path).unwrap();
+    }
     #[test]
     fn channel_routing_persists_and_legacy_defaults_are_preserved() {
         let path = std::env::temp_dir().join(format!("voice-routing-{}.ini", std::process::id()));

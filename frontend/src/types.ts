@@ -1,5 +1,6 @@
 export type LevelSettings = {
   enabled: boolean;
+  unit: "lufs" | "dbfs";
   targetDb: string;
   maxGainDb: string;
   floorDb: string;

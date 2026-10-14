@@ -53,6 +53,7 @@ export const settings = {
   gateAttackMs: "1",
   gateReleaseMs: "100",
   level: {
+    unit: "lufs",
     enabled: false,
     targetDb: "-18",
     maxGainDb: "6",
