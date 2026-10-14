@@ -9,6 +9,13 @@ export type LevelSettings = {
   attackMs: string;
   releaseMs: string;
 };
+export type DeEsserParameters = {
+  frequencyHz: string;
+  thresholdDb: string;
+  rangeDb: string;
+  attackMs: string;
+  releaseMs: string;
+};
 export type EqBand = { frequency: string; gainDb: string; q: string };
 export type EqSettings = {
   enabled: boolean;
@@ -29,6 +36,9 @@ export type Settings = {
   formantShift: string;
   preserveFormants: boolean;
   rumbleFilter: boolean;
+  deesser: boolean;
+  deesserMode: "simple" | "pro";
+  deesserParameters: DeEsserParameters;
   gate: boolean;
   gateThresholdMode: "auto" | "manual";
   gateThresholdDb: string;

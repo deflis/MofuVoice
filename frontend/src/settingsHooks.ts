@@ -46,6 +46,9 @@ export function useVoiceSettings() {
       const settings = requireSettings(state.settings);
       return {
         rumbleFilter: settings.rumbleFilter,
+        deesser: settings.deesser,
+        deesserMode: settings.deesserMode,
+        deesserParameters: settings.deesserParameters,
         pitch: settings.pitch,
         formantShift: settings.formantShift,
         preserveFormants: settings.preserveFormants,

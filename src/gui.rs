@@ -105,6 +105,36 @@ enum GateThresholdMode {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DeEsserControls {
+    frequency_hz: String,
+    threshold_db: String,
+    range_db: String,
+    attack_ms: String,
+    release_ms: String,
+}
+impl DeEsserControls {
+    fn from_parameters(p: crate::deesser::DeEsserParameters) -> Self {
+        Self {
+            frequency_hz: p.frequency_hz.to_string(),
+            threshold_db: p.threshold_db.to_string(),
+            range_db: p.range_db.to_string(),
+            attack_ms: p.attack_ms.to_string(),
+            release_ms: p.release_ms.to_string(),
+        }
+    }
+    fn values(&self) -> [&str; 5] {
+        [
+            &self.frequency_hz,
+            &self.threshold_db,
+            &self.range_db,
+            &self.attack_ms,
+            &self.release_ms,
+        ]
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Settings {
     eq: EqControls,
     level: LevelControls,
@@ -118,6 +148,9 @@ pub struct Settings {
     formant_shift: String,
     preserve_formants: bool,
     rumble_filter: bool,
+    deesser: bool,
+    deesser_mode: String,
+    deesser_parameters: DeEsserControls,
     gate: bool,
     gate_threshold_mode: GateThresholdMode,
     gate_threshold_db: String,
@@ -139,6 +172,9 @@ impl Settings {
             formant_shift: options.formant_shift.to_string(),
             preserve_formants: options.preserve_formants,
             rumble_filter: options.rumble_filter,
+            deesser: options.deesser,
+            deesser_mode: if options.deesser_pro { "pro" } else { "simple" }.into(),
+            deesser_parameters: DeEsserControls::from_parameters(options.deesser_parameters),
             gate: options.gate,
             gate_threshold_mode: match options.gate_threshold {
                 GateThreshold::Auto => GateThresholdMode::Auto,
@@ -190,6 +226,10 @@ impl Settings {
                 "off"
             }
             .into(),
+            "--deesser".into(),
+            if self.deesser { "on" } else { "off" }.into(),
+            "--deesser-mode".into(),
+            self.deesser_mode.clone(),
             "--rumble-filter".into(),
             if self.rumble_filter { "on" } else { "off" }.into(),
             "--gate".into(),
@@ -208,6 +248,12 @@ impl Settings {
             "--auto-level".into(),
             if self.level.enabled { "on" } else { "off" }.into(),
         ]);
+        for (flag, value) in crate::deesser::FLAGS
+            .iter()
+            .zip(self.deesser_parameters.values())
+        {
+            args.extend([(*flag).into(), value.into()]);
+        }
         for (flag, value) in crate::level::FLAGS.iter().zip(self.level.values()) {
             args.extend([(*flag).into(), value.into()]);
         }
@@ -589,9 +635,37 @@ mod tests {
     }
 
     #[test]
+    fn deesser_controls_round_trip_and_reject_invalid_values() {
+        let options = Options::parse_gui(
+            [
+                "--deesser",
+                "on",
+                "--deesser-mode",
+                "pro",
+                "--deesser-frequency",
+                "6500",
+                "--deesser-range",
+                "9",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        let mut settings = Settings::from_options(&options);
+        assert_eq!(settings.options().unwrap(), options);
+        settings.deesser_mode = "simple".into();
+        assert_eq!(
+            settings.options().unwrap().deesser_parameters,
+            options.deesser_parameters
+        );
+        settings.deesser_parameters.frequency_hz = "NaN".into();
+        assert!(settings.options().is_err());
+    }
+    #[test]
     fn auto_level_controls_round_trip_validate_and_persist() {
         let options = Options::parse_gui(
             [
+                "--deesser",
+                "on",
                 "--rumble-filter",
                 "on",
                 "--auto-level",

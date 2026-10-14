@@ -44,6 +44,8 @@ fn arguments(options: &Options) -> Vec<String> {
             "off"
         }
         .into(),
+        "--deesser".into(),
+        if options.deesser { "on" } else { "off" }.into(),
         "--rumble-filter".into(),
         if options.rumble_filter { "on" } else { "off" }.into(),
         "--gate".into(),
@@ -59,6 +61,16 @@ fn arguments(options: &Options) -> Vec<String> {
         "--auto-level".into(),
         if options.level.enabled { "on" } else { "off" }.into(),
     ]);
+    args.extend([
+        "--deesser-mode".into(),
+        if options.deesser_pro { "pro" } else { "simple" }.into(),
+    ]);
+    for (flag, value) in crate::deesser::FLAGS
+        .iter()
+        .zip(options.deesser_parameters.values())
+    {
+        args.extend([(*flag).into(), value.to_string()]);
+    }
     for (flag, value) in crate::level::FLAGS.iter().zip(options.level.values()) {
         args.extend([(*flag).into(), value.to_string()]);
     }
@@ -105,6 +117,8 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
             "formant_shift",
             "preserve_formants",
             "rumble_filter",
+            "deesser",
+            "deesser_mode",
             "gate",
             "gate_threshold",
             "gate_attack_ms",
@@ -114,6 +128,7 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
             && !crate::eq::KEYS.contains(&key)
             && key != "auto_level"
             && !crate::level::KEYS.contains(&key)
+            && !crate::deesser::KEYS.contains(&key)
             || values.insert(key, value.trim()).is_some()
         {
             return Err(format!("Unknown or repeated GUI setting '{key}'").into());
@@ -144,7 +159,14 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
         "false" => "off",
         _ => return Err("rumble_filter must be true or false".into()),
     };
+    let deesser = match values.get("deesser").copied().unwrap_or("false") {
+        "true" => "on",
+        "false" => "off",
+        _ => return Err("deesser must be true or false".into()),
+    };
     let mut args = vec![
+        "--deesser",
+        deesser,
         "--input-channel",
         values.get("input_channel").copied().unwrap_or("1"),
         "--output-channels",
@@ -170,6 +192,20 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
         "--gate-release",
         value("gate_release_ms")?,
     ];
+    args.extend([
+        "--deesser-mode",
+        values.get("deesser_mode").copied().unwrap_or("simple"),
+    ]);
+    let defaults = crate::deesser::DeEsserParameters::default()
+        .values()
+        .map(|v| v.to_string());
+    for ((flag, key), default) in crate::deesser::FLAGS
+        .iter()
+        .zip(crate::deesser::KEYS)
+        .zip(&defaults)
+    {
+        args.extend([*flag, values.get(key).copied().unwrap_or(default)]);
+    }
     let level = match value("auto_level")? {
         "true" => "on",
         "false" => "off",
@@ -219,6 +255,8 @@ pub(crate) fn merge(saved: &Options, args: Vec<String>) -> Result<Options, Box<d
             "--formant-shift",
             "--formant",
             "--rumble-filter",
+            "--deesser",
+            "--deesser-mode",
             "--gate",
             "--gate-threshold",
             "--gate-attack",
@@ -228,6 +266,7 @@ pub(crate) fn merge(saved: &Options, args: Vec<String>) -> Result<Options, Box<d
             && !crate::eq::FLAGS.contains(&flag.as_str())
             && flag != "--auto-level"
             && !crate::level::FLAGS.contains(&flag.as_str())
+            && !crate::deesser::FLAGS.contains(&flag.as_str())
             || !seen.insert(flag.clone())
         {
             return Err(format!("Unknown or repeated GUI argument {flag}; use --help").into());
@@ -280,6 +319,17 @@ pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>>
             .join(",")
     ));
     text.push_str(&format!("rumble_filter={}\n", options.rumble_filter));
+    text.push_str(&format!("deesser={}\n", options.deesser));
+    text.push_str(&format!(
+        "deesser_mode={}\n",
+        if options.deesser_pro { "pro" } else { "simple" }
+    ));
+    for (key, value) in crate::deesser::KEYS
+        .iter()
+        .zip(options.deesser_parameters.values())
+    {
+        text.push_str(&format!("{key}={value}\n"));
+    }
     for (key, value) in crate::level::KEYS.iter().zip(options.level.values()) {
         text.push_str(&format!("{key}={value}\n"));
     }
@@ -388,6 +438,75 @@ mod tests {
             )
             .unwrap()
             .rumble_filter
+        );
+        fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn deesser_modes_preserve_parameters_and_round_trip() {
+        let path =
+            std::env::temp_dir().join(format!("voice-deesser-pro-{}.ini", std::process::id()));
+        let options = Options::parse_gui(
+            [
+                "--deesser",
+                "on",
+                "--deesser-mode",
+                "pro",
+                "--deesser-frequency",
+                "6500",
+                "--deesser-threshold",
+                "-30",
+                "--deesser-range",
+                "9",
+                "--deesser-attack",
+                "1",
+                "--deesser-release",
+                "100",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        save(&path, &options).unwrap();
+        assert_eq!(load(&path).unwrap(), options);
+        let simple = merge(
+            &options,
+            ["--deesser-mode", "simple"].map(String::from).to_vec(),
+        )
+        .unwrap();
+        assert!(!simple.deesser_pro);
+        assert_eq!(simple.deesser_parameters, options.deesser_parameters);
+        save(&path, &simple).unwrap();
+        assert_eq!(load(&path).unwrap(), simple);
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(decode(&text.replace("deesser_mode=simple", "deesser_mode=invalid")).is_err());
+        assert!(decode(&text.replace("deesser_frequency=6500", "deesser_frequency=NaN")).is_err());
+        let legacy: String = text
+            .lines()
+            .filter(|line| !line.starts_with("deesser_"))
+            .map(|line| format!("{line}\n"))
+            .collect();
+        let restored = decode(&legacy).unwrap();
+        assert!(!restored.deesser_pro);
+        assert_eq!(
+            restored.deesser_parameters,
+            crate::deesser::DeEsserParameters::default()
+        );
+        fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn deesser_round_trip_legacy_and_override() {
+        let path =
+            std::env::temp_dir().join(format!("voice-deesser-settings-{}.ini", std::process::id()));
+        let options = Options::parse_gui(["--deesser", "on"].map(String::from)).unwrap();
+        save(&path, &options).unwrap();
+        assert_eq!(load(&path).unwrap(), options);
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(!decode(&text.replace("deesser=true\n", "")).unwrap().deesser);
+        assert!(decode(&text.replace("deesser=true", "deesser=invalid")).is_err());
+        assert!(decode(&format!("{text}deesser=false\n")).is_err());
+        assert!(
+            !merge(&options, ["--deesser", "off"].map(String::from).to_vec())
+                .unwrap()
+                .deesser
         );
         fs::remove_file(path).unwrap();
     }
