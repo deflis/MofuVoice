@@ -465,41 +465,77 @@ fn stop_audio(state: State<'_, DesktopState>) -> Result<(), String> {
         .stop();
     Ok(())
 }
-#[tauri::command]
-fn open_settings(app: tauri::AppHandle) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window("settings") {
+fn show_or_create_window(
+    app: &tauri::AppHandle,
+    label: &str,
+    title: &str,
+    path: &str,
+    width: f64,
+    height: f64,
+    min_width: f64,
+    min_height: f64,
+) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(label) {
         window.show().map_err(|error| error.to_string())?;
         return window.set_focus().map_err(|error| error.to_string());
     }
-    tauri::WebviewWindowBuilder::new(
-        &app,
-        "settings",
-        tauri::WebviewUrl::App("index.html?window=settings".into()),
-    )
-    .title("設定 — Voice Changer")
-    .inner_size(820.0, 740.0)
-    .min_inner_size(560.0, 460.0)
-    .build()
-    .map_err(|error| error.to_string())?;
+    tauri::WebviewWindowBuilder::new(app, label, tauri::WebviewUrl::App(path.into()))
+        .title(title)
+        .inner_size(width, height)
+        .min_inner_size(min_width, min_height)
+        .build()
+        .map_err(|error| error.to_string())?;
     Ok(())
 }
-#[tauri::command]
-fn open_log(app: tauri::AppHandle) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window("log") {
-        window.show().map_err(|error| error.to_string())?;
-        return window.set_focus().map_err(|error| error.to_string());
-    }
-    tauri::WebviewWindowBuilder::new(
-        &app,
-        "log",
-        tauri::WebviewUrl::App("index.html?window=log".into()),
-    )
-    .title("ログ — Voice Changer")
-    .inner_size(640.0, 720.0)
-    .min_inner_size(480.0, 520.0)
-    .build()
+
+async fn open_window_on_main(
+    app: tauri::AppHandle,
+    open: impl FnOnce(&tauri::AppHandle) -> Result<(), String> + Send + 'static,
+) -> Result<(), String> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        let _ = sender.send(open(&handle));
+    })
     .map_err(|error| error.to_string())?;
-    Ok(())
+    tauri::async_runtime::spawn_blocking(move || receiver.recv())
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn open_settings(app: tauri::AppHandle) -> Result<(), String> {
+    open_window_on_main(app, |app| {
+        show_or_create_window(
+            app,
+            "settings",
+            "設定 — Voice Changer",
+            "index.html?window=settings",
+            820.0,
+            740.0,
+            560.0,
+            460.0,
+        )
+    })
+    .await
+}
+
+#[tauri::command]
+async fn open_log(app: tauri::AppHandle) -> Result<(), String> {
+    open_window_on_main(app, |app| {
+        show_or_create_window(
+            app,
+            "log",
+            "ログ — Voice Changer",
+            "index.html?window=log",
+            640.0,
+            720.0,
+            480.0,
+            520.0,
+        )
+    })
+    .await
 }
 #[tauri::command]
 fn acknowledge_application_close(
