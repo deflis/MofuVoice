@@ -259,7 +259,7 @@ fn run_audio(
     {
         let mut info = info.lock().unwrap();
         info.phase = "running";
-        info.dsp_ms = Some(if options.pitch == 0.0 && options.formant_shift == 0.0 {
+        info.dsp_ms = Some(if options.pitch.semitones == 0.0 && options.pitch.formant_shift == 0.0 {
             0.0
         } else {
             crate::pitch::LATENCY as f64 * 1000.0 / crate::RATE as f64
