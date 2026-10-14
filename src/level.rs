@@ -160,6 +160,12 @@ impl Biquad {
         let output = self.b[0] * input + self.z[0];
         self.z[0] = self.b[1] * input - self.a[0] * output + self.z[1];
         self.z[1] = self.b[2] * input - self.a[1] * output;
+        // Prevent subnormal tails from increasing callback cost after silence.
+        for state in &mut self.z {
+            if state.abs() < 1e-30 {
+                *state = 0.0;
+            }
+        }
         output
     }
 }
@@ -291,6 +297,26 @@ mod tests {
                 "{frequency}: {measured}"
             );
         }
+    }
+    #[test]
+    fn k_weighting_silence_tail_does_not_become_subnormal() {
+        let mut meter = MomentaryLoudness::new();
+        for sample in tone(0.5, 1) {
+            meter.process(sample as f64);
+        }
+        assert!(meter.high_pass.z.iter().any(|state| *state != 0.0));
+        for _ in 0..RATE * 4 {
+            assert!(meter.process(0.0).is_finite());
+            for state in meter.shelf.z.iter().chain(&meter.high_pass.z) {
+                assert!(
+                    !state.is_subnormal(),
+                    "subnormal K-weighting state: {state}"
+                );
+            }
+        }
+        assert_eq!(meter.shelf.z, [0.0; 2]);
+        // Independently flushing states may leave a negligible normal limit cycle.
+        assert!(meter.high_pass.z.iter().all(|state| state.abs() < 1e-26));
     }
     #[test]
     fn default_target_is_reached_with_compression() {
