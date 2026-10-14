@@ -2,7 +2,7 @@
 use crate::{
     gate::{GateSettings, NoiseGate},
     level::{AutoLevel, LevelSettings},
-    pitch::{PitchShifter, Sample},
+    pitch::{PitchSettings, PitchShifter, Sample},
 };
 use std::error::Error;
 
@@ -11,9 +11,7 @@ pub struct DspSettings {
     pub rumble_filter: bool,
     pub deesser: bool,
     pub deesser_parameters: crate::deesser::DeEsserParameters,
-    pub semitones: f64,
-    pub preserve_formants: bool,
-    pub formant_shift: f64,
+    pub pitch: PitchSettings,
     pub gate: GateSettings,
     pub level: LevelSettings,
 }
@@ -25,9 +23,7 @@ impl From<&crate::cli::Options> for DspSettings {
             rumble_filter: options.rumble_filter,
             deesser: options.deesser,
             deesser_parameters: options.deesser_parameters,
-            semitones: options.pitch,
-            preserve_formants: options.preserve_formants,
-            formant_shift: options.formant_shift,
+            pitch: options.pitch,
             gate: GateSettings {
                 enabled: options.gate,
                 threshold: options.gate_threshold,
@@ -53,11 +49,7 @@ impl DspChain {
         Ok(Self {
             eq: settings.eq.build()?,
             rumble: crate::rumble::RumbleFilter::new(settings.rumble_filter),
-            pitch: PitchShifter::new(
-                settings.semitones,
-                settings.preserve_formants,
-                settings.formant_shift,
-            )?,
+            pitch: settings.pitch.build()?,
             gate: settings.gate.build()?,
             level: settings.level.build()?,
             deesser: crate::deesser::DeEsser::with_parameters(

@@ -34,11 +34,11 @@ fn arguments(options: &Options) -> Vec<String> {
         "--frames".into(),
         options.frames.to_string(),
         "--pitch".into(),
-        options.pitch.to_string(),
+        options.pitch.semitones.to_string(),
         "--formant-shift".into(),
-        options.formant_shift.to_string(),
+        options.pitch.formant_shift.to_string(),
         "--formant".into(),
-        if options.preserve_formants {
+        if options.pitch.preserve_formants {
             "preserve"
         } else {
             "off"
@@ -294,9 +294,9 @@ pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>>
         "[gui]\ndevice={}\nframes={}\npitch={}\nformant_shift={}\npreserve_formants={}\ngate={}\ngate_threshold={}\ngate_attack_ms={}\ngate_release_ms={}\n",
         options.device,
         options.frames,
-        options.pitch,
-        options.formant_shift,
-        options.preserve_formants,
+        options.pitch.semitones,
+        options.pitch.formant_shift,
+        options.pitch.preserve_formants,
         options.gate,
         threshold_text(options.gate_threshold),
         options.gate_attack_ms,
@@ -589,10 +589,10 @@ mod tests {
     fn explicit_values_override_only_their_fields() {
         let saved = decode("[gui]\ndevice=ASIO Device\nframes=256\npitch=-3\nformant_shift=2\npreserve_formants=true\ngate=true\ngate_threshold=auto\ngate_attack_ms=5\ngate_release_ms=80\nauto_level=false\nlevel_target_db=-20\nlevel_max_gain_db=9\nlevel_floor_db=-50\nlevel_response_ms=1500\ncompress_threshold_db=-12\ncompress_ratio=3\ncompress_attack_ms=5\ncompress_release_ms=150\neq=off\neq_mode=simple\neq_band1=250,0,0.7\neq_band2=3000,0,0.8\neq_band3=8000,0,0.7\neq_output=0\n").unwrap();
         let result = merge(&saved, vec!["--pitch".into(), "4.5".into()]).unwrap();
-        assert_eq!(result.pitch, 4.5);
+        assert_eq!(result.pitch.semitones, 4.5);
         assert_eq!(result.device, saved.device);
         assert_eq!(result.frames, 256);
-        assert_eq!(result.formant_shift, 2.0);
+        assert_eq!(result.pitch.formant_shift, 2.0);
         assert!(result.gate);
         let customized = merge(
             &saved,
@@ -622,8 +622,8 @@ mod tests {
         let options = decode(text).unwrap();
         assert_eq!(options.device, "日本語 ASIO = Device");
         assert_eq!(options.frames, 256);
-        assert_eq!(options.pitch, -2.5);
-        assert!(!options.preserve_formants);
+        assert_eq!(options.pitch.semitones, -2.5);
+        assert!(!options.pitch.preserve_formants);
         for invalid in [
             text.replace("false", "invalid"),
             text.replace("256", "0"),

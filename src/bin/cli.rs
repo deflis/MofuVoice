@@ -77,12 +77,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         "Auto level: {}; added DSP delay=0 samples.",
         if options.level.enabled { "on" } else { "off" }
     );
-    if options.pitch == 0.0 && options.formant_shift == 0.0 {
+    if options.pitch.semitones == 0.0 && options.pitch.formant_shift == 0.0 {
         println!("Pitch/formant DSP=0 samples; rumble filter, de-esser, gate, EQ and auto level add 0 buffered samples; backend queue latency is reported separately. Selected input -> selected outputs.");
     } else {
         println!(
             "Pitch={} semitones; spectral wet DSP delay={LATENCY} samples ({:.3} ms).",
-            options.pitch,
+            options.pitch.semitones,
             LATENCY as f64 * 1000.0 / RATE as f64
         );
     }
@@ -99,11 +99,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         TARGET_FRAMES,
         TARGET_FRAMES as f64 * 1000.0 / RATE as f64
     );
-    println!("Formant correction: {}. Cepstral spectral envelope; window=2048 samples, update=128 samples. Listening quality unverified.", if options.preserve_formants { "preserve" } else { "off" });
+    println!("Formant correction: {}. Cepstral spectral envelope; window=2048 samples, update=128 samples. Listening quality unverified.", if options.pitch.preserve_formants { "preserve" } else { "off" });
     engine.start()?;
     println!(
         "Formant shift: {} semitones (independent of pitch).",
-        options.formant_shift
+        options.pitch.formant_shift
     );
     println!("Audio running. Press Enter to stop.");
     let (stop_tx, stop_rx) = mpsc::channel();

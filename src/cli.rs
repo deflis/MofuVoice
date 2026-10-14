@@ -12,9 +12,7 @@ pub struct Options {
     pub backend: crate::backend::BackendKind,
     pub seconds: Option<u64>,
     pub frames: u32,
-    pub pitch: f64,
-    pub preserve_formants: bool,
-    pub formant_shift: f64,
+    pub pitch: crate::pitch::PitchSettings,
     pub level: crate::level::LevelSettings,
     pub rumble_filter: bool,
     pub deesser: bool,
@@ -41,9 +39,7 @@ impl Options {
             backend: crate::backend::BackendKind::default(),
             seconds: None,
             frames: crate::DEFAULT_FRAMES,
-            pitch: 0.0,
-            preserve_formants: true,
-            formant_shift: 0.0,
+            pitch: crate::pitch::PitchSettings::default(),
             level: crate::level::LevelSettings::default(),
             rumble_filter: false,
             deesser: false,
@@ -109,16 +105,16 @@ impl Options {
                     eq_given[index] = true;
                 }
                 "--formant-shift" if !shift_given => {
-                    options.formant_shift = args
+                    options.pitch.formant_shift = args
                         .next()
                         .ok_or("--formant-shift requires semitones")?
                         .parse()?;
-                    crate::pitch::formant_ratio(options.formant_shift)
+                    crate::pitch::formant_ratio(options.pitch.formant_shift)
                         .map_err(|error| error.to_string())?;
                     shift_given = true;
                 }
                 "--formant" if !formant_given => {
-                    options.preserve_formants = match args.next().as_deref() {
+                    options.pitch.preserve_formants = match args.next().as_deref() {
                         Some("preserve") => true,
                         Some("off") => false,
                         _ => return Err("--formant requires preserve or off".into()),
@@ -126,8 +122,9 @@ impl Options {
                     formant_given = true;
                 }
                 "--pitch" if !pitch_given => {
-                    options.pitch = args.next().ok_or("--pitch requires semitones")?.parse()?;
-                    crate::pitch::pitch_ratio(options.pitch)?;
+                    options.pitch.semitones =
+                        args.next().ok_or("--pitch requires semitones")?.parse()?;
+                    crate::pitch::pitch_ratio(options.pitch.semitones)?;
                     pitch_given = true;
                 }
                 "--auto-level" if !level_given => {
@@ -287,7 +284,7 @@ impl Options {
                 _ => return Err(format!("Unknown or repeated argument {arg}; use --help").into()),
             }
         }
-        if !options.preserve_formants && options.formant_shift != 0.0 {
+        if !options.pitch.preserve_formants && options.pitch.formant_shift != 0.0 {
             return Err(crate::pitch::InvalidFormant.to_string().into());
         }
         options.eq.validate()?;
@@ -452,8 +449,8 @@ mod tests {
     fn validates_independent_formant_shift() {
         for shift in ["-12", "-2.5", "0", "+3", "12"] {
             let options = parse(&["--formant-shift", shift]).unwrap();
-            assert_eq!(options.formant_shift, shift.parse::<f64>().unwrap());
-            assert_eq!(options.pitch, 0.0);
+            assert_eq!(options.pitch.formant_shift, shift.parse::<f64>().unwrap());
+            assert_eq!(options.pitch.semitones, 0.0);
             assert!(
                 Options::parse_gui(["--formant-shift", shift].into_iter().map(String::from))
                     .is_ok()
@@ -642,21 +639,23 @@ mod tests {
     #[test]
     fn accepts_signed_fractional_pitch_and_defaults_to_bypass() {
         assert!(parse(&[]).unwrap().device.is_empty());
-        assert_eq!(parse(&[]).unwrap().pitch, 0.0);
-        assert!(parse(&[]).unwrap().preserve_formants);
+        assert_eq!(parse(&[]).unwrap().pitch.semitones, 0.0);
+        assert!(parse(&[]).unwrap().pitch.preserve_formants);
         assert!(
             parse(&["--pitch", "3", "--formant", "preserve"])
                 .unwrap()
+                .pitch
                 .preserve_formants
         );
         assert!(
             !parse(&["--pitch", "-3", "--formant", "off"])
                 .unwrap()
+                .pitch
                 .preserve_formants
         );
         for pitch in ["-12", "-3", "0", "2.5", "+3", "12"] {
             assert_eq!(
-                parse(&["--pitch", pitch]).unwrap().pitch,
+                parse(&["--pitch", pitch]).unwrap().pitch.semitones,
                 pitch.parse::<f64>().unwrap()
             );
         }
@@ -669,8 +668,8 @@ mod tests {
                 .map(String::from),
         )
         .unwrap();
-        assert_eq!(options.pitch, -3.0);
-        assert!(!options.preserve_formants);
+        assert_eq!(options.pitch.semitones, -3.0);
+        assert!(!options.pitch.preserve_formants);
         for args in [
             vec!["--gui", "--gui"],
             vec!["--gui", "--inspect"],

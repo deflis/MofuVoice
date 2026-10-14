@@ -39,6 +39,30 @@ pub fn pitch_ratio(semitones: f64) -> Result<f64, InvalidPitch> {
     Ok(2.0_f64.powf(semitones / 12.0))
 }
 
+/// Pitch and independent formant settings, in semitones.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PitchSettings {
+    pub semitones: f64,
+    pub preserve_formants: bool,
+    pub formant_shift: f64,
+}
+
+impl Default for PitchSettings {
+    fn default() -> Self {
+        Self {
+            semitones: 0.0,
+            preserve_formants: true,
+            formant_shift: 0.0,
+        }
+    }
+}
+
+impl PitchSettings {
+    pub fn build(self) -> Result<PitchShifter, Box<dyn Error>> {
+        PitchShifter::new(self.semitones, self.preserve_formants, self.formant_shift)
+    }
+}
+
 /// Integer conversion is normalized in f64 so every i32 input bit is representable.
 /// Wet integer output rounds and saturates. Dry output bypasses conversion entirely.
 pub trait Sample: Copy + Default + PartialEq {

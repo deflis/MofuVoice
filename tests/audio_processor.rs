@@ -2,7 +2,7 @@ use rust_low_latency_voice_changer::{
     audio::{AudioProcessor, DspSettings},
     cli::Options,
     gate::NoiseGate,
-    pitch::{PitchShifter, Sample},
+    pitch::Sample,
     RATE,
 };
 
@@ -93,8 +93,7 @@ fn pipeline_matches_rumble_gate_pitch_eq_level_deesser_order_across_variable_blo
     let dsp = settings(&args);
     let mut rumble = rust_low_latency_voice_changer::rumble::RumbleFilter::new(dsp.rumble_filter);
     let mut gate: NoiseGate = dsp.gate.build().unwrap();
-    let mut pitch =
-        PitchShifter::new(dsp.semitones, dsp.preserve_formants, dsp.formant_shift).unwrap();
+    let mut pitch = dsp.pitch.build().unwrap();
     let mut eq = dsp.eq.build().unwrap();
     let mut level = dsp.level.build().unwrap();
     let mut deesser = rust_low_latency_voice_changer::deesser::DeEsser::new(dsp.deesser);
