@@ -43,7 +43,7 @@ Voicemeeter（Banana / Potato）や VB-Audio Matrix でルーティングする�
 
 ### 4. 元の声で接続を確かめる
 
-**Start** を押し、マイクに向かって話します。下部に `Running` と表示され、出力先から元の声が聞こえることを確認してください。PitchとFormant shiftが両方0で、低域ノイズ除去・Noise gate・EQ・Auto levelがオフのときは、入力をそのまま返します。
+**Start** を押し、マイクに向かって話します。下部に `Running` と表示され、出力先から元の声が聞こえることを確認してください。PitchとFormant shiftが両方0で、低域ノイズ除去・ディエッサー・Noise gate・EQ・Auto levelがオフのときは、入力をそのまま返します。
 
 ### 5. 声を変える
 
@@ -67,7 +67,7 @@ Voicemeeter（Banana / Potato）や VB-Audio Matrix でルーティングする�
 | **Preserve formants** | オンにすると、ピッチ変更時に元の声の響きを保つ補正を行います。既定オン |
 | **Formant shift** | 声の共鳴の移動量。−12〜+12半音、小数可。既定0。非ゼロではPreserve formantsをオンにします |
 
-Preserve formantsをオフにすると、声の高さとともに響きも変わります。同じPitchでオン・オフを切り替えて聞き比べると違いを確認できます。オフのときにFormant shiftを非ゼロにするとエラーになります。PitchとFormant shiftが両方0で、低域ノイズ除去・Noise gate・EQ・Auto levelがオフのときは、この設定にかかわらず元の音声を返します。
+Preserve formantsをオフにすると、声の高さとともに響きも変わります。同じPitchでオン・オフを切り替えて聞き比べると違いを確認できます。オフのときにFormant shiftを非ゼロにするとエラーになります。PitchとFormant shiftが両方0で、低域ノイズ除去・ディエッサー・Noise gate・EQ・Auto levelがオフのときは、この設定にかかわらず元の音声を返します。
 
 大きなフォルマント移動では響きの幅や音量も変わり、歪みが生じる場合があります。まず±2〜3半音程度で聞きながら調整してください。
 
@@ -101,6 +101,24 @@ eq_band2=3000,0,0.8
 eq_band3=8000,0,0.7
 eq_output=0
 ```
+
+## サ行の刺さり（ディエッサー）
+
+「さ・し・す」が耳に刺さるときは、**サ行をやわらかくする** をオンにしてください。まずは **簡単モード** の標準の位置で「さしすせそ」と話して聞き比べます。まだ刺さるときは「抑える強さ」を右へ、声がこもるときは左へ動かします。0では補正しません。設定はStop → 変更 → Startの順で適用します。
+
+**プロ向けモード** では、分割周波数・しきい値・最大減衰量・アタック・リリースを調整できます。モードを切り替えるだけでは音も数値も変わりません。簡単モードでもプロ向けで設定した詳細値を使い、抑える強さ（最大減衰量）だけを変更します。**ディエッサーだけリセット** は詳細値と強さを標準に戻し、オン・オフと操作モードは維持します。
+
+| プロ向けの設定 | 標準 | 範囲 | CLI |
+| --- | --- | --- | --- |
+| 分割周波数 | 5000 Hz | 2000〜12000 Hz | `--deesser-frequency` |
+| しきい値 | −24 dBFS | −60〜0 dBFS | `--deesser-threshold` |
+| 最大減衰量 | 6 dB | 0〜12 dB | `--deesser-range` |
+| アタック | 0.5 ms | 0.1〜20 ms | `--deesser-attack` |
+| リリース | 60 ms | 10〜500 ms | `--deesser-release` |
+
+声変換と自動音量調整の後で、一次相補フィルターで分離した高域のRMS音量と全体に対する高域の比率を検出し、高域だけを動的に抑えます。最大減衰量は上限なので、常にその強さで減衰するわけではありません。先読み・追加バッファはなく、検出とゲインの応答時間および減衰中の位相変化があります。声やマイクによって効き方が変わり、息や明るい母音にも反応する場合があります。
+
+CLIでは `--deesser on` / `--deesser off`、表示モードは `--deesser-mode simple` / `pro` を指定します。INIには `deesser`、`deesser_mode`、`deesser_frequency`、`deesser_threshold`、`deesser_range`、`deesser_attack`、`deesser_release` を保存します。新しいキーのない既存INIも、簡単モードと標準の詳細値で読み込めます。オン・オフの既定はオフです。
 
 ## 自動音量調整
 
@@ -148,6 +166,13 @@ pitch=0
 formant_shift=0
 preserve_formants=true
 rumble_filter=false
+deesser=false
+deesser_mode=simple
+deesser_frequency=5000
+deesser_threshold=-24
+deesser_range=6
+deesser_attack=0.5
+deesser_release=60
 eq=off
 eq_mode=simple
 eq_band1=250,0,0.7
@@ -186,7 +211,7 @@ compress_release_ms=150
 
 下部には入力信号の累計、処理回数、ドライバのレイテンシ、異常などが表示されます。`nonzero input samples` が増えていれば入力信号が届いていますが、出力先で聞こえるかは実際に確認してください。
 
-PitchとFormant shiftが両方0で、低域ノイズ除去・Noise gate・EQ・Auto levelがオフならDSPは遅延なしのバイパスです。ゲートと自動音量調整も追加サンプル遅延は0ですが、オンの場合は音量を変更します。ピッチまたはフォルマント変換では約10.67 msのDSP遅延に、デバイスや音声の接続経路の遅延が加わります。Framesを小さくしてもDSPの合成遅延（512サンプル）は減りません。表示されるドライバのレイテンシは、マイクから出力先までの総遅延とは異なります。
+PitchとFormant shiftが両方0で、低域ノイズ除去・ディエッサー・Noise gate・EQ・Auto levelがオフならDSPは遅延なしのバイパスです。ゲートと自動音量調整も追加サンプル遅延は0ですが、オンの場合は音量を変更します。ピッチまたはフォルマント変換では約10.67 msのDSP遅延に、デバイスや音声の接続経路の遅延が加わります。Framesを小さくしてもDSPの合成遅延（512サンプル）は減りません。表示されるドライバのレイテンシは、マイクから出力先までの総遅延とは異なります。
 
 ## CLIでの操作
 

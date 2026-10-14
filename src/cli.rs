@@ -17,6 +17,9 @@ pub struct Options {
     pub formant_shift: f64,
     pub level: crate::level::LevelSettings,
     pub rumble_filter: bool,
+    pub deesser: bool,
+    pub deesser_pro: bool,
+    pub deesser_parameters: crate::deesser::DeEsserParameters,
     pub gate: bool,
     pub gate_threshold: GateThreshold,
     pub gate_attack_ms: f64,
@@ -43,6 +46,9 @@ impl Options {
             formant_shift: 0.0,
             level: crate::level::LevelSettings::default(),
             rumble_filter: false,
+            deesser: false,
+            deesser_pro: false,
+            deesser_parameters: crate::deesser::DeEsserParameters::default(),
             gate: false,
             gate_threshold: GateThreshold::Auto,
             gate_attack_ms: 5.0,
@@ -65,6 +71,9 @@ impl Options {
         let mut level_given = false;
         let mut level_fields = [false; 8];
         let mut rumble_given = false;
+        let mut deesser_given = false;
+        let mut deesser_mode_given = false;
+        let mut deesser_fields = [false; 5];
         let mut gate_given = false;
         let mut gate_threshold_given = false;
         let mut gate_attack_given = false;
@@ -140,6 +149,37 @@ impl Options {
                         .parse()?;
                     options.level.set(index, value);
                     level_fields[index] = true;
+                }
+                "--deesser-mode" if !deesser_mode_given => {
+                    options.deesser_pro = match args.next().as_deref() {
+                        Some("simple") => false,
+                        Some("pro") => true,
+                        _ => return Err("--deesser-mode requires simple or pro".into()),
+                    };
+                    deesser_mode_given = true;
+                }
+                flag if crate::deesser::FLAGS.contains(&flag) => {
+                    let index = crate::deesser::FLAGS
+                        .iter()
+                        .position(|f| *f == flag)
+                        .unwrap();
+                    if deesser_fields[index] {
+                        return Err(format!("Repeated argument {flag}").into());
+                    }
+                    let value = args
+                        .next()
+                        .ok_or_else(|| format!("{flag} requires a value"))?
+                        .parse()?;
+                    options.deesser_parameters.set(index, value);
+                    deesser_fields[index] = true;
+                }
+                "--deesser" if !deesser_given => {
+                    options.deesser = match args.next().as_deref() {
+                        Some("on") => true,
+                        Some("off") => false,
+                        _ => return Err("--deesser requires on or off".into()),
+                    };
+                    deesser_given = true;
                 }
                 "--rumble-filter" if !rumble_given => {
                     options.rumble_filter = match args.next().as_deref() {
@@ -252,6 +292,7 @@ impl Options {
         }
         options.eq.validate()?;
         options.level.validate()?;
+        options.deesser_parameters.validate()?;
         if !(1..=512).contains(&options.input_channel)
             || options.output_channels.is_empty()
             || options
@@ -291,6 +332,9 @@ impl Options {
                     || level_given
                     || level_fields.iter().any(|given| *given)
                     || rumble_given
+                    || deesser_given
+                    || deesser_mode_given
+                    || deesser_fields.iter().any(|given| *given)
                     || gate_given
                     || gate_tuned))
             || (options.help && backend_given)
@@ -301,14 +345,14 @@ impl Options {
                     || input_channel_given
                     || output_channels_given))
         {
-            return Err("Choose one CLI mode: --help, --list-devices, --inspect [--device NAME] [--frames N], or [--device NAME] [--frames N] [--seconds N] [--pitch SEMITONES] [--formant preserve|off] [--formant-shift SEMITONES] [--eq on|off] [--eq-mode simple|pro] [--eq-band1 HZ,DB,Q] [--eq-band2 HZ,DB,Q] [--eq-band3 HZ,DB,Q] [--eq-output DB] [--auto-level on|off] [--level-target DB] [--level-max-gain DB] [--level-floor DB] [--level-response MS] [--compress-threshold DB] [--compress-ratio N] [--compress-attack MS] [--compress-release MS] [--rumble-filter on|off] [--gate on|off] [--gate-threshold auto|DB] [--gate-attack MS] [--gate-release MS]".into());
+            return Err("Choose one CLI mode: --help, --list-devices, --inspect [--device NAME] [--frames N], or [--device NAME] [--frames N] [--seconds N] [--pitch SEMITONES] [--formant preserve|off] [--formant-shift SEMITONES] [--eq on|off] [--eq-mode simple|pro] [--eq-band1 HZ,DB,Q] [--eq-band2 HZ,DB,Q] [--eq-band3 HZ,DB,Q] [--eq-output DB] [--auto-level on|off] [--level-target DB] [--level-max-gain DB] [--level-floor DB] [--level-response MS] [--compress-threshold DB] [--compress-ratio N] [--compress-attack MS] [--compress-release MS] [--deesser on|off] [--deesser-mode simple|pro] [--deesser-frequency HZ] [--deesser-threshold DBFS] [--deesser-range DB] [--deesser-attack MS] [--deesser-release MS] [--rumble-filter on|off] [--gate on|off] [--gate-threshold auto|DB] [--gate-attack MS] [--gate-release MS]".into());
         }
         Ok(options)
     }
     pub fn parse_gui(args: impl IntoIterator<Item = String>) -> Result<Self, Box<dyn Error>> {
         let options = Self::parse(args)?;
         if options.seconds.is_some() || options.inspect || options.list {
-            return Err("GUI accepts device, buffer, pitch, formant, rumble filter, gate, EQ and auto-level settings, or --help. Use the CLI for timed runs, inspection or device listing.".into());
+            return Err("GUI accepts device, buffer, pitch, formant, rumble filter, de-esser, gate, EQ and auto-level settings, or --help. Use the CLI for timed runs, inspection or device listing.".into());
         }
         Ok(options)
     }
@@ -452,6 +496,57 @@ mod tests {
             Options::parse_gui(["--rumble-filter", "on"].map(String::from))
                 .unwrap()
                 .rumble_filter
+        );
+    }
+    #[test]
+    fn deesser_mode_and_parameters_validate() {
+        let options = parse(&[
+            "--deesser-mode",
+            "pro",
+            "--deesser-frequency",
+            "6500",
+            "--deesser-range",
+            "3",
+        ])
+        .unwrap();
+        assert!(options.deesser_pro);
+        assert_eq!(options.deesser_parameters.frequency_hz, 6500.0);
+        assert_eq!(options.deesser_parameters.range_db, 3.0);
+        assert!(!parse(&[]).unwrap().deesser_pro);
+        for args in [
+            vec!["--deesser-mode", "invalid"],
+            vec!["--deesser-mode"],
+            vec!["--deesser-mode", "pro", "--deesser-mode", "simple"],
+            vec!["--deesser-range", "3", "--deesser-range", "6"],
+            vec!["--deesser-mode", "pro", "--help"],
+        ] {
+            assert!(parse(&args).is_err());
+        }
+        for flag in crate::deesser::FLAGS {
+            assert!(parse(&[flag]).is_err());
+            assert!(parse(&[flag, "NaN"]).is_err());
+            assert!(parse(&[flag, "999999"]).is_err());
+        }
+    }
+    #[test]
+    fn deesser_defaults_and_validation() {
+        assert!(!parse(&[]).unwrap().deesser);
+        assert!(parse(&["--deesser", "on"]).unwrap().deesser);
+        assert!(!parse(&["--deesser", "off"]).unwrap().deesser);
+        for args in [
+            vec!["--deesser"],
+            vec!["--deesser", "maybe"],
+            vec!["--deesser", "on", "--deesser", "off"],
+            vec!["--deesser", "off", "--help"],
+            vec!["--deesser", "on", "--inspect"],
+            vec!["--deesser", "on", "--list-devices"],
+        ] {
+            assert!(parse(&args).is_err(), "{args:?}");
+        }
+        assert!(
+            Options::parse_gui(["--deesser", "on"].map(String::from))
+                .unwrap()
+                .deesser
         );
     }
     #[test]

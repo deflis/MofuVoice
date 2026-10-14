@@ -69,8 +69,10 @@ fn auto_gate_rejects_quiet_clicks_across_callback_boundaries() {
 }
 
 #[test]
-fn pipeline_matches_rumble_gate_pitch_eq_level_order_across_variable_blocks() {
+fn pipeline_matches_rumble_gate_pitch_eq_level_deesser_order_across_variable_blocks() {
     let args = [
+        "--deesser",
+        "on",
         "--rumble-filter",
         "on",
         "--pitch",
@@ -95,6 +97,7 @@ fn pipeline_matches_rumble_gate_pitch_eq_level_order_across_variable_blocks() {
         PitchShifter::new(dsp.semitones, dsp.preserve_formants, dsp.formant_shift).unwrap();
     let mut eq = dsp.eq.build().unwrap();
     let mut level = dsp.level.build().unwrap();
+    let mut deesser = rust_low_latency_voice_changer::deesser::DeEsser::new(dsp.deesser);
     let mut processor = AudioProcessor::<f32>::new(RATE, 512, dsp).unwrap();
     let input: Vec<_> = (0..12000).map(|i| (i as f32 * 0.03).sin() * 0.1).collect();
     let mut gated = vec![0.0; input.len()];
@@ -105,6 +108,7 @@ fn pipeline_matches_rumble_gate_pitch_eq_level_order_across_variable_blocks() {
     pitch.process_block(&gated, &mut expected);
     eq.process_in_place(&mut expected);
     level.process_in_place(&mut expected);
+    deesser.process_in_place(&mut expected);
     let mut actual = vec![0.0; input.len()];
     let mut offset = 0;
     for frames in [1, 64, 511, 128, 3, 512].into_iter().cycle() {
@@ -193,4 +197,54 @@ fn nonzero_input_count_survives_integer_dc_removal() {
     }
     check::<i16>();
     check::<i32>();
+}
+
+#[test]
+fn deesser_only_attenuates_highs_through_shared_backend_pipeline() {
+    let input: Vec<f32> = (0..48000)
+        .map(|i| (0.4 * (std::f64::consts::TAU * 8000.0 * i as f64 / RATE as f64).sin()) as f32)
+        .collect();
+    let mut processor =
+        AudioProcessor::<f32>::new(RATE, 512, settings(&["--deesser", "on"])).unwrap();
+    let mut actual = vec![0.0; input.len()];
+    for (source, dest) in input.chunks(63).zip(actual.chunks_mut(63)) {
+        assert_eq!(
+            processor.process_block(source, dest).unwrap(),
+            source.iter().filter(|x| **x != 0.0).count() as u64
+        );
+    }
+    let power = |x: &[f32]| x.iter().map(|x| (*x as f64).powi(2)).sum::<f64>();
+    assert!(power(&actual[24000..]) < power(&input[24000..]) * 0.5);
+}
+
+#[test]
+fn deesser_mode_only_changes_presentation_and_custom_parameters_reach_audio() {
+    let common = [
+        "--deesser",
+        "on",
+        "--deesser-frequency",
+        "6500",
+        "--deesser-threshold",
+        "-30",
+        "--deesser-range",
+        "9",
+    ];
+    let input: Vec<f32> = (0..48000)
+        .map(|i| (0.4 * (std::f64::consts::TAU * 8000.0 * i as f64 / RATE as f64).sin()) as f32)
+        .collect();
+    let mut reference = input.clone();
+    let parameters = settings(&common).deesser_parameters;
+    rust_low_latency_voice_changer::deesser::DeEsser::with_parameters(true, parameters)
+        .unwrap()
+        .process_in_place(&mut reference);
+    for mode in ["simple", "pro"] {
+        let mut args = common.to_vec();
+        args.extend(["--deesser-mode", mode]);
+        let mut processor = AudioProcessor::<f32>::new(RATE, 512, settings(&args)).unwrap();
+        let mut output = vec![0.0; input.len()];
+        for (source, dest) in input.chunks(127).zip(output.chunks_mut(127)) {
+            processor.process_block(source, dest).unwrap();
+        }
+        assert_eq!(output, reference);
+    }
 }

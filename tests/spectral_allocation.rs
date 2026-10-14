@@ -32,7 +32,7 @@ unsafe impl GlobalAlloc for CountingAllocator {
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
 #[test]
-fn portable_processor_does_not_allocate_with_rumble_gate_pitch_and_level_enabled() {
+fn portable_processor_does_not_allocate_with_rumble_gate_pitch_eq_level_and_deesser_enabled() {
     use rust_low_latency_voice_changer::{
         audio::{AudioProcessor, DspSettings},
         cli::Options,
@@ -40,6 +40,8 @@ fn portable_processor_does_not_allocate_with_rumble_gate_pitch_and_level_enabled
     };
     let options = Options::parse(
         [
+            "--deesser",
+            "on",
             "--rumble-filter",
             "on",
             "--pitch",

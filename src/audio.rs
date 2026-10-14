@@ -9,6 +9,8 @@ use std::error::Error;
 pub struct DspSettings {
     pub eq: crate::eq::EqSettings,
     pub rumble_filter: bool,
+    pub deesser: bool,
+    pub deesser_parameters: crate::deesser::DeEsserParameters,
     pub semitones: f64,
     pub preserve_formants: bool,
     pub formant_shift: f64,
@@ -21,6 +23,8 @@ impl From<&crate::cli::Options> for DspSettings {
         Self {
             eq: options.eq,
             rumble_filter: options.rumble_filter,
+            deesser: options.deesser,
+            deesser_parameters: options.deesser_parameters,
             semitones: options.pitch,
             preserve_formants: options.preserve_formants,
             formant_shift: options.formant_shift,
@@ -41,6 +45,7 @@ pub struct DspChain {
     pub(crate) pitch: PitchShifter,
     pub(crate) gate: NoiseGate,
     pub(crate) level: AutoLevel,
+    pub(crate) deesser: crate::deesser::DeEsser,
 }
 
 impl DspChain {
@@ -55,6 +60,10 @@ impl DspChain {
             )?,
             gate: settings.gate.build()?,
             level: settings.level.build()?,
+            deesser: crate::deesser::DeEsser::with_parameters(
+                settings.deesser,
+                settings.deesser_parameters,
+            )?,
         })
     }
 
@@ -82,6 +91,7 @@ impl DspChain {
         };
         self.eq.process_in_place(output);
         self.level.process_in_place(output);
+        self.deesser.process_in_place(output);
         nonzero
     }
 }
