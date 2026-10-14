@@ -3,6 +3,8 @@
 //! Wet audio uses a long analysis window and a short right-aligned synthesis window,
 //! so the fixed delay is SYNTHESIS samples; the neutral setting bypasses exactly.
 use std::{error::Error, fmt};
+#[path = "pitch_math.rs"]
+mod math;
 
 pub const SMOOTH_SAMPLES: usize = 960;
 pub const FADE_SAMPLES: usize = 480;
@@ -358,6 +360,194 @@ impl Fft {
         }
     }
 
+    fn synthesis_stages(roots: &[Complex], data: &mut [Complex; HALF]) {
+        Self::stage::<HALF, 2>(roots, data);
+        Self::stage::<HALF, 4>(roots, data);
+        Self::stage::<HALF, 8>(roots, data);
+        Self::stage::<HALF, 16>(roots, data);
+        Self::stage::<HALF, 32>(roots, data);
+        Self::stage::<HALF, 64>(roots, data);
+        Self::stage::<HALF, 128>(roots, data);
+        Self::stage::<HALF, 256>(roots, data);
+        Self::right_stage::<512, 0>(roots, data);
+        Self::right_stage::<1024, 256>(roots, data);
+    }
+
+    fn right_stage<const SIZE: usize, const FIRST: usize>(
+        roots: &[Complex],
+        data: &mut [Complex; HALF],
+    ) {
+        let half = SIZE / 2;
+        let roots = &roots[half - 1 + FIRST..SIZE - 1];
+        for block in data.as_chunks_mut::<SIZE>().0 {
+            let (left, right) = block.split_at_mut(half);
+            for ((a, b), root) in left[FIRST..].iter().zip(&mut right[FIRST..]).zip(roots) {
+                let product = b.mul(*root);
+                *b = Complex {
+                    re: a.re - product.re,
+                    im: a.im - product.im,
+                };
+            }
+        }
+    }
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[target_feature(enable = "avx2")]
+    unsafe fn synthesis_stages_avx2(roots: &[Complex], data: &mut [Complex; HALF]) {
+        Self::stage::<HALF, 2>(roots, data);
+        // SAFETY: inherited feature contract; each stage checks its slices.
+        unsafe {
+            Self::stage_avx2::<HALF, 4>(roots, data);
+            Self::stage_avx2::<HALF, 8>(roots, data);
+            Self::stage_avx2::<HALF, 16>(roots, data);
+            Self::stage_avx2::<HALF, 32>(roots, data);
+            Self::stage_avx2::<HALF, 64>(roots, data);
+            Self::stage_avx2::<HALF, 128>(roots, data);
+            Self::stage_avx2::<HALF, 256>(roots, data);
+            Self::right_stage_avx2::<512, 0>(roots, data);
+            Self::right_stage_avx2::<1024, 256>(roots, data);
+        }
+    }
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[target_feature(enable = "avx2")]
+    unsafe fn right_stage_avx2<const SIZE: usize, const FIRST: usize>(
+        roots: &[Complex],
+        data: &mut [Complex; HALF],
+    ) {
+        #[cfg(target_arch = "x86")]
+        use std::arch::x86::*;
+        #[cfg(target_arch = "x86_64")]
+        use std::arch::x86_64::*;
+        let half = SIZE / 2;
+        let roots = &roots[half - 1 + FIRST..SIZE - 1];
+        for block in data.as_chunks_mut::<SIZE>().0 {
+            let (left, right) = block.split_at_mut(half);
+            for ((a, b), root) in left[FIRST..]
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .zip(right[FIRST..].as_chunks_mut::<2>().0)
+                .zip(roots.as_chunks::<2>().0)
+            {
+                // SAFETY: each checked chunk contains two repr(C) complexes;
+                // unaligned loads/stores remain inside disjoint stage slices.
+                unsafe {
+                    let av = _mm256_loadu_pd(a.as_ptr().cast());
+                    let bv = _mm256_loadu_pd(b.as_ptr().cast());
+                    let w = _mm256_loadu_pd(root.as_ptr().cast());
+                    let product = _mm256_addsub_pd(
+                        _mm256_mul_pd(_mm256_permute_pd::<0>(bv), w),
+                        _mm256_mul_pd(_mm256_permute_pd::<15>(bv), _mm256_permute_pd::<5>(w)),
+                    );
+                    _mm256_storeu_pd(b.as_mut_ptr().cast(), _mm256_sub_pd(av, product));
+                }
+            }
+        }
+    }
+
+    fn envelope_stages(roots: &[Complex], data: &mut [Complex; HALF]) {
+        Self::stage::<HALF, 2>(roots, data);
+        Self::stage::<HALF, 4>(roots, data);
+        Self::stage::<HALF, 8>(roots, data);
+        Self::stage::<HALF, 16>(roots, data);
+        Self::stage::<HALF, 32>(roots, data);
+        Self::stage::<HALF, 64>(roots, data);
+        Self::envelope_stage::<128>(roots, data);
+        Self::envelope_stage::<256>(roots, data);
+        Self::envelope_stage::<512>(roots, data);
+        Self::envelope_stage::<1024>(roots, data);
+    }
+
+    fn envelope_stage<const SIZE: usize>(roots: &[Complex], data: &mut [Complex; HALF]) {
+        const KEEP: usize = CEPSTRUM / 2 + 2; // even, includes the centre boundary
+        let half = SIZE / 2;
+        let roots = &roots[half - 1..SIZE - 1];
+        for block in data.as_chunks_mut::<SIZE>().0 {
+            let (left, right) = block.split_at_mut(half);
+            for j in (0..KEEP).chain(KEEP.max(half - KEEP)..half) {
+                let a = left[j];
+                let product = right[j].mul(roots[j]);
+                if j < KEEP {
+                    left[j] = Complex {
+                        re: a.re + product.re,
+                        im: a.im + product.im,
+                    };
+                }
+                if j >= half - KEEP {
+                    right[j] = Complex {
+                        re: a.re - product.re,
+                        im: a.im - product.im,
+                    };
+                }
+            }
+        }
+    }
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[target_feature(enable = "avx2")]
+    unsafe fn envelope_stages_avx2(roots: &[Complex], data: &mut [Complex; HALF]) {
+        Self::stage::<HALF, 2>(roots, data);
+        // SAFETY: inherited AVX2 contract and checked stage slices.
+        unsafe {
+            Self::stage_avx2::<HALF, 4>(roots, data);
+            Self::stage_avx2::<HALF, 8>(roots, data);
+            Self::stage_avx2::<HALF, 16>(roots, data);
+            Self::stage_avx2::<HALF, 32>(roots, data);
+            Self::stage_avx2::<HALF, 64>(roots, data);
+            Self::envelope_stage_avx2::<128>(roots, data);
+            Self::envelope_stage_avx2::<256>(roots, data);
+            Self::envelope_stage_avx2::<512>(roots, data);
+            Self::envelope_stage_avx2::<1024>(roots, data);
+        }
+    }
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[target_feature(enable = "avx2")]
+    unsafe fn envelope_stage_avx2<const SIZE: usize>(
+        roots: &[Complex],
+        data: &mut [Complex; HALF],
+    ) {
+        #[cfg(target_arch = "x86")]
+        use std::arch::x86::*;
+        #[cfg(target_arch = "x86_64")]
+        use std::arch::x86_64::*;
+        const KEEP: usize = CEPSTRUM / 2 + 2;
+        let half = SIZE / 2;
+        let roots = &roots[half - 1..SIZE - 1];
+        for block in data.as_chunks_mut::<SIZE>().0 {
+            let (left, right) = block.split_at_mut(half);
+            for j in (0..KEEP)
+                .step_by(2)
+                .chain((KEEP.max(half - KEEP)..half).step_by(2))
+            {
+                // SAFETY: KEEP and all half sizes are even; each j addresses two
+                // complexes within checked, disjoint left/right/root slices.
+                unsafe {
+                    let a = _mm256_loadu_pd(left[j..j + 2].as_ptr().cast());
+                    let b = _mm256_loadu_pd(right[j..j + 2].as_ptr().cast());
+                    let w = _mm256_loadu_pd(roots[j..j + 2].as_ptr().cast());
+                    let product = _mm256_addsub_pd(
+                        _mm256_mul_pd(_mm256_permute_pd::<0>(b), w),
+                        _mm256_mul_pd(_mm256_permute_pd::<15>(b), _mm256_permute_pd::<5>(w)),
+                    );
+                    if j < KEEP {
+                        _mm256_storeu_pd(
+                            left[j..j + 2].as_mut_ptr().cast(),
+                            _mm256_add_pd(a, product),
+                        );
+                    }
+                    if j >= half - KEEP {
+                        _mm256_storeu_pd(
+                            right[j..j + 2].as_mut_ptr().cast(),
+                            _mm256_sub_pd(a, product),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     #[cfg(test)]
     fn transform(&self, data: &mut [Complex; WINDOW], inverse: bool) {
         if inverse {
@@ -379,6 +569,7 @@ impl Fft {
 
     /// Real forward FFT: `time[n].re` is the real sequence (imag ignored).
     /// Writes only the nonnegative-frequency bins; inverse_real needs no mirror.
+    #[inline(always)]
     fn forward_real(&self, time: &mut [Complex; WINDOW], work: &mut [Complex; HALF]) {
         for n in 0..HALF {
             work[n] = Complex {
@@ -401,7 +592,7 @@ impl Fft {
             re: z0.re - z0.im,
             im: 0.0,
         };
-        for k in 1..HALF {
+        for k in 1..=HALF / 2 {
             let zk = work[k];
             let zm = work[HALF - k];
             let a = Complex {
@@ -420,18 +611,38 @@ impl Fft {
                 im: 0.5 * (a.im - wb_re),
             };
             time[k] = x;
+            if k != HALF / 2 {
+                time[HALF - k] = Complex {
+                    re: 0.5 * (a.re - wb_im),
+                    im: 0.5 * (-a.im - wb_re),
+                };
+            }
         }
     }
 
     /// Inverse of a Hermitian spectrum produced by `forward_real` / mirror fill.
+    #[cfg(test)]
     fn inverse_real(&self, spectrum: &mut [Complex; WINDOW], work: &mut [Complex; HALF]) {
+        self.inverse_real_partial(spectrum, work, false, false);
+    }
+
+    /// Envelope estimation retains only +/- CEPSTRUM samples. Prune the later
+    /// inverse stages instead of calculating values that the lifter discards.
+    #[inline(always)]
+    fn inverse_real_partial(
+        &self,
+        spectrum: &mut [Complex; WINDOW],
+        work: &mut [Complex; HALF],
+        envelope: bool,
+        synthesis: bool,
+    ) {
         let x0 = spectrum[0].re;
         let xn = spectrum[HALF].re;
         work[0] = Complex {
             re: 0.5 * (x0 + xn),
             im: 0.5 * (x0 - xn),
         };
-        for k in 1..HALF {
+        for k in 1..=HALF / 2 {
             let a = spectrum[k];
             let b = Complex {
                 re: spectrum[HALF - k].re,
@@ -454,6 +665,66 @@ impl Fft {
                 re: e.re + t_re * o.re - t_im * o.im,
                 im: e.im + t_re * o.im + t_im * o.re,
             };
+            if k != HALF / 2 {
+                work[HALF - k] = Complex {
+                    re: e.re - t_re * o.re + t_im * o.im,
+                    im: -e.im + t_re * o.im + t_im * o.re,
+                };
+            }
+        }
+        if envelope {
+            for (i, &j) in self.reverse_half.iter().enumerate() {
+                if i < j {
+                    work.swap(i, j);
+                }
+            }
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            if self.avx2 {
+                // SAFETY: runtime AVX2 detection and checked transform storage.
+                unsafe { Self::envelope_stages_avx2(self.inverse_roots_half.as_ref(), work) };
+            } else {
+                Self::envelope_stages(self.inverse_roots_half.as_ref(), work);
+            }
+            #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+            Self::envelope_stages(self.inverse_roots_half.as_ref(), work);
+            for n in (0..CEPSTRUM / 2 + 1).chain(HALF - CEPSTRUM / 2..HALF) {
+                spectrum[2 * n] = Complex {
+                    re: work[n].re / HALF as f64,
+                    im: 0.0,
+                };
+                spectrum[2 * n + 1] = Complex {
+                    re: work[n].im / HALF as f64,
+                    im: 0.0,
+                };
+            }
+            return;
+        }
+        if synthesis {
+            for (i, &j) in self.reverse_half.iter().enumerate() {
+                if i < j {
+                    work.swap(i, j);
+                }
+            }
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            if self.avx2 {
+                // SAFETY: inherited runtime AVX2 detection and checked storage.
+                unsafe { Self::synthesis_stages_avx2(self.inverse_roots_half.as_ref(), work) };
+            } else {
+                Self::synthesis_stages(self.inverse_roots_half.as_ref(), work);
+            }
+            #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+            Self::synthesis_stages(self.inverse_roots_half.as_ref(), work);
+            for n in (WINDOW - SYNTHESIS) / 2..HALF {
+                spectrum[2 * n] = Complex {
+                    re: work[n].re / HALF as f64,
+                    im: 0.0,
+                };
+                spectrum[2 * n + 1] = Complex {
+                    re: work[n].im / HALF as f64,
+                    im: 0.0,
+                };
+            }
+            return;
         }
         self.transform_sized(
             &self.reverse_half,
@@ -506,6 +777,7 @@ pub struct PitchShifter {
     fft_work: Box<[Complex; HALF]>,
     envelope_work: Box<[Complex; WINDOW]>,
     magnitude: Box<[f64; BINS]>,
+    gains: Box<[f64; BINS]>,
     phase: Box<[f64; BINS]>,
     /// Whether a bin's phase was calculated in the immediately preceding frame.
     phase_valid: Box<[bool; BINS]>,
@@ -573,6 +845,7 @@ impl PitchShifter {
             fft_work: Box::new([Complex::default(); HALF]),
             envelope_work: Box::new([Complex::default(); WINDOW]),
             magnitude: Box::new([0.0; BINS]),
+            gains: Box::new([0.0; BINS]),
             phase: Box::new([0.0; BINS]),
             phase_valid: Box::new([true; BINS]),
             previous_spectrum: Box::new([Complex::default(); BINS]),
@@ -616,6 +889,23 @@ impl PitchShifter {
     }
 
     fn frame(&mut self) {
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        if self.fft.avx2 {
+            // SAFETY: the processor detects AVX2 once during construction.
+            unsafe { self.frame_avx2() };
+            return;
+        }
+        self.frame_inner();
+    }
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[target_feature(enable = "avx2")]
+    unsafe fn frame_avx2(&mut self) {
+        self.frame_inner();
+    }
+
+    #[inline(always)]
+    fn frame_inner(&mut self) {
         let clock = self.clock;
         for i in 0..WINDOW {
             self.spectrum[i] = Complex {
@@ -629,17 +919,27 @@ impl PitchShifter {
             let value = self.spectrum[i];
             self.magnitude[i] = (value.re * value.re + value.im * value.im).sqrt();
         }
-        if self.preserve_formants {
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        let vector = self.fft.avx2;
+        #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+        let vector = false;
+        let neutral = self.ratio == 1.0 && self.formant_ratio == 1.0;
+        if self.preserve_formants && !neutral {
+            math::log(
+                self.magnitude.as_slice(),
+                self.envelope.as_mut_slice(),
+                vector,
+            );
             // Real cepstral low-pass estimates a smooth envelope without fitting harmonics.
             for i in 0..BINS {
                 self.envelope_work[i] = Complex {
-                    re: self.magnitude[i].max(1e-12).ln(),
+                    re: self.envelope[i],
                     im: 0.0,
                 };
             }
             // inverse_real reads only the nonnegative-frequency bins.
             self.fft
-                .inverse_real(&mut self.envelope_work, &mut self.fft_work);
+                .inverse_real_partial(&mut self.envelope_work, &mut self.fft_work, true, false);
             self.envelope_work[CEPSTRUM + 1..WINDOW - CEPSTRUM].fill(Complex::default());
             self.fft
                 .forward_real(&mut self.envelope_work, &mut self.fft_work);
@@ -727,131 +1027,160 @@ impl PitchShifter {
         if dc_lobe {
             self.shifted[1] = self.spectrum[1];
         }
-        let mut region = 0;
-        let bin_scale = WINDOW as f64 / (std::f64::consts::TAU * HOP as f64);
-        let ratio_delta = self.ratio - 1.0;
-        let preserve = self.preserve_formants;
-        let mut rotation_peak = BINS;
-        let mut rotation = Complex { re: 1.0, im: 0.0 };
-        let mut translated_peak = BINS;
-        let mut translated_offset = isize::MAX;
-        let mut lower_rotation = rotation;
-        let mut upper_rotation = rotation;
-        for i in 1..BINS - 1 {
-            if dc_lobe && i == 1 {
-                continue;
-            }
-            while region + 1 < count && 2 * i > self.peaks[region] + self.peaks[region + 1] {
-                region += 1;
-            }
-            let peak = if count == 0 { i } else { self.peaks[region] };
-            // Translate each peak's entire main lobe together. Scaling its bin offsets
-            // would broaden the lobe and recreate low-frequency modulation products.
-            let frequency_bin = self.phase_advance[peak] * bin_scale;
-            // Shift continuously by measured frequency, including fractional bins.
-            let destination = i as f64 + frequency_bin * ratio_delta;
-            let lower = destination.floor() as isize;
-            let fraction = destination - lower as f64;
-            // Both interpolation destinations are discarded by synthesis outside
-            // the positive-frequency range. Avoid envelope and phase work there.
-            if lower >= (BINS - 1) as isize || lower < 0 {
-                continue;
-            }
-            if count != 0 && peak != rotation_peak {
-                rotation = Complex::polar(
-                    1.0,
-                    self.synthesis_phase[peak] - self.phase[peak] - centre_step * peak as f64,
-                );
-                rotation_peak = peak;
-            }
-            let offset = lower - i as isize;
-            if peak != translated_peak || offset != translated_offset {
-                // Moving from the analysis centre to the destination centre
-                // depends only on the integer translation, shared by a lobe.
-                // Combine these rotations once instead of four complex
-                // multiplications per bin (two for each destination).
-                let relative = |offset: isize| {
-                    let value = self.centre_phasor[offset.unsigned_abs()];
-                    if offset < 0 {
-                        Complex {
-                            re: value.re,
-                            im: -value.im,
-                        }
-                    } else {
-                        value
+        if neutral {
+            self.shifted[..BINS].copy_from_slice(&self.spectrum[..BINS]);
+        } else {
+            let bin_scale = WINDOW as f64 / (std::f64::consts::TAU * HOP as f64);
+            let ratio_delta = self.ratio - 1.0;
+            let preserve = self.preserve_formants;
+            let inverse_formant = 1.0 / self.formant_ratio;
+            let relative = |offset: isize| {
+                let value = self.centre_phasor[offset.unsigned_abs()];
+                if offset < 0 {
+                    Complex {
+                        re: value.re,
+                        im: -value.im,
                     }
-                };
-                lower_rotation = rotation.mul(relative(offset));
-                upper_rotation = rotation.mul(relative(offset + 1));
-                translated_peak = peak;
-                translated_offset = offset;
-            }
-            let gain = if preserve {
-                let position = (destination / self.formant_ratio).clamp(0.0, (BINS - 1) as f64);
-                let env_lower = position.floor() as usize;
-                let env_fraction = position - env_lower as f64;
-                let desired = self.envelope[env_lower] * (1.0 - env_fraction)
-                    + self.envelope[(env_lower + 1).min(BINS - 1)] * env_fraction;
-                // Bound envelope correction, rather than clipping the synthesis waveform.
-                (desired - self.envelope[i]).clamp(-2.0, 2.0).exp()
-            } else {
-                1.0
-            };
-            // Validate the combined rotation against the original two-centre
-            // construction and an independent polar phase-locking reference.
-            #[cfg(test)]
-            let centre = self.centre_phasor[i];
-            #[cfg(test)]
-            let phasor = self.spectrum[i]
-                .mul(Complex {
-                    re: centre.re,
-                    im: -centre.im,
-                })
-                .mul(rotation)
-                .scale(gain);
-            #[cfg(test)]
-            {
-                // Independent polar reference, including the no-peak path.
-                let locked = if count == 0 {
-                    self.phase[peak] + centre_step * peak as f64
                 } else {
-                    self.synthesis_phase[peak]
+                    value
+                }
+            };
+            let mut start = if dc_lobe { 2 } else { 1 };
+            for region in 0..if count == 0 { BINS - 2 } else { count } {
+                let peak = if count == 0 {
+                    region + 1
+                } else {
+                    self.peaks[region]
                 };
-                let reference = Complex::polar(
-                    self.magnitude[i] * gain,
-                    locked
-                        + wrap(
-                            self.spectrum[i].im.atan2(self.spectrum[i].re) - self.phase[peak]
-                                + centre_step * (i as f64 - peak as f64),
-                        ),
-                );
-                let tolerance = 1e-10 * (self.magnitude[i] * gain).max(1.0);
-                assert!((phasor.re - reference.re).abs() < tolerance);
-                assert!((phasor.im - reference.im).abs() < tolerance);
-            }
-            for (bin, weight, rotation) in [
-                (lower, 1.0 - fraction, lower_rotation),
-                (lower + 1, fraction, upper_rotation),
-            ] {
-                if bin <= 0 || bin >= (BINS - 1) as isize || weight == 0.0 {
+                let end = if count == 0 {
+                    peak + 1
+                } else if region + 1 == count {
+                    BINS - 1
+                } else {
+                    (peak + self.peaks[region + 1]) / 2 + 1
+                };
+                if end <= start {
                     continue;
                 }
-                let bin = bin as usize;
-                let value = self.spectrum[i].mul(rotation).scale(gain).scale(weight);
-                #[cfg(test)]
-                {
-                    let reference = phasor.mul(self.centre_phasor[bin]).scale(weight);
-                    let tolerance = 1e-10 * (self.magnitude[i] * gain).max(1.0);
-                    assert!((value.re - reference.re).abs() < tolerance);
-                    assert!((value.im - reference.im).abs() < tolerance);
+                // Every bin in this peak's lobe shares its measured translation and
+                // phase rotation. Calculate them once before visiting the lobe.
+                let translation = self.phase_advance[peak] * bin_scale * ratio_delta;
+                let offset = translation.floor() as isize;
+                let fraction = translation - offset as f64;
+                let rotation = if count == 0 {
+                    Complex { re: 1.0, im: 0.0 }
+                } else {
+                    Complex::polar(
+                        1.0,
+                        self.synthesis_phase[peak] - self.phase[peak] - centre_step * peak as f64,
+                    )
+                };
+                // Clip the source range before indexing rotation tables. Entire
+                // lobes can fall outside the positive-frequency synthesis range.
+                let first = (start as isize).max(-offset) as usize;
+                let last = (end as isize).min((BINS - 1) as isize - offset).max(0) as usize;
+                start = end;
+                if first >= last {
+                    continue;
                 }
-                self.shifted[bin].re += value.re;
-                self.shifted[bin].im += value.im;
+                let lower_rotation = rotation.mul(relative(offset));
+                let upper_rotation = rotation.mul(relative(offset + 1));
+                let weighted_lower = lower_rotation.scale(1.0 - fraction);
+                let weighted_upper = upper_rotation.scale(fraction);
+                if preserve {
+                    if self.formant_ratio == 1.0 {
+                        let target = (first as isize + offset) as usize;
+                        let length = last - first;
+                        let source = &self.envelope[first..last];
+                        let lower = &self.envelope[target..target + length];
+                        let upper = &self.envelope[target + 1..target + length + 1];
+                        for (((&source, &lower), &upper), gain) in source
+                            .iter()
+                            .zip(lower)
+                            .zip(upper)
+                            .zip(&mut self.gains[first..last])
+                        {
+                            *gain = lower * (1.0 - fraction) + upper * fraction - source;
+                        }
+                    } else {
+                        for i in first..last {
+                            let destination = i as f64 + translation;
+                            self.gains[i] = {
+                                let position =
+                                    (destination * inverse_formant).clamp(0.0, (BINS - 1) as f64);
+                                let env_lower = position.floor() as usize;
+                                let env_fraction = position - env_lower as f64;
+                                let desired = self.envelope[env_lower] * (1.0 - env_fraction)
+                                    + self.envelope[(env_lower + 1).min(BINS - 1)] * env_fraction;
+                                // Bound envelope correction, rather than clipping the synthesis waveform.
+                                desired - self.envelope[i]
+                            };
+                        }
+                    }
+                    math::exp(&mut self.gains[first..last], vector);
+                }
+                for i in first..last {
+                    let lower = i as isize + offset;
+                    let gain = if preserve { self.gains[i] } else { 1.0 };
+                    // Validate the combined rotation against the original two-centre
+                    // construction and an independent polar phase-locking reference.
+                    #[cfg(test)]
+                    let centre = self.centre_phasor[i];
+                    #[cfg(test)]
+                    let phasor = self.spectrum[i]
+                        .mul(Complex {
+                            re: centre.re,
+                            im: -centre.im,
+                        })
+                        .mul(rotation)
+                        .scale(gain);
+                    #[cfg(test)]
+                    {
+                        // Independent polar reference, including the no-peak path.
+                        let locked = if count == 0 {
+                            self.phase[peak] + centre_step * peak as f64
+                        } else {
+                            self.synthesis_phase[peak]
+                        };
+                        let reference = Complex::polar(
+                            self.magnitude[i] * gain,
+                            locked
+                                + wrap(
+                                    self.spectrum[i].im.atan2(self.spectrum[i].re)
+                                        - self.phase[peak]
+                                        + centre_step * (i as f64 - peak as f64),
+                                ),
+                        );
+                        let tolerance = 1e-10 * (self.magnitude[i] * gain).max(1.0);
+                        assert!((phasor.re - reference.re).abs() < tolerance);
+                        assert!((phasor.im - reference.im).abs() < tolerance);
+                    }
+                    for (bin, weight, rotation) in [
+                        (lower, 1.0 - fraction, weighted_lower),
+                        (lower + 1, fraction, weighted_upper),
+                    ] {
+                        if bin <= 0 || bin >= (BINS - 1) as isize || weight == 0.0 {
+                            continue;
+                        }
+                        let bin = bin as usize;
+                        let value = self.spectrum[i].mul(rotation).scale(gain);
+                        #[cfg(test)]
+                        {
+                            let reference = phasor.mul(self.centre_phasor[bin]).scale(weight);
+                            let tolerance = 1e-10 * (self.magnitude[i] * gain).max(1.0);
+                            assert!((value.re - reference.re).abs() < tolerance);
+                            assert!((value.im - reference.im).abs() < tolerance);
+                        }
+                        self.shifted[bin].re += value.re;
+                        self.shifted[bin].im += value.im;
+                    }
+                }
             }
         }
         // inverse_real reconstructs the real sequence from the positive half;
         // it does not need an explicitly mirrored negative-frequency spectrum.
-        self.fft.inverse_real(&mut self.shifted, &mut self.fft_work);
+        self.fft
+            .inverse_real_partial(&mut self.shifted, &mut self.fft_work, false, true);
         let start = WINDOW - SYNTHESIS;
         for i in start..WINDOW {
             self.output[(clock + i - start) % QUEUE] +=
@@ -951,6 +1280,82 @@ mod tests {
         for (a, b) in actual.iter().zip(expected) {
             assert_eq!(a.re.to_bits(), b.re.to_bits());
             assert_eq!(a.im.to_bits(), b.im.to_bits());
+        }
+    }
+
+    #[test]
+    fn pruned_inverse_preserves_every_retained_sample_bit() {
+        let mut fft = Fft::new();
+        let input = std::array::from_fn(|i| Complex {
+            re: (i as f64 * 0.31).sin(),
+            im: (i as f64 * 0.17).cos(),
+        });
+        for vector in [false, true] {
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            {
+                fft.avx2 = vector && std::is_x86_feature_detected!("avx2");
+            }
+            let _ = vector;
+            let mut expected = input;
+            let mut work = [Complex::default(); HALF];
+            fft.inverse_real(&mut expected, &mut work);
+            for envelope in [false, true] {
+                let mut actual = input;
+                fft.inverse_real_partial(&mut actual, &mut work, envelope, !envelope);
+                let ranges = if envelope {
+                    [0..CEPSTRUM + 1, WINDOW - CEPSTRUM..WINDOW]
+                } else {
+                    [WINDOW - SYNTHESIS..WINDOW, WINDOW..WINDOW]
+                };
+                for i in ranges.into_iter().flatten() {
+                    assert_eq!(
+                        actual[i].re.to_bits(),
+                        expected[i].re.to_bits(),
+                        "sample {i}"
+                    );
+                    assert_eq!(actual[i].im.to_bits(), expected[i].im.to_bits());
+                }
+            }
+        }
+    }
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[test]
+    fn vector_frame_matches_portable_across_formant_and_pitch_transitions() {
+        if !std::is_x86_feature_detected!("avx2") {
+            return;
+        }
+        let mut seed = 7_u32;
+        let input: Vec<f32> = (0..8192)
+            .map(|i| {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                let noise = seed as f64 / u32::MAX as f64 - 0.5;
+                (0.12 * (i as f64 * 0.013).sin() + 0.03 * noise) as f32
+            })
+            .collect();
+        for preserve in [false, true] {
+            for formant in if preserve {
+                &[-12.0, 0.0, 12.0][..]
+            } else {
+                &[0.0][..]
+            } {
+                let mut vector = PitchShifter::new(-12.0, preserve, *formant).unwrap();
+                let mut portable = PitchShifter::new(-12.0, preserve, *formant).unwrap();
+                portable.fft.avx2 = false;
+                for pitch in [-12.0, -3.0, 0.0, 3.0, 7.0, 12.0, 0.0] {
+                    vector.set_semitones(pitch).unwrap();
+                    portable.set_semitones(pitch).unwrap();
+                    let mut expected = [0.0_f32; 127];
+                    let mut actual = expected;
+                    for chunk in input.chunks(127) {
+                        vector.process_block(chunk, &mut actual[..chunk.len()]);
+                        portable.process_block(chunk, &mut expected[..chunk.len()]);
+                        for (&a, &b) in actual.iter().zip(&expected) {
+                            assert!((a - b).abs() < 1e-7);
+                        }
+                    }
+                }
+            }
         }
     }
 

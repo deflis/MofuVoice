@@ -1,7 +1,51 @@
 use rust_low_latency_voice_changer::{level::LevelSettings, pitch::PitchShifter, RATE};
 use std::{hint::black_box, time::Instant};
 
+// CPU time excludes scheduler pauses in shared Linux runners. Keep worst-block
+// measurements on the wall clock, because audio deadlines include those pauses.
+#[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+fn thread_cpu_time() -> std::time::Duration {
+    #[repr(C)]
+    struct Timespec {
+        seconds: std::ffi::c_long,
+        nanoseconds: std::ffi::c_long,
+    }
+    unsafe extern "C" {
+        fn clock_gettime(clock: i32, value: *mut Timespec) -> i32;
+    }
+    let mut value = Timespec {
+        seconds: 0,
+        nanoseconds: 0,
+    };
+    // SAFETY: Linux CLOCK_THREAD_CPUTIME_ID is 3; value is writable timespec storage.
+    assert_eq!(unsafe { clock_gettime(3, &mut value) }, 0);
+    std::time::Duration::new(value.seconds as u64, value.nanoseconds as u32)
+}
+
+struct BenchmarkStart {
+    wall: Instant,
+    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+    cpu: Option<std::time::Duration>,
+}
+impl BenchmarkStart {
+    fn now() -> Self {
+        Self {
+            wall: Instant::now(),
+            #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+            cpu: (std::env::var("DSP_BENCH_CLOCK").as_deref() == Ok("cpu")).then(thread_cpu_time),
+        }
+    }
+    fn elapsed(&self) -> std::time::Duration {
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        if let Some(cpu) = self.cpu {
+            return thread_cpu_time() - cpu;
+        }
+        self.wall.elapsed()
+    }
+}
+
 fn main() {
+    eprintln!("DSP_BENCH_CLOCK=cpu selects thread CPU time on 64-bit Linux; default is wall time. Worst blocks always use wall time.");
     let input: Vec<f32> = (0..RATE as usize * 4)
         .map(|i| {
             let phase = std::f64::consts::TAU * 113.0 * i as f64 / RATE as f64;
@@ -22,7 +66,7 @@ fn main() {
                     .build()
                     .unwrap();
                     let mut output = [0.0; 512];
-                    let start = Instant::now();
+                    let start = BenchmarkStart::now();
                     for chunk in input.chunks(512) {
                         let block = Instant::now();
                         black_box(dsp.process_block(
