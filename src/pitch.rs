@@ -1285,7 +1285,10 @@ mod tests {
 
     #[test]
     fn pruned_inverse_preserves_every_retained_sample_bit() {
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         let mut fft = Fft::new();
+        #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+        let fft = Fft::new();
         let input = std::array::from_fn(|i| Complex {
             re: (i as f64 * 0.31).sin(),
             im: (i as f64 * 0.17).cos(),
