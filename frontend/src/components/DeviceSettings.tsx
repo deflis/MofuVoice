@@ -19,12 +19,19 @@ export function DeviceSettings() {
     backends,
     update,
     updateBackend,
+    updateRouting,
   } = useDeviceSettings();
   const canAddChannel =
     Number.isInteger(additionalChannel) &&
     additionalChannel >= 1 &&
     additionalChannel <= 512 &&
     !outputChannels.includes(additionalChannel);
+  const singleOutput = inputChannel === 1 && outputChannels.length === 1 && outputChannels[0] === 1;
+  const dualOutput =
+    inputChannel === 1 &&
+    outputChannels.length === 2 &&
+    outputChannels.includes(1) &&
+    outputChannels.includes(2);
   const channelChoices = [...new Set([1, 2, 3, 4, 5, 6, 7, 8, ...outputChannels])];
   return (
     <section>
@@ -62,18 +69,39 @@ export function DeviceSettings() {
         </label>
       )}
       {resolvedBackend === "asio" && <p>選んだ機器の出力にヘッドホンを接続してください。</p>}
-      <DetailsPopup title="音声デバイス">
-        <label>
-          音声バックエンド
-          <select value={backend} onChange={(event) => void updateBackend(event.target.value)}>
-            {!backends.includes(backend) && <option value={backend}>{backend}（利用不可）</option>}
+      <fieldset className="routing-presets">
+        <legend>チャンネル</legend>
+        <div className="routing-choices">
+          <button type="button" aria-pressed={singleOutput} onClick={() => updateRouting(1, [1])}>
+            入力1 → 出力1
+          </button>
+          <button type="button" aria-pressed={dualOutput} onClick={() => updateRouting(1, [1, 2])}>
+            入力1 → 出力1・2
+          </button>
+        </div>
+        {!singleOutput && !dualOutput && (
+          <p className="muted">プロ向け設定の割り当てを使用中です。</p>
+        )}
+      </fieldset>
+      <DetailsPopup title="音声デバイス" buttonLabel="プロ向け設定">
+        <fieldset className="settings">
+          <legend>音声接続方式</legend>
+          <div className="routing-choices">
             {backends.map((available) => (
-              <option key={available} value={available}>
-                {{ auto: "自動（ASIO優先）", cpal: "標準（CPAL）", asio: "ASIO" }[available]}
-              </option>
+              <button
+                key={available}
+                type="button"
+                aria-pressed={backend === available}
+                onClick={() => void updateBackend(available)}
+              >
+                {{ auto: "自動", cpal: "標準", asio: "ASIO" }[available] ?? available}
+              </button>
             ))}
-          </select>
-        </label>
+          </div>
+          {!backends.includes(backend) && (
+            <p role="alert">現在の接続方式「{backend}」は利用できません。選び直してください。</p>
+          )}
+        </fieldset>
         <p>
           チャンネル割り当て：入力{inputChannel} → 出力
           {outputChannels.length ? outputChannels.join("・") : "未選択"}

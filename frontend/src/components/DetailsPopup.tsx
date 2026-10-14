@@ -7,10 +7,12 @@ export function DetailsPopup({
   title,
   children,
   onOpen,
+  buttonLabel = "詳細設定",
 }: {
   title: string;
   children: ReactNode;
   onOpen?: () => void;
+  buttonLabel?: string;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const titleId = useId();
@@ -25,12 +27,14 @@ export function DetailsPopup({
           dialog.current?.showModal();
         }}
       >
-        詳細設定
+        {buttonLabel}
       </button>
       {createPortal(
         <dialog ref={dialog} className="details-popup" aria-labelledby={titleId}>
           <header>
-            <h2 id={titleId}>{title}の詳細設定</h2>
+            <h2 id={titleId}>
+              {title}の{buttonLabel}
+            </h2>
           </header>
           <Notifications />
           <p className="muted">調整が終わったら閉じて、設定を保存してください。</p>
