@@ -274,11 +274,72 @@ impl Settings {
         Options::parse_gui(args).map_err(|error| error.to_string())
     }
 }
+#[derive(Default)]
+struct CloseRequests {
+    next_id: u32,
+    pending: Option<CloseRequest>,
+}
+struct CloseRequest {
+    id: u32,
+    deadline: std::time::Instant,
+    acknowledged: bool,
+}
+impl CloseRequests {
+    fn request(&mut self) -> Option<u32> {
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|request| !request.acknowledged)
+        {
+            return None;
+        }
+        self.next_id = self.next_id.wrapping_add(1);
+        self.pending = Some(CloseRequest {
+            id: self.next_id,
+            deadline: std::time::Instant::now() + std::time::Duration::from_secs(1),
+            acknowledged: false,
+        });
+        Some(self.next_id)
+    }
+    fn acknowledge(&mut self, id: u32) -> bool {
+        if let Some(request) = self.pending.as_mut().filter(|request| request.id == id) {
+            request.acknowledged = true;
+            true
+        } else {
+            false
+        }
+    }
+    fn cancel(&mut self, id: u32) -> bool {
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|request| request.id == id)
+        {
+            self.pending = None;
+            true
+        } else {
+            false
+        }
+    }
+    fn fallback_due(&mut self, now: std::time::Instant) -> bool {
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|request| !request.acknowledged && now >= request.deadline)
+        {
+            self.pending = None;
+            true
+        } else {
+            false
+        }
+    }
+}
 struct Desktop {
     session: Session,
     settings: Settings,
     path: PathBuf,
     closing: bool,
+    close_requests: CloseRequests,
 }
 type DesktopState = Mutex<Desktop>;
 #[derive(Clone, PartialEq, Serialize)]
@@ -423,6 +484,39 @@ fn open_settings(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 #[tauri::command]
+fn acknowledge_application_close(
+    request_id: u32,
+    window: tauri::WebviewWindow,
+    state: State<'_, DesktopState>,
+) -> Result<bool, String> {
+    if window.label() != "settings" {
+        return Err("Only the settings window can acknowledge shutdown".into());
+    }
+    let mut desktop = state.lock().map_err(|error| error.to_string())?;
+    Ok(desktop.close_requests.acknowledge(request_id))
+}
+#[tauri::command]
+fn fallback_application_close(
+    request_id: u32,
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    state: State<'_, DesktopState>,
+) -> Result<(), String> {
+    if window.label() != "settings" {
+        return Err("Only the settings window can return shutdown to main".into());
+    }
+    let cancelled = state
+        .lock()
+        .map_err(|error| error.to_string())?
+        .close_requests
+        .cancel(request_id);
+    if cancelled {
+        app.emit_to("main", "request-close", ())
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+#[tauri::command]
 fn close_settings(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("settings") {
         window.hide().map_err(|error| error.to_string())?;
@@ -444,7 +538,7 @@ fn save_settings(
     desktop.settings = settings.clone();
     drop(desktop);
     if let Some(main) = app.get_webview_window("main") {
-        main.emit("settings-saved", &settings)
+        app.emit_to(main.label(), "settings-saved", &settings)
             .map_err(|error| error.to_string())?;
     }
     Ok(())
@@ -516,6 +610,7 @@ pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
             settings: Settings::from_options(&options),
             path: gui_settings::path()?,
             closing: false,
+            close_requests: CloseRequests::default(),
         }))
         .invoke_handler(tauri::generate_handler![
             bootstrap,
@@ -527,6 +622,8 @@ pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
             save_settings,
             open_settings,
             close_settings,
+            acknowledge_application_close,
+            fallback_application_close,
             open_spectrum,
             close_application
         ])
@@ -538,7 +635,7 @@ pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
                     let mut previous = None;
                     let mut previous_log = None;
                     loop {
-                        let (snapshot, log) = {
+                        let (snapshot, log, fallback_close) = {
                             let state = handle.state::<DesktopState>();
                             let Ok(mut desktop) = state.lock() else {
                                 break;
@@ -552,8 +649,16 @@ pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
                                     info: desktop.session.info(),
                                 },
                                 desktop.session.log_info(),
+                                desktop
+                                    .close_requests
+                                    .fallback_due(std::time::Instant::now()),
                             )
                         };
+                        if fallback_close {
+                            if let Err(error) = handle.emit_to("main", "request-close", ()) {
+                                eprintln!("Cannot return shutdown to main: {error}");
+                            }
+                        }
                         if previous.as_ref() != Some(&snapshot) {
                             if let Err(error) = handle.emit("audio-status", &snapshot) {
                                 eprintln!("Cannot emit audio status: {error}");
@@ -584,9 +689,26 @@ pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
                     .flatten();
                 let result = if let Some(settings) = settings_window {
                     let _ = settings.show();
-                    settings.emit("request-application-close", ())
+                    let state = window.app_handle().state::<DesktopState>();
+                    let request_id = match state.lock() {
+                        Ok(mut desktop) => desktop.close_requests.request(),
+                        Err(error) => {
+                            show_message(&error.to_string(), true);
+                            return;
+                        }
+                    };
+                    let Some(request_id) = request_id else {
+                        return;
+                    };
+                    window.app_handle().emit_to(
+                        settings.label(),
+                        "request-application-close",
+                        request_id,
+                    )
                 } else {
-                    window.emit("request-close", ())
+                    window
+                        .app_handle()
+                        .emit_to(window.label(), "request-close", ())
                 };
                 if let Err(error) = result {
                     show_message(&error.to_string(), true);
@@ -629,6 +751,43 @@ pub fn show_message(message: &str, _error: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unacknowledged_shutdown_falls_back_once_and_rejects_late_ack() {
+        let mut requests = CloseRequests::default();
+        let id = requests.request().unwrap();
+        assert!(!requests.fallback_due(std::time::Instant::now()));
+        assert!(
+            requests.fallback_due(std::time::Instant::now() + std::time::Duration::from_secs(2))
+        );
+        assert!(
+            !requests.fallback_due(std::time::Instant::now() + std::time::Duration::from_secs(3))
+        );
+        assert!(!requests.acknowledge(id));
+    }
+    #[test]
+    fn repeated_close_does_not_reset_the_fallback_deadline() {
+        let mut requests = CloseRequests::default();
+        requests.request().unwrap();
+        let deadline = requests.pending.as_ref().unwrap().deadline;
+        assert!(requests.request().is_none());
+        assert_eq!(requests.pending.as_ref().unwrap().deadline, deadline);
+        assert!(requests.fallback_due(deadline));
+    }
+    #[test]
+    fn acknowledged_shutdown_waits_for_settings_and_allows_retry() {
+        let mut requests = CloseRequests::default();
+        let id = requests.request().unwrap();
+        assert!(requests.acknowledge(id));
+        assert!(
+            !requests.fallback_due(std::time::Instant::now() + std::time::Duration::from_secs(60))
+        );
+        let retry = requests.request().unwrap();
+        assert_ne!(id, retry);
+        assert!(!requests.acknowledge(id));
+        assert!(!requests.cancel(id));
+        assert!(requests.cancel(retry));
+        assert!(!requests.acknowledge(retry));
+    }
     #[test]
     fn channel_controls_round_trip_and_validate() {
         let options = Options::parse_gui(

@@ -9,6 +9,7 @@ export function connectApplication(settingsWindow = false) {
   let disposed = false;
   let closeRequested = false;
   let applicationClosing = false;
+  let delegatedRequestId: number | undefined;
   const flushClose = () => {
     if (disposed || !closeRequested) {
       return;
@@ -33,6 +34,7 @@ export function connectApplication(settingsWindow = false) {
     } else {
       void close(settings).then(() => {
         applicationClosing = false;
+        delegatedRequestId = undefined;
         return undefined;
       });
     }
@@ -66,9 +68,31 @@ export function connectApplication(settingsWindow = false) {
       });
   void saved?.catch((error: unknown) => useSettingsStore.setState({ error: String(error) }));
   const applicationClose = settingsWindow
-    ? listen("request-application-close", () => {
-        applicationClosing = true;
-        requestClose();
+    ? listen<number>("request-application-close", ({ payload: requestId }) => {
+        const { settings, loadFailed } = useSettingsStore.getState();
+        if (disposed || !settings || loadFailed) {
+          // The native deadline returns shutdown to main when this window cannot save a draft.
+          return;
+        }
+        void invoke<boolean>("acknowledge_application_close", { requestId })
+          .then(async (accepted) => {
+            if (!accepted) {
+              return undefined;
+            }
+            if (disposed) {
+              await invoke("fallback_application_close", { requestId });
+              return undefined;
+            }
+            delegatedRequestId = requestId;
+            applicationClosing = true;
+            requestClose();
+            return undefined;
+          })
+          .catch((error: unknown) => {
+            if (!disposed) {
+              useSettingsStore.setState({ error: String(error) });
+            }
+          });
       })
     : undefined;
   void applicationClose?.catch((error: unknown) =>
@@ -79,6 +103,12 @@ export function connectApplication(settingsWindow = false) {
     disconnect: () => {
       disposed = true;
       closeRequested = false;
+      if (delegatedRequestId !== undefined) {
+        void invoke("fallback_application_close", { requestId: delegatedRequestId }).catch(
+          () => {},
+        );
+        delegatedRequestId = undefined;
+      }
       void applicationClose?.then(
         (remove) => remove(),
         () => {},

@@ -189,7 +189,7 @@ test("application shutdown uses the settings window's unsaved draft", async () =
   connection = setConnection(connectApplication(true));
   await setImmediate();
   settingsStore.getState().update("pitch", "5");
-  callback("request-application-close")();
+  callback("request-application-close")({ payload: 1 });
   await setImmediate();
   assert.equal(commands.close_application.mock.calls[0].arguments[0].settings.pitch, "5");
   assert.equal(commands.close_settings.mock.callCount(), 0);
@@ -201,10 +201,101 @@ test("failed application shutdown does not turn a later settings close into shut
   commands.close_application.mock.mockImplementationOnce(async () => {
     throw new Error("save failed");
   });
-  callback("request-application-close")();
+  callback("request-application-close")({ payload: 1 });
   await setImmediate();
   connection.requestClose();
   await setImmediate();
   assert.equal(commands.close_application.mock.callCount(), 1);
   assert.equal(commands.close_settings.mock.callCount(), 1);
+});
+
+test("settings bootstrap failure leaves shutdown to the main-window fallback", async () => {
+  commands.bootstrap.mock.mockImplementationOnce(async () => {
+    throw new Error("bootstrap failed");
+  });
+  connection = setConnection(connectApplication(true));
+  await setImmediate();
+  callback("request-application-close")({ payload: 7 });
+  await setImmediate();
+  assert.equal(commands.acknowledge_application_close.mock.callCount(), 0);
+  assert.equal(commands.close_application.mock.callCount(), 0);
+});
+
+test("settings loading cannot acknowledge application shutdown", async () => {
+  const loading = deferred();
+  commands.bootstrap.mock.mockImplementationOnce(() => loading.promise);
+  connection = setConnection(connectApplication(true));
+  callback("request-application-close")({ payload: 8 });
+  assert.equal(commands.acknowledge_application_close.mock.callCount(), 0);
+  loading.resolve(bootstrap);
+  await setImmediate();
+  assert.equal(commands.close_application.mock.callCount(), 0);
+});
+
+test("late acknowledgement cannot start a second shutdown after native fallback", async () => {
+  connection = setConnection(connectApplication(true));
+  await setImmediate();
+  commands.acknowledge_application_close.mock.mockImplementationOnce(async () => false);
+  callback("request-application-close")({ payload: 9 });
+  await setImmediate();
+  assert.equal(commands.close_application.mock.callCount(), 0);
+});
+
+test("disconnect during acknowledgement hands shutdown back to main", async () => {
+  connection = setConnection(connectApplication(true));
+  await setImmediate();
+  const acknowledgement = deferred();
+  commands.acknowledge_application_close.mock.mockImplementationOnce(() => acknowledgement.promise);
+  callback("request-application-close")({ payload: 10 });
+  connection.disconnect();
+  acknowledgement.resolve(true);
+  await setImmediate();
+  assert.deepEqual(commands.fallback_application_close.mock.calls[0].arguments, [
+    { requestId: 10 },
+  ]);
+  assert.equal(commands.close_application.mock.callCount(), 0);
+});
+
+test("acknowledged settings shutdown waits for a pending device switch and uses its draft", async () => {
+  connection = setConnection(connectApplication(true));
+  await setImmediate();
+  const switching = deferred();
+  commands.device_choices.mock.mockImplementationOnce(() => switching.promise);
+  const operation = settingsStore.getState().updateBackend("cpal");
+  callback("request-application-close")({ payload: 11 });
+  await setImmediate();
+  assert.equal(commands.acknowledge_application_close.mock.callCount(), 1);
+  assert.equal(commands.close_application.mock.callCount(), 0);
+  switching.resolve({
+    devices: ["Mic"],
+    outputDevices: ["Headphones"],
+    audioAvailable: true,
+    deviceError: "",
+    resolvedBackend: "cpal",
+  });
+  await operation;
+  assert.equal(commands.close_application.mock.calls[0].arguments[0].settings.backend, "cpal");
+});
+
+test("disconnect after acknowledgement returns a queued shutdown to main", async () => {
+  connection = setConnection(connectApplication(true));
+  await setImmediate();
+  const switching = deferred();
+  commands.device_choices.mock.mockImplementationOnce(() => switching.promise);
+  const operation = settingsStore.getState().updateBackend("cpal");
+  callback("request-application-close")({ payload: 12 });
+  await setImmediate();
+  connection.disconnect();
+  assert.deepEqual(commands.fallback_application_close.mock.calls[0].arguments, [
+    { requestId: 12 },
+  ]);
+  switching.resolve({
+    devices: [],
+    outputDevices: [],
+    audioAvailable: true,
+    deviceError: "",
+    resolvedBackend: "cpal",
+  });
+  await operation;
+  assert.equal(commands.close_application.mock.callCount(), 0);
 });
