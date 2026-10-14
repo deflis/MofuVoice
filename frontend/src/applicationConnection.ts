@@ -1,10 +1,14 @@
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import type { Bootstrap, Settings } from "./types";
 import { useSettingsStore } from "./settingsStore";
 import { useAudioStore } from "./audioStore";
 
 // Coordinate application shutdown across independently owned settings/audio operations.
-export function connectApplication() {
+export function connectApplication(settingsWindow = false) {
   let disposed = false;
   let closeRequested = false;
+  let applicationClosing = false;
   const flushClose = () => {
     if (disposed || !closeRequested) {
       return;
@@ -19,7 +23,19 @@ export function connectApplication() {
       return;
     }
     closeRequested = false;
-    void close(settings);
+    if (settingsWindow && !applicationClosing) {
+      void (async () => {
+        await useSettingsStore.getState().save();
+        if (!useSettingsStore.getState().error) {
+          await invoke("close_settings");
+        }
+      })().catch((error: unknown) => useSettingsStore.setState({ error: String(error) }));
+    } else {
+      void close(settings).then(() => {
+        applicationClosing = false;
+        return undefined;
+      });
+    }
   };
   const requestClose = () => {
     if (disposed || useAudioStore.getState().closing) {
@@ -32,11 +48,45 @@ export function connectApplication() {
   const removeAudio = useAudioStore.subscribe(flushClose);
   const disconnectSettings = useSettingsStore.getState().connect();
   const disconnectAudio = useAudioStore.getState().connect(requestClose);
+  const saved = settingsWindow
+    ? undefined
+    : listen<Settings>("settings-saved", ({ payload }) => {
+        if (!disposed) {
+          useSettingsStore.setState({ settings: payload });
+          // Refresh device choices when the settings window changed the audio backend.
+          void invoke<Bootstrap>("bootstrap")
+            .then((result) => {
+              if (!disposed && useSettingsStore.getState().settings === payload) {
+                useSettingsStore.setState(result);
+              }
+              return undefined;
+            })
+            .catch((error: unknown) => useSettingsStore.setState({ error: String(error) }));
+        }
+      });
+  void saved?.catch((error: unknown) => useSettingsStore.setState({ error: String(error) }));
+  const applicationClose = settingsWindow
+    ? listen("request-application-close", () => {
+        applicationClosing = true;
+        requestClose();
+      })
+    : undefined;
+  void applicationClose?.catch((error: unknown) =>
+    useSettingsStore.setState({ error: String(error) }),
+  );
   return {
     requestClose,
     disconnect: () => {
       disposed = true;
       closeRequested = false;
+      void applicationClose?.then(
+        (remove) => remove(),
+        () => {},
+      );
+      void saved?.then(
+        (remove) => remove(),
+        () => {},
+      );
       removeSettings();
       removeAudio();
       disconnectAudio();

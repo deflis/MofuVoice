@@ -1,3 +1,4 @@
+import { DetailsPopup } from "./DetailsPopup";
 import { useId } from "react";
 import { useVoiceSettings } from "../settingsHooks";
 import type { DeEsserParameters } from "../types";
@@ -60,7 +61,7 @@ const fields: {
 ];
 
 export function DeEsserSettings() {
-  const { deesser, deesserMode, deesserParameters: parameters, update } = useVoiceSettings();
+  const { deesser, deesserParameters: parameters, update } = useVoiceSettings();
   const id = useId();
   const value = Number(parameters.rangeDb);
   const valid =
@@ -73,73 +74,53 @@ export function DeEsserSettings() {
     update("deesserParameters", { ...parameters, [key]: nextValue });
   return (
     <section aria-labelledby={`${id}-title`}>
-      <h2 id={`${id}-title`}>サ行の刺さり（ディエッサー）</h2>
+      <h2 id={`${id}-title`}>サ行をやわらかくする</h2>
       <label className="check">
         <input
           type="checkbox"
           checked={deesser}
           onChange={(event) => update("deesser", event.target.checked)}
         />
-        サ行をやわらかくする
+        有効
       </label>
-      <fieldset className="deesser-modes" aria-label="ディエッサーの操作モード">
-        <button
-          type="button"
-          aria-pressed={deesserMode === "simple"}
-          onClick={() => update("deesserMode", "simple")}
-        >
-          簡単モード
-        </button>
-        <button
-          type="button"
-          aria-pressed={deesserMode === "pro"}
-          onClick={() => update("deesserMode", "pro")}
-        >
-          プロ向けモード
-        </button>
-      </fieldset>
-      <p>切り替えても音と設定はそのままです。変更は停止してから行い、Startで適用します。</p>
-      <fieldset className="deesser-controls" disabled={!deesser}>
-        {deesserMode === "simple" ? (
+      <p>「さ・し・す」が耳に刺さるときに使います。</p>
+      <fieldset className="deesser-controls" disabled={!deesser} hidden={!deesser}>
+        <>
+          <div className="deesser-simple">
+            <label htmlFor={`${id}-amount`}>抑える強さ </label>
+            <input
+              id={`${id}-amount`}
+              type="range"
+              min="0"
+              max="12"
+              step="0.5"
+              value={valid ? value : 6}
+              disabled={!valid}
+              onChange={(event) => change("rangeDb", event.target.value)}
+            />
+            <div className="deesser-scale">
+              <span>弱く</span>
+              <span>標準</span>
+              <span>強く</span>
+            </div>
+          </div>
+          {!valid && (
+            <p className="error">
+              詳細設定で最大減衰量を0〜12 dBに直すか、ディエッサーをリセットしてください。
+            </p>
+          )}
+        </>
+
+        <DetailsPopup title="ディエッサー" onOpen={() => update("deesserMode", "pro")}>
           <>
-            <p>「さ・し・す」が耳に刺さるときに使います。まずは標準の位置で試してください。</p>
             {custom && (
               <p className="notice">
-                プロ向けモードで調整した設定を使っています。ここでは抑える強さだけを変えます。
+                詳細設定で調整した設定を使っています。ここでは抑える強さだけを変えます。
               </p>
             )}
-            <div className="deesser-simple">
-              <label htmlFor={`${id}-amount`}>
-                抑える強さ{" "}
-                <output>{valid ? `${parameters.rangeDb} dB` : "値を確認してください"}</output>
-              </label>
-              <input
-                id={`${id}-amount`}
-                type="range"
-                min="0"
-                max="12"
-                step="0.5"
-                value={valid ? value : 6}
-                disabled={!valid}
-                onChange={(event) => change("rangeDb", event.target.value)}
-              />
-              <div className="deesser-scale">
-                <span>0：補正なし</span>
-                <span>6：標準</span>
-                <span>強く抑える</span>
-              </div>
-              <p>
-                まだ刺さるときは右へ。声がこもるときは左へ。「さしすせそ」と話し、オン・オフで聞き比べてください。
-              </p>
-            </div>
-            {!valid && (
-              <p className="error">
-                プロ向けモードで最大減衰量を0〜12 dBに直すか、ディエッサーをリセットしてください。
-              </p>
-            )}
-          </>
-        ) : (
-          <>
+            <p>
+              まだ刺さるときは右へ。声がこもるときは左へ。「さしすせそ」と話し、オン・オフで聞き比べてください。
+            </p>
             <p>
               高域の音量と、音全体に対する高域の割合を検出し、高域だけを動的に減衰します。圧縮比は4:1、先読みはありません。
             </p>
@@ -161,12 +142,12 @@ export function DeEsserSettings() {
               ))}
             </div>
           </>
-        )}
+          <button type="button" onClick={() => update("deesserParameters", { ...defaults })}>
+            ディエッサーを標準に戻す
+          </button>
+          <p>強さと詳細設定を標準に戻します。オン・オフと操作モードはそのままです。</p>
+        </DetailsPopup>
       </fieldset>
-      <button type="button" onClick={() => update("deesserParameters", { ...defaults })}>
-        ディエッサーだけリセット
-      </button>
-      <p>強さと詳細設定を標準に戻します。オン・オフと操作モードはそのままです。</p>
     </section>
   );
 }

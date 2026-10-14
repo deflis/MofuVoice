@@ -121,6 +121,7 @@ beforeEach(() => {
     "stop_audio",
     "save_settings",
     "open_spectrum",
+    "close_settings",
     "close_application",
   ]) {
     commands[name] = mock.fn(async () => {});

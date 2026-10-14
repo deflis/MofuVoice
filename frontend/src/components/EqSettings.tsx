@@ -1,3 +1,4 @@
+import { DetailsPopup } from "./DetailsPopup";
 import { useId } from "react";
 import { useEqSettings } from "../settingsHooks";
 import type { EqBand } from "../types";
@@ -45,91 +46,65 @@ export function EqSettings() {
   );
   return (
     <section aria-labelledby={`${id}-title`} className="eq-section">
-      <h2 id={`${id}-title`}>声の音色（EQ）</h2>
+      <h2 id={`${id}-title`}>声の音色</h2>
       <label className="check">
         <input
           type="checkbox"
           checked={eq.enabled}
           onChange={(event) => update("eq", { ...eq, enabled: event.target.checked })}
         />
-        EQを使う
+        有効
       </label>
-      <fieldset className="eq-modes" aria-label="EQの操作モード">
-        <button
-          type="button"
-          aria-pressed={eq.mode === "simple"}
-          onClick={() => update("eq", { ...eq, mode: "simple" })}
-        >
-          簡単モード
-        </button>
-        <button
-          type="button"
-          aria-pressed={eq.mode === "pro"}
-          onClick={() => update("eq", { ...eq, mode: "pro" })}
-        >
-          プロ向けモード
-        </button>
-      </fieldset>
-      <p>切り替えても音色と設定はそのままです。変更は停止してから行い、Startで適用します。</p>
-      <fieldset className="eq-controls" disabled={!eq.enabled}>
-        {eq.mode === "simple" ? (
-          <>
-            <p>
-              まずは中央の0から、1〜3 dBずつ調整してください。EQのオン・オフで聞き比べられます。
+      <p>声の厚みや明るさを調整できます。</p>
+      <fieldset className="eq-controls" disabled={!eq.enabled} hidden={!eq.enabled}>
+        <>
+          {([0, 1, 2] as const).map((index) => {
+            const i = index;
+            const band = bands[index];
+            const value = eq.bands[index].gainDb;
+            const valid =
+              value.trim() !== "" &&
+              Number.isFinite(Number(value)) &&
+              Math.abs(Number(value)) <= 12;
+            return (
+              <div className="eq-simple-band" key={band.title}>
+                <label htmlFor={`${id}-${i}`}>{band.title} </label>
+                <input
+                  id={`${id}-${i}`}
+                  type="range"
+                  min="-12"
+                  max="12"
+                  step="0.5"
+                  value={valid ? Number(value) : 0}
+                  disabled={!valid}
+                  onChange={(event) => updateBand(index, "gainDb", event.target.value)}
+                />
+                <div className="eq-scale">
+                  <span>{band.left}</span>
+                  <span>そのまま</span>
+                  <span>{band.right}</span>
+                </div>
+              </div>
+            );
+          })}
+          {!validGain && (
+            <p className="error">
+              詳細設定でゲインを−12〜12 dBの数値に直すか、EQをリセットしてください。
             </p>
+          )}
+        </>
+
+        <DetailsPopup title="音色の調整（EQ）" onOpen={() => update("eq", { ...eq, mode: "pro" })}>
+          <>
             {custom && (
               <p className="notice">
-                プロ向けモードで設定した周波数・Qを使っています。ここでは各バンドの強さだけを調整します。
-              </p>
-            )}
-            {([0, 1, 2] as const).map((index) => {
-              const i = index;
-              const band = bands[index];
-              const value = eq.bands[index].gainDb;
-              const valid =
-                value.trim() !== "" &&
-                Number.isFinite(Number(value)) &&
-                Math.abs(Number(value)) <= 12;
-              return (
-                <div className="eq-simple-band" key={band.title}>
-                  <label htmlFor={`${id}-${i}`}>
-                    {band.title}{" "}
-                    <output>
-                      {valid
-                        ? `${Number(value) > 0 ? "+" : ""}${value} dB`
-                        : "値を確認してください"}
-                    </output>
-                  </label>
-                  <input
-                    id={`${id}-${i}`}
-                    type="range"
-                    min="-12"
-                    max="12"
-                    step="0.5"
-                    value={valid ? Number(value) : 0}
-                    disabled={!valid}
-                    onChange={(event) => updateBand(index, "gainDb", event.target.value)}
-                  />
-                  <div className="eq-scale">
-                    <span>{band.left}</span>
-                    <span>0：補正なし</span>
-                    <span>{band.right}</span>
-                  </div>
-                  <p>{band.help}</p>
-                </div>
-              );
-            })}
-            {!validGain && (
-              <p className="error">
-                プロ向けモードでゲインを−12〜12 dBの数値に直すか、EQをリセットしてください。
+                詳細設定で設定した周波数・Qを使っています。ここでは各バンドの強さだけを調整します。
               </p>
             )}
             {Number(eq.outputDb) !== 0 && (
-              <p>出力の追加減衰：{eq.outputDb} dB。プロ向けモードで変更できます。</p>
+              <p>出力の追加減衰：{eq.outputDb} dB。詳細設定で変更できます。</p>
             )}
-          </>
-        ) : (
-          <>
+
             <p>3バンドのピーキングEQです。Qが小さいほど広い帯域、大きいほど狭い帯域に効きます。</p>
             {([0, 1, 2] as const).map((i) => (
               <fieldset className="eq-pro-band" key={i}>
@@ -167,18 +142,18 @@ export function EqSettings() {
               />
             </label>
           </>
-        )}
+          <p>
+            {validGain
+              ? `ブーストに合わせて出力を${headroom.toFixed(1)} dB下げ、音量の余裕を確保します。`
+              : "ブースト量の表示には有効なゲインが必要です。"}{" "}
+            小さく聞こえる場合は後段の音量の自動調整で調整してください。
+          </p>
+          <button type="button" onClick={reset}>
+            EQを標準に戻す
+          </button>
+          <p>リセットすると全バンドの補正と追加減衰が0になり、周波数・Qも既定値に戻ります。</p>
+        </DetailsPopup>
       </fieldset>
-      <p>
-        {validGain
-          ? `ブーストに合わせて出力を${headroom.toFixed(1)} dB下げ、音量の余裕を確保します。`
-          : "ブースト量の表示には有効なゲインが必要です。"}{" "}
-        小さく聞こえる場合は後段のAuto levelで調整してください。
-      </p>
-      <button type="button" onClick={reset}>
-        EQだけリセット
-      </button>
-      <p>リセットすると全バンドの補正と追加減衰が0になり、周波数・Qも既定値に戻ります。</p>
     </section>
   );
 }

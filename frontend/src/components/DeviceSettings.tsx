@@ -1,3 +1,4 @@
+import { DetailsPopup } from "./DetailsPopup";
 import { useState } from "react";
 import { useDeviceSettings } from "../settingsHooks";
 
@@ -27,22 +28,14 @@ export function DeviceSettings() {
   const channelChoices = [...new Set([1, 2, 3, 4, 5, 6, 7, 8, ...outputChannels])];
   return (
     <section>
-      <h2>音声デバイス</h2>
+      <h2>マイクと出力先</h2>
+      <p>使う機器を選んでください。</p>
       <label>
-        音声API
-        <select value={backend} onChange={(event) => void updateBackend(event.target.value)}>
-          {!backends.includes(backend) && <option value={backend}>{backend}（利用不可）</option>}
-          {backends.map((available) => (
-            <option key={available} value={available}>
-              {{ auto: "自動（ASIO優先）", cpal: "標準（CPAL）", asio: "ASIO" }[available]}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label>
-        {resolvedBackend === "asio" ? "ASIO device" : "入力デバイス"}
+        {resolvedBackend === "asio" ? "マイクと出力に使う機器" : "マイク"}
         <select value={device} onChange={(event) => update("device", event.target.value)}>
-          <option value="">{resolvedBackend === "asio" ? "デバイスを選択" : "OSの既定入力"}</option>
+          <option value="">
+            {resolvedBackend === "asio" ? "デバイスを選択" : "いつものマイク"}
+          </option>
           {device && !devices.includes(device) && (
             <option value={device}>{device}（未検出）</option>
           )}
@@ -53,12 +46,12 @@ export function DeviceSettings() {
       </label>
       {resolvedBackend === "cpal" && (
         <label>
-          出力デバイス
+          声を聴く機器
           <select
             value={outputDevice}
             onChange={(event) => update("outputDevice", event.target.value)}
           >
-            <option value="">OSの既定出力</option>
+            <option value="">いつもの出力先</option>
             {outputDevice && !outputDevices.includes(outputDevice) && (
               <option value={outputDevice}>{outputDevice}（未検出）</option>
             )}
@@ -68,78 +61,100 @@ export function DeviceSettings() {
           </select>
         </label>
       )}
-      <label>
-        入力チャンネル
-        <input
-          type="number"
-          min="1"
-          max="512"
-          step="1"
-          required
-          value={inputChannel}
-          onChange={(event) => update("inputChannel", Number(event.target.value))}
-        />
-      </label>
-      <fieldset>
-        <legend>出力チャンネル（複数選択可）</legend>
-        <div className="channel-choices">
-          {channelChoices.map((channel) => (
-            <label className="check" key={channel}>
-              <input
-                type="checkbox"
-                checked={outputChannels.includes(channel)}
-                onChange={(event) =>
-                  update(
-                    "outputChannels",
-                    event.target.checked
-                      ? [...outputChannels, channel]
-                      : outputChannels.filter((selected) => selected !== channel),
-                  )
-                }
-              />
-              {channel}ch
-            </label>
-          ))}
-        </div>
+      {resolvedBackend === "asio" && <p>選んだ機器の出力にヘッドホンを接続してください。</p>}
+      <DetailsPopup title="音声デバイス">
         <label>
-          追加する出力チャンネル
+          音声バックエンド
+          <select value={backend} onChange={(event) => void updateBackend(event.target.value)}>
+            {!backends.includes(backend) && <option value={backend}>{backend}（利用不可）</option>}
+            {backends.map((available) => (
+              <option key={available} value={available}>
+                {{ auto: "自動（ASIO優先）", cpal: "標準（CPAL）", asio: "ASIO" }[available]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <p>
+          チャンネル割り当て：入力{inputChannel} → 出力
+          {outputChannels.length ? outputChannels.join("・") : "未選択"}
+        </p>
+
+        <label>
+          入力チャンネル
           <input
             type="number"
             min="1"
             max="512"
             step="1"
-            placeholder="9以上"
-            value={extraChannel}
-            onChange={(event) => setExtraChannel(event.target.value)}
+            required
+            value={inputChannel}
+            onChange={(event) => update("inputChannel", Number(event.target.value))}
           />
         </label>
-        <button
-          type="button"
-          disabled={!canAddChannel}
-          onClick={() => {
-            update("outputChannels", [...outputChannels, additionalChannel]);
-            setExtraChannel("");
-          }}
-        >
-          追加して選択
-        </button>
-        <p>選択したすべての出力へ同じ音声を送ります。変更は次の開始時に反映されます。</p>
-        {outputChannels.length === 0 && (
-          <p role="alert">出力チャンネルを1つ以上選択してください。</p>
-        )}
-      </fieldset>
-      <label>
-        Frames
-        <input
-          type="number"
-          min="1"
-          max="8192"
-          step="1"
-          required
-          value={frames}
-          onChange={(event) => update("frames", event.target.value)}
-        />
-      </label>
+        <fieldset>
+          <legend>出力チャンネル（複数選択可）</legend>
+          <div className="channel-choices">
+            {channelChoices.map((channel) => (
+              <label className="check" key={channel}>
+                <input
+                  type="checkbox"
+                  checked={outputChannels.includes(channel)}
+                  onChange={(event) =>
+                    update(
+                      "outputChannels",
+                      event.target.checked
+                        ? [...outputChannels, channel]
+                        : outputChannels.filter((selected) => selected !== channel),
+                    )
+                  }
+                />
+                {channel}ch
+              </label>
+            ))}
+          </div>
+          <label>
+            追加する出力チャンネル
+            <input
+              type="number"
+              min="1"
+              max="512"
+              step="1"
+              placeholder="9以上"
+              value={extraChannel}
+              onChange={(event) => setExtraChannel(event.target.value)}
+            />
+          </label>
+          <button
+            type="button"
+            disabled={!canAddChannel}
+            onClick={() => {
+              update("outputChannels", [...outputChannels, additionalChannel]);
+              setExtraChannel("");
+            }}
+          >
+            追加して選択
+          </button>
+          <p>選択したすべての出力へ同じ音声を送ります。変更は次の開始時に反映されます。</p>
+          {outputChannels.length === 0 && (
+            <p role="alert">出力チャンネルを1つ以上選択してください。</p>
+          )}
+        </fieldset>
+        <label>
+          バッファサイズ（サンプル）
+          <input
+            type="number"
+            min="1"
+            max="8192"
+            step="1"
+            required
+            value={frames}
+            onChange={(event) => update("frames", event.target.value)}
+          />
+        </label>
+        <p>
+          小さくすると遅延が減ります。音切れする場合は大きくしてください。デバイスによっては指定値が調整されます。
+        </p>
+      </DetailsPopup>
     </section>
   );
 }

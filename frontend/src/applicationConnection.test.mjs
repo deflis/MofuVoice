@@ -143,3 +143,68 @@ test("backend switching keeps CPAL endpoints and defers closing until choices fi
   assert.equal(commands.close_application.mock.callCount(), 1);
   assert.deepEqual(commands.device_choices.mock.calls[0].arguments, [{ backend: "cpal" }]);
 });
+
+test("saved settings reach the main window and refresh backend choices", async () => {
+  connection = setConnection(connectApplication());
+  await setImmediate();
+  const next = { ...settings, backend: "cpal", pitch: "3" };
+  commands.bootstrap.mock.mockImplementation(async () => ({
+    ...bootstrap,
+    settings: next,
+    resolvedBackend: "cpal",
+  }));
+  callback("settings-saved")({ payload: next });
+  await setImmediate();
+  assert.equal(settingsStore.getState().settings.pitch, "3");
+  assert.equal(settingsStore.getState().resolvedBackend, "cpal");
+});
+
+test("closing settings saves the draft and hides without shutting down audio", async () => {
+  connection = setConnection(connectApplication(true));
+  await setImmediate();
+  settingsStore.getState().update("pitch", "4");
+  connection.requestClose();
+  await setImmediate();
+  assert.equal(commands.save_settings.mock.calls[0].arguments[0].settings.pitch, "4");
+  assert.equal(commands.close_settings.mock.callCount(), 1);
+  assert.equal(commands.close_application.mock.callCount(), 0);
+});
+
+test("settings save failure keeps the window open and allows retry", async () => {
+  connection = setConnection(connectApplication(true));
+  await setImmediate();
+  commands.save_settings.mock.mockImplementationOnce(async () => {
+    throw new Error("invalid settings");
+  });
+  connection.requestClose();
+  await setImmediate();
+  assert.equal(commands.close_settings.mock.callCount(), 0);
+  assert.match(settingsStore.getState().error, /invalid settings/);
+  connection.requestClose();
+  await setImmediate();
+  assert.equal(commands.close_settings.mock.callCount(), 1);
+});
+
+test("application shutdown uses the settings window's unsaved draft", async () => {
+  connection = setConnection(connectApplication(true));
+  await setImmediate();
+  settingsStore.getState().update("pitch", "5");
+  callback("request-application-close")();
+  await setImmediate();
+  assert.equal(commands.close_application.mock.calls[0].arguments[0].settings.pitch, "5");
+  assert.equal(commands.close_settings.mock.callCount(), 0);
+});
+
+test("failed application shutdown does not turn a later settings close into shutdown", async () => {
+  connection = setConnection(connectApplication(true));
+  await setImmediate();
+  commands.close_application.mock.mockImplementationOnce(async () => {
+    throw new Error("save failed");
+  });
+  callback("request-application-close")();
+  await setImmediate();
+  connection.requestClose();
+  await setImmediate();
+  assert.equal(commands.close_application.mock.callCount(), 1);
+  assert.equal(commands.close_settings.mock.callCount(), 1);
+});

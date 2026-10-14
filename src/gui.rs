@@ -405,14 +405,48 @@ fn stop_audio(state: State<'_, DesktopState>) -> Result<(), String> {
     Ok(())
 }
 #[tauri::command]
-fn save_settings(settings: Settings, state: State<'_, DesktopState>) -> Result<(), String> {
+fn open_settings(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("settings") {
+        window.show().map_err(|error| error.to_string())?;
+        return window.set_focus().map_err(|error| error.to_string());
+    }
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        "settings",
+        tauri::WebviewUrl::App("index.html?window=settings".into()),
+    )
+    .title("設定 — Voice Changer")
+    .inner_size(820.0, 740.0)
+    .min_inner_size(560.0, 460.0)
+    .build()
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+#[tauri::command]
+fn close_settings(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("settings") {
+        window.hide().map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+#[tauri::command]
+fn save_settings(
+    app: tauri::AppHandle,
+    settings: Settings,
+    state: State<'_, DesktopState>,
+) -> Result<(), String> {
     let options = settings.options()?;
     let mut desktop = state.lock().map_err(|error| error.to_string())?;
     if desktop.closing {
         return Err("Application is closing".into());
     }
     gui_settings::save(&desktop.path, &options).map_err(|error| error.to_string())?;
-    desktop.settings = settings;
+    desktop.settings = settings.clone();
+    drop(desktop);
+    if let Some(main) = app.get_webview_window("main") {
+        main.emit("settings-saved", &settings)
+            .map_err(|error| error.to_string())?;
+    }
     Ok(())
 }
 #[tauri::command]
@@ -491,6 +525,8 @@ pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
             start_audio,
             stop_audio,
             save_settings,
+            open_settings,
+            close_settings,
             open_spectrum,
             close_application
         ])
@@ -542,7 +578,17 @@ pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                if let Err(error) = window.emit("request-close", ()) {
+                // Let the settings owner save its draft before application shutdown.
+                let settings_window = (window.label() == "main")
+                    .then(|| window.app_handle().get_webview_window("settings"))
+                    .flatten();
+                let result = if let Some(settings) = settings_window {
+                    let _ = settings.show();
+                    settings.emit("request-application-close", ())
+                } else {
+                    window.emit("request-close", ())
+                };
+                if let Err(error) = result {
                     show_message(&error.to_string(), true);
                 }
             }

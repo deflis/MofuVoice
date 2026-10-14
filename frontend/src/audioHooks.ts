@@ -42,18 +42,18 @@ export function useHeaderStatus() {
     state.closing
       ? "終了中"
       : {
-          ready: "準備完了",
+          ready: "停止中",
           opening: "デバイスを起動中",
           running: "音声処理中",
           stopped: "停止中",
-          inspected: "デバイス確認完了",
+          inspected: "停止中",
           error: "エラー",
         }[state.snapshot.info.phase ?? "ready"],
   );
 }
 
 export function useNotifications() {
-  const error = useAudioStore((state) => state.error);
+  const error = useAudioStore((state) => state.error || state.snapshot.info.error || "");
   const settings = useSettingsStore(
     useShallow((state) => ({ error: state.error || state.deviceError, notice: state.notice })),
   );
