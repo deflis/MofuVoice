@@ -299,3 +299,36 @@ test("disconnect after acknowledgement returns a queued shutdown to main", async
   await operation;
   assert.equal(commands.close_application.mock.callCount(), 0);
 });
+
+test("settings bootstrap failure still allows the settings window to close without saving", async () => {
+  commands.bootstrap.mock.mockImplementationOnce(async () => {
+    throw new Error("bootstrap failed");
+  });
+  connection = setConnection(connectApplication(true));
+  await setImmediate();
+  callback("request-close")();
+  await setImmediate();
+  assert.equal(settingsStore.getState().settings, undefined);
+  assert.equal(commands.close_settings.mock.callCount(), 1);
+  assert.equal(commands.save_settings.mock.callCount(), 0);
+  assert.equal(commands.close_application.mock.callCount(), 0);
+});
+
+test("failed hide after settings bootstrap failure can be retried", async () => {
+  commands.bootstrap.mock.mockImplementationOnce(async () => {
+    throw new Error("bootstrap failed");
+  });
+  connection = setConnection(connectApplication(true));
+  await setImmediate();
+  commands.close_settings.mock.mockImplementationOnce(async () => {
+    throw new Error("hide failed");
+  });
+  callback("request-close")();
+  await setImmediate();
+  assert.match(settingsStore.getState().error, /hide failed/);
+  callback("request-close")();
+  await setImmediate();
+  assert.equal(commands.close_settings.mock.callCount(), 2);
+  assert.equal(commands.save_settings.mock.callCount(), 0);
+  assert.equal(commands.close_application.mock.callCount(), 0);
+});

@@ -18,6 +18,11 @@ export function connectApplication(settingsWindow = false) {
     const { pending, closing, close } = useAudioStore.getState();
     if (loadFailed) {
       closeRequested = false;
+      if (settingsWindow && !applicationClosing) {
+        void invoke("close_settings").catch((error: unknown) =>
+          useSettingsStore.setState({ error: String(error) }),
+        );
+      }
       return;
     }
     if (!settings || saving || switchingBackend || pending || closing) {
