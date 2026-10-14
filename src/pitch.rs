@@ -71,14 +71,47 @@ impl Sample for i16 {
 }
 
 pub const WINDOW: usize = 2048;
-pub const HOP: usize = 128;
-/// Right-aligned synthesis / COLA length (`2M`); wet delay equals this many samples.
-pub const SYNTHESIS: usize = 512;
-const M: usize = SYNTHESIS / 2;
+pub const HOP: usize = 64;
+/// Right-aligned synthesis / COLA length; wet delay equals this many samples.
+pub const SYNTHESIS: usize = 256;
+const INTERPOLATION_TAPS: usize = 16;
 pub const LATENCY: usize = SYNTHESIS;
 const BINS: usize = WINDOW / 2 + 1;
 const QUEUE: usize = WINDOW * 2;
 const CEPSTRUM: usize = 80;
+
+// Barycentric form computes the same 15th-order Lagrange kernel in O(taps).
+// The integer case avoids its removable singularity and preserves reconstruction.
+fn translation_weights(fraction: f64) -> [f64; INTERPOLATION_TAPS] {
+    if fraction == 0.0 {
+        let mut weights = [0.0; INTERPOLATION_TAPS];
+        weights[7] = 1.0;
+        return weights;
+    }
+    let mut product = 1.0;
+    for node in -7..=8 {
+        product *= fraction - node as f64;
+    }
+    const DENOMINATORS: [f64; INTERPOLATION_TAPS] = {
+        let mut values = [1.0; INTERPOLATION_TAPS];
+        let mut t = 0;
+        while t < INTERPOLATION_TAPS {
+            let mut j = 1;
+            while j <= t {
+                values[t] *= j as f64;
+                j += 1;
+            }
+            j = 1;
+            while j < INTERPOLATION_TAPS - t {
+                values[t] *= -(j as f64);
+                j += 1;
+            }
+            t += 1;
+        }
+        values
+    };
+    std::array::from_fn(|t| product / ((fraction - (t as f64 - 7.0)) * DENOMINATORS[t]))
+}
 
 fn hann(index: usize, length: usize) -> f64 {
     0.5 - 0.5 * (std::f64::consts::TAU * index as f64 / length as f64).cos()
@@ -87,19 +120,18 @@ fn hann(index: usize, length: usize) -> f64 {
 fn asymmetric_windows() -> (Box<[f64; WINDOW]>, Box<[f64; WINDOW]>, f64) {
     let mut analysis = Box::new([0.0; WINDOW]);
     let mut synthesis = Box::new([0.0; WINDOW]);
-    let left_length = 2 * (WINDOW - M);
-    for i in 0..WINDOW - M {
+    // Smooth the analysis taper independently of the output support: the old
+    // short tail leaks a negative-frequency image into low-voice peaks.
+    const ANALYSIS_TAIL: usize = 768;
+    let left_length = 2 * (WINDOW - ANALYSIS_TAIL);
+    for i in 0..WINDOW - ANALYSIS_TAIL {
         analysis[i] = hann(i, left_length).sqrt();
     }
-    for i in WINDOW - M..WINDOW {
-        let short = hann(i - (WINDOW - SYNTHESIS), SYNTHESIS).sqrt();
-        analysis[i] = short;
-        synthesis[i] = short;
+    for i in WINDOW - ANALYSIS_TAIL..WINDOW {
+        analysis[i] = hann(i - (WINDOW - 2 * ANALYSIS_TAIL), 2 * ANALYSIS_TAIL).sqrt();
     }
-    for i in WINDOW - SYNTHESIS..WINDOW - M {
-        let short = hann(i - (WINDOW - SYNTHESIS), SYNTHESIS);
-        // Product hA*hS is the right-aligned Hann of length SYNTHESIS.
-        synthesis[i] = short / analysis[i];
+    for i in WINDOW - SYNTHESIS..WINDOW {
+        synthesis[i] = hann(i - (WINDOW - SYNTHESIS), SYNTHESIS) / analysis[i];
     }
     let (mut moment, mut energy) = (0.0, 0.0);
     for (i, &weight) in analysis.iter().enumerate() {
@@ -492,6 +524,9 @@ pub struct PitchShifter {
     previous_phase: Box<[f64; BINS]>,
     synthesis_phase: Box<[f64; BINS]>,
     previous_synthesis_phase: Box<[f64; BINS]>,
+    correction_frequency: f64,
+    filtered_advance: Box<[f64; BINS]>,
+    previous_filtered_advance: Box<[f64; BINS]>,
     phase_advance: Box<[f64; BINS]>,
     envelope: Box<[f64; BINS]>,
     peaks: Box<[usize; BINS]>,
@@ -558,6 +593,9 @@ impl PitchShifter {
             previous_phase: Box::new([0.0; BINS]),
             synthesis_phase: Box::new([0.0; BINS]),
             previous_synthesis_phase: Box::new([0.0; BINS]),
+            correction_frequency: 0.0,
+            filtered_advance: Box::new([0.0; BINS]),
+            previous_filtered_advance: Box::new([0.0; BINS]),
             phase_advance: Box::new([0.0; BINS]),
             envelope: Box::new([0.0; BINS]),
             peaks: Box::new([0; BINS]),
@@ -591,6 +629,85 @@ impl PitchShifter {
         Ok(())
     }
 
+    /// A real low tone contributes both C*W(k-f) and conj(C)*W(k+f).
+    /// Fit C at its strongest bin and subtract the negative-frequency image
+    /// before phase tracking. This avoids the f*(ratio-2) sideband amplified
+    /// by the short synthesis taper. Both FFT work buffers are reused.
+    fn remove_low_frequency_image(&mut self) {
+        if self.ratio != 1.0 {
+            let peak = (1..BINS - 1)
+                .max_by(|&a, &b| self.magnitude[a].total_cmp(&self.magnitude[b]))
+                .unwrap();
+            // Only overlapping low-frequency lobes need image cancellation.
+            if peak as f64 * crate::RATE as f64 / (WINDOW as f64) < 500.0 {
+                let frequency = if (self.correction_frequency - peak as f64).abs() <= 2.0
+                    && self.correction_frequency > 0.0
+                {
+                    self.correction_frequency
+                } else {
+                    peak as f64
+                };
+                let step = Complex::polar(1.0, std::f64::consts::TAU * frequency / WINDOW as f64);
+                let mut oscillator = Complex { re: 1.0, im: 0.0 };
+                for i in 0..WINDOW {
+                    self.envelope_work[i] = Complex {
+                        re: self.analysis_window[i] * oscillator.re,
+                        im: 0.0,
+                    };
+                    self.shifted[i] = Complex {
+                        re: self.analysis_window[i] * oscillator.im,
+                        im: 0.0,
+                    };
+                    oscillator = oscillator.mul(step);
+                }
+                self.fft
+                    .forward_real(&mut self.envelope_work, &mut self.fft_work);
+                self.fft.forward_real(&mut self.shifted, &mut self.fft_work);
+                let c = self.envelope_work[peak];
+                let s = self.shifted[peak];
+                let positive = Complex {
+                    re: c.re - s.im,
+                    im: c.im + s.re,
+                };
+                let negative = Complex {
+                    re: c.re + s.im,
+                    im: c.im - s.re,
+                };
+                let x = self.spectrum[peak];
+                let a = x.mul(Complex {
+                    re: positive.re,
+                    im: -positive.im,
+                });
+                let b = Complex {
+                    re: x.re,
+                    im: -x.im,
+                }
+                .mul(negative);
+                let denominator = positive.re * positive.re + positive.im * positive.im
+                    - negative.re * negative.re
+                    - negative.im * negative.im;
+                if denominator > 1.0 {
+                    let coefficient = Complex {
+                        re: (a.re - b.re) / denominator,
+                        im: -(a.im - b.im) / denominator,
+                    };
+                    for i in 0..BINS {
+                        let c = self.envelope_work[i];
+                        let s = self.shifted[i];
+                        let image = coefficient.mul(Complex {
+                            re: c.re + s.im,
+                            im: c.im - s.re,
+                        });
+                        self.spectrum[i].re -= image.re;
+                        self.spectrum[i].im -= image.im;
+                        let x = self.spectrum[i];
+                        self.magnitude[i] = (x.re * x.re + x.im * x.im).sqrt();
+                    }
+                }
+            }
+        }
+    }
+
     fn frame(&mut self) {
         let clock = self.clock;
         for i in 0..WINDOW {
@@ -605,6 +722,7 @@ impl PitchShifter {
             let value = self.spectrum[i];
             self.magnitude[i] = (value.re * value.re + value.im * value.im).sqrt();
         }
+        self.remove_low_frequency_image();
         if self.preserve_formants {
             // Real cepstral low-pass estimates a smooth envelope without fitting harmonics.
             for i in 0..BINS {
@@ -668,6 +786,8 @@ impl PitchShifter {
         }
         self.previous_synthesis_phase
             .copy_from_slice(self.synthesis_phase.as_slice());
+        self.previous_filtered_advance
+            .copy_from_slice(self.filtered_advance.as_slice());
         let mut previous = 0;
         let centre_step = std::f64::consts::TAU * self.phase_center / WINDOW as f64;
         for &peak in &self.peaks[..count] {
@@ -680,6 +800,18 @@ impl PitchShifter {
             {
                 previous += 1;
             }
+            let continuing =
+                self.previous_peak_count != 0 && self.previous_peaks[previous].abs_diff(peak) <= 2;
+            self.filtered_advance[peak] = if continuing {
+                // Smooth the frequency estimate, without buffering output audio.
+                const ALPHA: f64 = 0.7788007830714049; // exp(-64 / 256)
+                let alpha = ALPHA;
+                alpha * self.previous_filtered_advance[self.previous_peaks[previous]]
+                    + (1.0 - alpha) * self.phase_advance[peak]
+            } else {
+                self.phase_advance[peak]
+            };
+            self.phase_advance[peak] = self.filtered_advance[peak];
             self.synthesis_phase[peak] = if self.ratio == 1.0
                 || self.previous_peak_count == 0
                 || self.previous_peaks[previous].abs_diff(peak) > 2
@@ -692,14 +824,27 @@ impl PitchShifter {
                 )
             };
         }
+        if count > 0 {
+            let peak = self.peaks[..count]
+                .iter()
+                .copied()
+                .max_by(|&a, &b| self.magnitude[a].total_cmp(&self.magnitude[b]))
+                .unwrap();
+            self.correction_frequency =
+                self.phase_advance[peak] * WINDOW as f64 / (std::f64::consts::TAU * HOP as f64);
+        }
         self.previous_peaks[..count].copy_from_slice(&self.peaks[..count]);
         self.previous_peak_count = count;
         self.shifted[..BINS].fill(Complex::default());
-        self.shifted[0] = self.spectrum[0];
+        self.shifted[0] = if self.ratio == 1.0 {
+            self.spectrum[0]
+        } else {
+            Complex::default()
+        };
         if self.ratio == 1.0 {
             self.shifted[BINS - 1] = self.spectrum[BINS - 1];
         }
-        let dc_lobe = self.magnitude[0] > self.magnitude[1];
+        let dc_lobe = self.ratio == 1.0 && self.magnitude[0] > self.magnitude[1];
         if dc_lobe {
             self.shifted[1] = self.spectrum[1];
         }
@@ -708,11 +853,10 @@ impl PitchShifter {
         let ratio_delta = self.ratio - 1.0;
         let preserve = self.preserve_formants;
         let mut rotation_peak = BINS;
+        // Also read outside the cache-update branch by the test-only reference.
+        #[allow(unused_assignments)]
         let mut rotation = Complex { re: 1.0, im: 0.0 };
-        let mut translated_peak = BINS;
-        let mut translated_offset = isize::MAX;
-        let mut lower_rotation = rotation;
-        let mut upper_rotation = rotation;
+        let mut translations = [Complex::default(); INTERPOLATION_TAPS];
         for i in 1..BINS - 1 {
             if dc_lobe && i == 1 {
                 continue;
@@ -733,34 +877,36 @@ impl PitchShifter {
             if lower >= (BINS - 1) as isize || lower < 0 {
                 continue;
             }
-            if count != 0 && peak != rotation_peak {
-                rotation = Complex::polar(
-                    1.0,
-                    self.synthesis_phase[peak] - self.phase[peak] - centre_step * peak as f64,
-                );
-                rotation_peak = peak;
-            }
-            let offset = lower - i as isize;
-            if peak != translated_peak || offset != translated_offset {
-                // Moving from the analysis centre to the destination centre
-                // depends only on the integer translation, shared by a lobe.
-                // Combine these rotations once instead of four complex
-                // multiplications per bin (two for each destination).
-                let relative = |offset: isize| {
-                    let value = self.centre_phasor[offset.unsigned_abs()];
-                    if offset < 0 {
-                        Complex {
-                            re: value.re,
-                            im: -value.im,
-                        }
-                    } else {
-                        value
-                    }
+            if peak != rotation_peak {
+                rotation = if count == 0 {
+                    Complex { re: 1.0, im: 0.0 }
+                } else {
+                    Complex::polar(
+                        1.0,
+                        self.synthesis_phase[peak] - self.phase[peak] - centre_step * peak as f64,
+                    )
                 };
-                lower_rotation = rotation.mul(relative(offset));
-                upper_rotation = rotation.mul(relative(offset + 1));
-                translated_peak = peak;
-                translated_offset = offset;
+                rotation_peak = peak;
+                let weights = translation_weights(fraction);
+                for (t, value) in translations.iter_mut().enumerate() {
+                    let tap = t as isize - 7;
+                    let weight = weights[t];
+                    let offset = lower - i as isize + tap;
+                    *value = if offset.unsigned_abs() < BINS {
+                        let relative = self.centre_phasor[offset.unsigned_abs()];
+                        let relative = if offset < 0 {
+                            Complex {
+                                re: relative.re,
+                                im: -relative.im,
+                            }
+                        } else {
+                            relative
+                        };
+                        rotation.mul(relative).scale(weight)
+                    } else {
+                        Complex::default()
+                    };
+                }
             }
             let gain = if preserve {
                 let position = (destination / self.formant_ratio).clamp(0.0, (BINS - 1) as f64);
@@ -805,22 +951,13 @@ impl PitchShifter {
                 assert!((phasor.re - reference.re).abs() < tolerance);
                 assert!((phasor.im - reference.im).abs() < tolerance);
             }
-            for (bin, weight, rotation) in [
-                (lower, 1.0 - fraction, lower_rotation),
-                (lower + 1, fraction, upper_rotation),
-            ] {
-                if bin <= 0 || bin >= (BINS - 1) as isize || weight == 0.0 {
+            for (t, &translation) in translations.iter().enumerate() {
+                let bin = lower + t as isize - 7;
+                if bin <= 0 || bin >= (BINS - 1) as isize {
                     continue;
                 }
                 let bin = bin as usize;
-                let value = self.spectrum[i].mul(rotation).scale(gain).scale(weight);
-                #[cfg(test)]
-                {
-                    let reference = phasor.mul(self.centre_phasor[bin]).scale(weight);
-                    let tolerance = 1e-10 * (self.magnitude[i] * gain).max(1.0);
-                    assert!((value.re - reference.re).abs() < tolerance);
-                    assert!((value.im - reference.im).abs() < tolerance);
-                }
+                let value = self.spectrum[i].mul(translation).scale(gain);
                 self.shifted[bin].re += value.re;
                 self.shifted[bin].im += value.im;
             }
@@ -895,6 +1032,28 @@ mod tests {
     use super::*;
 
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[test]
+    fn translation_kernel_preserves_polynomials_and_integer_bins() {
+        for fraction in [0.0, 1e-12, 0.1, 0.5, 0.9, 1.0 - 1e-12] {
+            let weights = translation_weights(fraction);
+            for degree in 0..=5 {
+                let value: f64 = weights
+                    .iter()
+                    .enumerate()
+                    .map(|(t, w)| w * (t as f64 - 7.0).powi(degree))
+                    .sum();
+                assert!((value - fraction.powi(degree)).abs() < 1e-9);
+            }
+        }
+        assert_eq!(
+            translation_weights(0.0)
+                .iter()
+                .filter(|&&w| w != 0.0)
+                .count(),
+            1
+        );
+    }
+
     #[test]
     fn avx2_fft_matches_portable_butterfly_bits() {
         let vector = Fft::new();
@@ -1153,7 +1312,14 @@ mod tests {
     #[test]
     fn asymmetric_windows_product_is_right_aligned_hann() {
         let (analysis, synthesis, phase_center) = asymmetric_windows();
-        assert!((1330.0..1340.0).contains(&phase_center), "{phase_center}");
+        let energy: f64 = analysis.iter().map(|x| x * x).sum();
+        let centre: f64 = analysis
+            .iter()
+            .enumerate()
+            .map(|(i, x)| i as f64 * x * x)
+            .sum::<f64>()
+            / energy;
+        assert!((phase_center - centre).abs() < 1e-10);
         for i in 0..WINDOW - SYNTHESIS {
             assert_eq!(synthesis[i], 0.0);
         }

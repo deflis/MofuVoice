@@ -266,3 +266,36 @@ fn silence_and_impulse_delay_and_invalid_settings() {
         assert!(PitchShifter::new(0.0, true, value).is_err());
     }
 }
+
+#[test]
+fn low_voice_harmonics_remain_clean_with_short_synthesis() {
+    for frequency in [80.0, 100.0, 120.0] {
+        let input: Vec<f32> = (0..48_000)
+            .map(|i| {
+                let phase = std::f64::consts::TAU * frequency * i as f64 / RATE as f64;
+                (0.12 * phase.sin() + 0.04 * (3.0 * phase).sin() + 0.02 * (7.0 * phase).sin())
+                    as f32
+            })
+            .collect();
+        for pitch in [-12.0, 3.0, 7.0, 12.0] {
+            for preserve in [false, true] {
+                let mut output = vec![0.0; input.len()];
+                PitchShifter::new(pitch, preserve, 0.0)
+                    .unwrap()
+                    .process_block(&input, &mut output);
+                let signal = &output[8192..];
+                let expected = frequency * pitch_ratio(pitch).unwrap();
+                let target = power(signal, expected);
+                let low: f64 = (20..(expected * 0.7) as usize)
+                    .step_by(2)
+                    .map(|f| power(signal, f as f64))
+                    .sum();
+                assert!(
+                    low < target * 0.001,
+                    "f={frequency}, pitch={pitch}, preserve={preserve}: {low}/{target}"
+                );
+                assert!(output.iter().all(|x| x.is_finite()));
+            }
+        }
+    }
+}
