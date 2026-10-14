@@ -52,3 +52,7 @@ harness = false
 [[bench]]
 name = "gate"
 harness = false
+
+[[bench]]
+name = "deesser"
+harness = false
