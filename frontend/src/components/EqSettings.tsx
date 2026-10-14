@@ -55,7 +55,6 @@ export function EqSettings() {
         />
         有効
       </label>
-      <p>声の厚みや明るさを調整できます。</p>
       <fieldset className="eq-controls" disabled={!eq.enabled} hidden={!eq.enabled}>
         <>
           {([0, 1, 2] as const).map((index) => {

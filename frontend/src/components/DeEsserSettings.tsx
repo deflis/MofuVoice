@@ -83,7 +83,6 @@ export function DeEsserSettings() {
         />
         有効
       </label>
-      <p>「さ・し・す」が耳に刺さるときに使います。</p>
       <fieldset className="deesser-controls" disabled={!deesser} hidden={!deesser}>
         <>
           <div className="deesser-simple">

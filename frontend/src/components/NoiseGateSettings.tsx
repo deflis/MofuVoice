@@ -18,7 +18,6 @@ export function NoiseGateSettings() {
           有効
         </label>
       </div>
-      <p>話し声だけを通し、静かなときの雑音を抑えます。</p>
       <fieldset className="settings" disabled={!gate} hidden={!gate}>
         <DetailsPopup title="ノイズゲート">
           <div>

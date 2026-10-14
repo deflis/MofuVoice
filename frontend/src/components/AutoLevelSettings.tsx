@@ -30,7 +30,6 @@ export function AutoLevelSettings() {
         />
         有効
       </label>
-      <p>小さい声と大きい声の音量を揃えます。</p>
       <fieldset className="settings" disabled={!level.enabled} hidden={!level.enabled}>
         <DetailsPopup title="音量の自動調整">
           <div className="level-fields">

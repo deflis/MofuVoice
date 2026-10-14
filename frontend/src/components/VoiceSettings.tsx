@@ -8,7 +8,6 @@ export function VoiceSettings() {
     <section>
       <h2>声の変換</h2>
       <SemitonesInput label="声の高さ" value={pitch} onChange={(value) => update("pitch", value)} />
-      <p>少しずつ動かして、声を聴きながら調整してください。</p>
       <fieldset className="settings" disabled={!preserveFormants}>
         <SemitonesInput
           label="声の響き"

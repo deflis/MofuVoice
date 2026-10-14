@@ -37,7 +37,6 @@ export function DetailsPopup({
             </h2>
           </header>
           <Notifications />
-          <p className="muted">調整が終わったら閉じて、設定を保存してください。</p>
           <fieldset className="settings details-popup-content" disabled={locked}>
             {children}
           </fieldset>

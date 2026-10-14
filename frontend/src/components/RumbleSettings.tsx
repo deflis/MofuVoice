@@ -13,7 +13,6 @@ export function RumbleSettings() {
         />
         有効
       </label>
-      <p>机の振動や空調の低い音が気になるときに使います。</p>
     </section>
   );
 }

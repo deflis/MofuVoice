@@ -36,7 +36,6 @@ export function DeviceSettings() {
   return (
     <section>
       <h2>音声デバイス</h2>
-      <p>使う機器を選んでください。</p>
       <label>
         {resolvedBackend === "asio" ? "入出力デバイス" : "入力デバイス"}
         <select value={device} onChange={(event) => update("device", event.target.value)}>
@@ -68,7 +67,6 @@ export function DeviceSettings() {
           </select>
         </label>
       )}
-      {resolvedBackend === "asio" && <p>選んだ機器の出力にヘッドホンを接続してください。</p>}
       <fieldset className="routing-presets">
         <legend>チャンネル</legend>
         <div className="routing-choices">

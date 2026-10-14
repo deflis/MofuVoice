@@ -10,7 +10,6 @@ export function SettingsWindow() {
         <h1>設定</h1>
         <span className="muted">Voice Changer</span>
       </header>
-      <p className="settings-guidance">変更したら保存して、音声を開始してください。</p>
       {busy && <output>音声を停止すると設定を変更できます。</output>}
       <SettingsPanel />
       <SaveSettingsButton />
