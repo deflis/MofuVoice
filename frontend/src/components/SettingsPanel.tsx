@@ -14,7 +14,7 @@ import { AutoLevelSettings } from "./AutoLevelSettings";
 import { RumbleSettings } from "./RumbleSettings";
 
 const groups: { id: SettingsSection; name: string }[] = [
-  { id: "devices", name: "マイク・出力先" },
+  { id: "devices", name: "音声デバイス" },
   { id: "voice", name: "声を変える" },
   { id: "noise", name: "雑音を減らす" },
   { id: "tone", name: "声を整える" },

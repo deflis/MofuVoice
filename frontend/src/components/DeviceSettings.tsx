@@ -35,13 +35,13 @@ export function DeviceSettings() {
   const channelChoices = [...new Set([1, 2, 3, 4, 5, 6, 7, 8, ...outputChannels])];
   return (
     <section>
-      <h2>マイクと出力先</h2>
+      <h2>音声デバイス</h2>
       <p>使う機器を選んでください。</p>
       <label>
-        {resolvedBackend === "asio" ? "マイクと出力に使う機器" : "マイク"}
+        {resolvedBackend === "asio" ? "入出力デバイス" : "入力デバイス"}
         <select value={device} onChange={(event) => update("device", event.target.value)}>
           <option value="">
-            {resolvedBackend === "asio" ? "デバイスを選択" : "いつものマイク"}
+            {resolvedBackend === "asio" ? "デバイスを選択" : "システムの既定"}
           </option>
           {device && !devices.includes(device) && (
             <option value={device}>{device}（未検出）</option>
@@ -53,12 +53,12 @@ export function DeviceSettings() {
       </label>
       {resolvedBackend === "cpal" && (
         <label>
-          声を聴く機器
+          出力デバイス
           <select
             value={outputDevice}
             onChange={(event) => update("outputDevice", event.target.value)}
           >
-            <option value="">いつもの出力先</option>
+            <option value="">システムの既定</option>
             {outputDevice && !outputDevices.includes(outputDevice) && (
               <option value={outputDevice}>{outputDevice}（未検出）</option>
             )}
@@ -85,7 +85,7 @@ export function DeviceSettings() {
       </fieldset>
       <DetailsPopup title="音声デバイス" buttonLabel="プロ向け設定">
         <fieldset className="settings">
-          <legend>音声接続方式</legend>
+          <legend>音声バックエンド</legend>
           <div className="routing-choices">
             {backends.map((available) => (
               <button

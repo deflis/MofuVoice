@@ -81,7 +81,7 @@ function DeviceSetupGuidance() {
       return "使える音声機器が見つかりません。接続と設定を確認してください。";
     }
     if (state.resolvedBackend === "asio" && !settings.device) {
-      return "最初に、マイク・出力先を設定してください。";
+      return "最初に、入力・出力デバイスを設定してください。";
     }
     if (
       (settings.device && !state.devices.includes(settings.device)) ||
@@ -89,7 +89,7 @@ function DeviceSetupGuidance() {
         settings.outputDevice &&
         !state.outputDevices.includes(settings.outputDevice))
     ) {
-      return "前回使った音声機器が見つかりません。マイク・出力先を確認してください。";
+      return "前回使った音声機器が見つかりません。入力・出力デバイスを確認してください。";
     }
     return "";
   });
@@ -99,7 +99,7 @@ function DeviceSetupGuidance() {
   return (
     <aside className="setup-guidance">
       <p>{reason}</p>
-      <OpenSettingsButton section="devices">マイク・出力先を確認する</OpenSettingsButton>
+      <OpenSettingsButton section="devices">入力・出力デバイスを確認する</OpenSettingsButton>
     </aside>
   );
 }

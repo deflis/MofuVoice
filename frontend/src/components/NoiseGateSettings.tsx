@@ -8,7 +8,7 @@ export function NoiseGateSettings() {
   return (
     <section>
       <div className="section-heading">
-        <h2>話していないときの雑音を減らす</h2>
+        <h2>ノイズゲート</h2>
         <label className="check">
           <input
             type="checkbox"
