@@ -465,15 +465,19 @@ fn stop_audio(state: State<'_, DesktopState>) -> Result<(), String> {
         .stop();
     Ok(())
 }
+struct WindowSize {
+    width: f64,
+    height: f64,
+    min_width: f64,
+    min_height: f64,
+}
+
 fn show_or_create_window(
     app: &tauri::AppHandle,
     label: &str,
     title: &str,
     path: &str,
-    width: f64,
-    height: f64,
-    min_width: f64,
-    min_height: f64,
+    size: WindowSize,
 ) -> Result<(), String> {
     if let Some(window) = app.get_webview_window(label) {
         window.show().map_err(|error| error.to_string())?;
@@ -481,8 +485,8 @@ fn show_or_create_window(
     }
     tauri::WebviewWindowBuilder::new(app, label, tauri::WebviewUrl::App(path.into()))
         .title(title)
-        .inner_size(width, height)
-        .min_inner_size(min_width, min_height)
+        .inner_size(size.width, size.height)
+        .min_inner_size(size.min_width, size.min_height)
         .build()
         .map_err(|error| error.to_string())?;
     Ok(())
@@ -512,10 +516,12 @@ async fn open_settings(app: tauri::AppHandle) -> Result<(), String> {
             "settings",
             "設定 — Voice Changer",
             "index.html?window=settings",
-            820.0,
-            740.0,
-            560.0,
-            460.0,
+            WindowSize {
+                width: 820.0,
+                height: 740.0,
+                min_width: 560.0,
+                min_height: 460.0,
+            },
         )
     })
     .await
@@ -529,10 +535,12 @@ async fn open_log(app: tauri::AppHandle) -> Result<(), String> {
             "log",
             "ログ — Voice Changer",
             "index.html?window=log",
-            640.0,
-            720.0,
-            480.0,
-            520.0,
+            WindowSize {
+                width: 640.0,
+                height: 720.0,
+                min_width: 480.0,
+                min_height: 520.0,
+            },
         )
     })
     .await
