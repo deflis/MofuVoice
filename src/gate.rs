@@ -4,8 +4,14 @@ use crate::pitch::Sample;
 use crate::RATE;
 use std::{error::Error, fmt};
 
+#[cfg(test)]
 const RATIO: f64 = 4.0;
+#[cfg(test)]
 const FLOOR_DB: f64 = -72.0;
+// 10^(-72/20), the original minimum expansion gain.
+const FLOOR_GAIN: f64 = 0.000251188643150958;
+// The original implementation snaps targets >= 0.999 to unity before hold.
+const OPEN_RATIO: f64 = 0.999666555493786; // 0.999^(1/3)
 const HOLD_MS: f64 = 40.0;
 const AUTO_MARGIN_DB: f64 = 10.0;
 // Silence must not make quiet room/keyboard transients open the gate.
@@ -85,6 +91,7 @@ fn from_db(db: f64) -> f64 {
 }
 
 /// Downward expansion gain in dB. Attack/release smoothing softens the open/close edge.
+#[cfg(test)]
 fn expansion_gain_db(level_db: f64, threshold_db: f64) -> f64 {
     let delta = level_db - threshold_db;
     if delta >= 0.0 {
@@ -108,6 +115,10 @@ pub struct NoiseGate {
     gain: f64,
     hold_remaining: u64,
     noise_floor_db: f64,
+    cached_threshold_db: f64,
+    inverse_threshold: f64,
+    floor_ceiling_db: f64,
+    floor_ceiling: f64,
 }
 
 impl NoiseGate {
@@ -124,6 +135,10 @@ impl NoiseGate {
             GateThreshold::Db(db) if db.is_finite() && (-90.0..=0.0).contains(&db) => {}
             GateThreshold::Db(_) => return Err(InvalidGate),
         }
+        let threshold_db = match threshold {
+            GateThreshold::Db(db) => db,
+            GateThreshold::Auto => AUTO_MIN_THRESHOLD_DB,
+        };
         Ok(Self {
             enabled,
             threshold,
@@ -138,6 +153,10 @@ impl NoiseGate {
             gain: 1.0,
             hold_remaining: 0,
             noise_floor_db: -60.0,
+            floor_ceiling_db: -48.0,
+            floor_ceiling: from_db(-48.0),
+            cached_threshold_db: threshold_db,
+            inverse_threshold: from_db(-threshold_db),
         })
     }
 
@@ -167,10 +186,62 @@ impl NoiseGate {
             };
             self.noise_floor_db += (level_db - self.noise_floor_db) * rate;
             self.noise_floor_db = self.noise_floor_db.clamp(MIN_DB, -6.0);
+            self.refresh_floor_ceiling();
+        }
+    }
+
+    fn refresh_floor_ceiling(&mut self) {
+        // Conservative 6 dB buckets let speech skip the logarithm. Recompute
+        // only at bucket crossings, not every noise-floor detector update.
+        let limit = self.noise_floor_db + AUTO_MARGIN_DB;
+        if limit > self.floor_ceiling_db || limit < self.floor_ceiling_db - 6.0 {
+            self.floor_ceiling_db = (limit / 6.0).ceil() * 6.0;
+            self.floor_ceiling = from_db(self.floor_ceiling_db);
         }
     }
 
     fn process_sample(&mut self, input: f64) -> f64 {
+        // Treat invalid active samples as silence in both detector and output.
+        let input = if input.is_finite() { input } else { 0.0 };
+        let level = input.abs();
+        if level > self.envelope {
+            self.envelope += (level - self.envelope) * self.detect_attack;
+        } else {
+            self.envelope += (level - self.envelope) * self.detect_release;
+        }
+        if matches!(self.threshold, GateThreshold::Auto) {
+            if self.envelope <= self.floor_ceiling {
+                self.update_noise_floor(to_db(self.envelope));
+            }
+            let threshold_db = self.threshold_db();
+            if threshold_db != self.cached_threshold_db {
+                self.cached_threshold_db = threshold_db;
+                self.inverse_threshold = from_db(-threshold_db);
+            }
+        }
+        // 10^(3 * (20 log10(envelope) - threshold_db) / 20)
+        // equals (envelope / threshold)^3. Preserve the detector's -200 dB
+        // floor and the original 0.999 hold trigger, without log/pow per sample.
+        let relative = self.envelope.max(1e-10) * self.inverse_threshold;
+        let target = if relative >= OPEN_RATIO {
+            self.hold_remaining = self.hold_samples;
+            1.0
+        } else if self.hold_remaining > 0 {
+            self.hold_remaining -= 1;
+            1.0
+        } else {
+            (relative * relative * relative).max(FLOOR_GAIN)
+        };
+        if target > self.gain {
+            self.gain += (target - self.gain) * self.attack;
+        } else {
+            self.gain += (target - self.gain) * self.release;
+        }
+        input * self.gain
+    }
+
+    #[cfg(test)]
+    fn process_sample_reference(&mut self, input: f64) -> f64 {
         // Treat invalid active samples as silence in both detector and output.
         let input = if input.is_finite() { input } else { 0.0 };
         let level = input.abs();
@@ -226,6 +297,96 @@ impl NoiseGate {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn linear_gain_matches_original_db_curve_and_hold_transitions() {
+        for threshold in [
+            GateThreshold::Db(-90.0),
+            GateThreshold::Db(-40.0),
+            GateThreshold::Db(0.0),
+            GateThreshold::Auto,
+        ] {
+            for floor in [-60.0, -50.0, -20.0] {
+                let mut actual = NoiseGate::new(true, threshold, 0.1, 2000.0).unwrap();
+                let mut reference = NoiseGate::new(true, threshold, 0.1, 2000.0).unwrap();
+                actual.noise_floor_db = floor;
+                actual.refresh_floor_ceiling();
+                reference.noise_floor_db = floor;
+                for i in 0..240_000 {
+                    // Silence, subnormals, invalid input, threshold sweeps and speech.
+                    let input = match i / 40_000 {
+                        0 => 0.0,
+                        1 => f64::from_bits(1),
+                        2 => {
+                            if i % 2 == 0 {
+                                f64::NAN
+                            } else {
+                                f64::INFINITY
+                            }
+                        }
+                        3 | 4 => {
+                            from_db(-110.0 + (i % 40_000) as f64 * 0.003) * (i as f64 * 0.031).sin()
+                        }
+                        _ => 0.0,
+                    };
+                    let expected = reference.process_sample_reference(input);
+                    let output = actual.process_sample(input);
+                    assert!(
+                        (output - expected).abs() < 1e-12,
+                        "{threshold:?}, floor={floor}, sample={i}: {output} != {expected}"
+                    );
+                    assert_eq!(actual.hold_remaining, reference.hold_remaining);
+                    assert!((actual.gain - reference.gain).abs() < 1e-12);
+                    assert_eq!(actual.noise_floor_db, reference.noise_floor_db);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn active_formats_and_irregular_blocks_preserve_state() {
+        let input: Vec<f32> = (0..48_000)
+            .map(|i| {
+                (from_db(-80.0 + (i % 24_000) as f64 / 400.0) * (i as f64 * 0.07).sin()) as f32
+            })
+            .collect();
+        for threshold in [GateThreshold::Db(-40.0), GateThreshold::Auto] {
+            let mut whole = input.clone();
+            NoiseGate::new(true, threshold, 5.0, 80.0)
+                .unwrap()
+                .process_in_place(&mut whole);
+            let mut chunks = input.clone();
+            let mut gate = NoiseGate::new(true, threshold, 5.0, 80.0).unwrap();
+            let mut position = 0;
+            for size in [1, 63, 128, 511, 3].into_iter().cycle() {
+                if position == chunks.len() {
+                    break;
+                }
+                let end = (position + size).min(chunks.len());
+                gate.process_in_place(&mut chunks[position..end]);
+                position = end;
+            }
+            assert_eq!(whole, chunks);
+            let mut short: Vec<i16> = input
+                .iter()
+                .map(|x| i16::from_normalized(*x as f64))
+                .collect();
+            let mut int: Vec<i32> = input
+                .iter()
+                .map(|x| i32::from_normalized(*x as f64))
+                .collect();
+            NoiseGate::new(true, threshold, 5.0, 80.0)
+                .unwrap()
+                .process_in_place(&mut short);
+            NoiseGate::new(true, threshold, 5.0, 80.0)
+                .unwrap()
+                .process_in_place(&mut int);
+            for i in 0..input.len() {
+                assert!((short[i].normalized() - whole[i] as f64).abs() < 1e-4);
+                assert!((int[i].normalized() - whole[i] as f64).abs() < 1e-6);
+            }
+        }
+    }
 
     #[test]
     fn rejects_invalid_arguments() {
