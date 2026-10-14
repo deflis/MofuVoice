@@ -111,6 +111,7 @@ fn asymmetric_windows() -> (Box<[f64; WINDOW]>, Box<[f64; WINDOW]>, f64) {
 }
 
 #[derive(Clone, Copy, Default)]
+#[repr(C)]
 struct Complex {
     re: f64,
     im: f64,
@@ -145,9 +146,11 @@ impl Complex {
 const HALF: usize = WINDOW / 2;
 
 struct Fft {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    avx2: bool,
     reverse_half: Box<[usize; HALF]>,
-    forward_roots_half: Box<[Complex; HALF / 2]>,
-    inverse_roots_half: Box<[Complex; HALF / 2]>,
+    forward_roots_half: Box<[Complex; HALF - 1]>,
+    inverse_roots_half: Box<[Complex; HALF - 1]>,
     /// `exp(-2π i k / N)` for real-FFT packing, k = 0 .. HALF-1.
     real_twiddle: Box<[Complex; HALF]>,
     #[cfg(test)]
@@ -158,18 +161,31 @@ struct Fft {
     inverse_roots: Box<[Complex; WINDOW / 2]>,
 }
 impl Fft {
+    // Store each stage's twiddles contiguously, in the same order used by the
+    // butterflies. This removes strided loads and permits vectorization.
+    fn stage_roots<const N: usize>(roots: &[Complex]) -> Box<[Complex; N]> {
+        Box::new(std::array::from_fn(|i| {
+            let half = 1 << (i + 1).ilog2();
+            roots[(i - (half - 1)) * (N + 1) / (2 * half)]
+        }))
+    }
+
     fn new() -> Self {
         let half_bits = HALF.ilog2();
+        let forward: [Complex; HALF / 2] = std::array::from_fn(|i| {
+            Complex::polar(1.0, -std::f64::consts::TAU * i as f64 / HALF as f64)
+        });
+        let inverse: [Complex; HALF / 2] = std::array::from_fn(|i| {
+            Complex::polar(1.0, std::f64::consts::TAU * i as f64 / HALF as f64)
+        });
         Self {
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            avx2: std::is_x86_feature_detected!("avx2"),
             reverse_half: Box::new(std::array::from_fn(|i| {
                 i.reverse_bits() >> (usize::BITS - half_bits)
             })),
-            forward_roots_half: Box::new(std::array::from_fn(|i| {
-                Complex::polar(1.0, -std::f64::consts::TAU * i as f64 / HALF as f64)
-            })),
-            inverse_roots_half: Box::new(std::array::from_fn(|i| {
-                Complex::polar(1.0, std::f64::consts::TAU * i as f64 / HALF as f64)
-            })),
+            forward_roots_half: Self::stage_roots(&forward),
+            inverse_roots_half: Self::stage_roots(&inverse),
             real_twiddle: Box::new(std::array::from_fn(|i| {
                 Complex::polar(1.0, -std::f64::consts::TAU * i as f64 / WINDOW as f64)
             })),
@@ -189,6 +205,7 @@ impl Fft {
     }
 
     fn transform_sized<const N: usize>(
+        &self,
         reverse: &[usize; N],
         roots: &[Complex],
         data: &mut [Complex; N],
@@ -199,6 +216,24 @@ impl Fft {
                 data.swap(i, j);
             }
         }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        if self.avx2 {
+            // SAFETY: detected once before streaming; slices are checked by each stage.
+            unsafe { Self::stages_avx2(roots, data) };
+        } else {
+            Self::stages(roots, data);
+        }
+        #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+        Self::stages(roots, data);
+        if let Some(scale) = scale {
+            for value in data {
+                value.re *= scale;
+                value.im *= scale;
+            }
+        }
+    }
+
+    fn stages<const N: usize>(roots: &[Complex], data: &mut [Complex; N]) {
         // Fixed stage sizes let the compiler specialize strides and butterfly
         // loops for our power-of-two transforms instead of dividing at runtime.
         Self::stage::<N, 2>(roots, data);
@@ -212,10 +247,64 @@ impl Fft {
         Self::stage::<N, 512>(roots, data);
         Self::stage::<N, 1024>(roots, data);
         Self::stage::<N, 2048>(roots, data);
-        if let Some(scale) = scale {
-            for value in data {
-                value.re *= scale;
-                value.im *= scale;
+    }
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[target_feature(enable = "avx2")]
+    unsafe fn stages_avx2<const N: usize>(roots: &[Complex], data: &mut [Complex; N]) {
+        Self::stage::<N, 2>(roots, data);
+        // SAFETY: this function requires AVX2 and each stage checks its bounds.
+        unsafe {
+            Self::stage_avx2::<N, 4>(roots, data);
+            Self::stage_avx2::<N, 8>(roots, data);
+            Self::stage_avx2::<N, 16>(roots, data);
+            Self::stage_avx2::<N, 32>(roots, data);
+            Self::stage_avx2::<N, 64>(roots, data);
+            Self::stage_avx2::<N, 128>(roots, data);
+            Self::stage_avx2::<N, 256>(roots, data);
+            Self::stage_avx2::<N, 512>(roots, data);
+            Self::stage_avx2::<N, 1024>(roots, data);
+            Self::stage_avx2::<N, 2048>(roots, data);
+        }
+    }
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[target_feature(enable = "avx2")]
+    unsafe fn stage_avx2<const N: usize, const SIZE: usize>(
+        roots: &[Complex],
+        data: &mut [Complex; N],
+    ) {
+        #[cfg(target_arch = "x86")]
+        use std::arch::x86::*;
+        #[cfg(target_arch = "x86_64")]
+        use std::arch::x86_64::*;
+        if SIZE > N {
+            return;
+        }
+        let half = SIZE / 2;
+        let roots = &roots[half - 1..SIZE - 1];
+        for block in data.as_chunks_mut::<SIZE>().0 {
+            let (left, right) = block.split_at_mut(half);
+            for ((left, right), root) in left
+                .as_chunks_mut::<2>()
+                .0
+                .iter_mut()
+                .zip(right.as_chunks_mut::<2>().0)
+                .zip(roots.as_chunks::<2>().0)
+            {
+                // SAFETY: repr(C) Complex is two f64 values. Each checked chunk
+                // contains two complexes (four f64s); unaligned loads/stores stay
+                // inside disjoint left/right slices. No FMA changes rounding.
+                unsafe {
+                    let a = _mm256_loadu_pd(left.as_ptr().cast());
+                    let b = _mm256_loadu_pd(right.as_ptr().cast());
+                    let w = _mm256_loadu_pd(root.as_ptr().cast());
+                    let re = _mm256_mul_pd(_mm256_permute_pd::<0>(b), w);
+                    let im = _mm256_mul_pd(_mm256_permute_pd::<15>(b), _mm256_permute_pd::<5>(w));
+                    let product = _mm256_addsub_pd(re, im);
+                    _mm256_storeu_pd(left.as_mut_ptr().cast(), _mm256_add_pd(a, product));
+                    _mm256_storeu_pd(right.as_mut_ptr().cast(), _mm256_sub_pd(a, product));
+                }
             }
         }
     }
@@ -224,12 +313,10 @@ impl Fft {
     fn stage<const N: usize, const SIZE: usize>(roots: &[Complex], data: &mut [Complex; N]) {
         if SIZE <= N {
             let half = SIZE / 2;
-            let stride = N / SIZE;
+            let roots = &roots[half - 1..SIZE - 1];
             for block in data.as_chunks_mut::<SIZE>().0 {
                 let (left, right) = block.split_at_mut(half);
-                for ((left, right), root) in
-                    left.iter_mut().zip(right).zip(roots.iter().step_by(stride))
-                {
+                for ((left, right), root) in left.iter_mut().zip(right).zip(roots) {
                     let a = *left;
                     let b = *right;
                     let re = b.re * root.re - b.im * root.im;
@@ -250,18 +337,24 @@ impl Fft {
     #[cfg(test)]
     fn transform(&self, data: &mut [Complex; WINDOW], inverse: bool) {
         if inverse {
-            Self::transform_sized(
+            self.transform_sized(
                 &self.reverse,
-                self.inverse_roots.as_ref(),
+                Self::stage_roots::<{ WINDOW - 1 }>(self.inverse_roots.as_ref()).as_ref(),
                 data,
                 Some(1.0 / WINDOW as f64),
             );
         } else {
-            Self::transform_sized(&self.reverse, self.forward_roots.as_ref(), data, None);
+            self.transform_sized(
+                &self.reverse,
+                Self::stage_roots::<{ WINDOW - 1 }>(self.forward_roots.as_ref()).as_ref(),
+                data,
+                None,
+            );
         }
     }
 
     /// Real forward FFT: `time[n].re` is the real sequence (imag ignored).
+    /// Writes only the nonnegative-frequency bins; inverse_real needs no mirror.
     fn forward_real(&self, time: &mut [Complex; WINDOW], work: &mut [Complex; HALF]) {
         for n in 0..HALF {
             work[n] = Complex {
@@ -269,7 +362,7 @@ impl Fft {
                 im: time[2 * n + 1].re,
             };
         }
-        Self::transform_sized(
+        self.transform_sized(
             &self.reverse_half,
             self.forward_roots_half.as_ref(),
             work,
@@ -303,10 +396,6 @@ impl Fft {
                 im: 0.5 * (a.im - wb_re),
             };
             time[k] = x;
-            time[WINDOW - k] = Complex {
-                re: x.re,
-                im: -x.im,
-            };
         }
     }
 
@@ -342,7 +431,7 @@ impl Fft {
                 im: e.im + t_re * o.im + t_im * o.re,
             };
         }
-        Self::transform_sized(
+        self.transform_sized(
             &self.reverse_half,
             self.inverse_roots_half.as_ref(),
             work,
@@ -394,6 +483,12 @@ pub struct PitchShifter {
     envelope_work: Box<[Complex; WINDOW]>,
     magnitude: Box<[f64; BINS]>,
     phase: Box<[f64; BINS]>,
+    /// Whether a bin's phase was calculated in the immediately preceding frame.
+    phase_valid: Box<[bool; BINS]>,
+    previous_spectrum: Box<[Complex; BINS]>,
+    #[cfg(test)]
+    eager_phase: bool,
+    #[cfg(test)]
     previous_phase: Box<[f64; BINS]>,
     synthesis_phase: Box<[f64; BINS]>,
     previous_synthesis_phase: Box<[f64; BINS]>,
@@ -455,6 +550,11 @@ impl PitchShifter {
             envelope_work: Box::new([Complex::default(); WINDOW]),
             magnitude: Box::new([0.0; BINS]),
             phase: Box::new([0.0; BINS]),
+            phase_valid: Box::new([true; BINS]),
+            previous_spectrum: Box::new([Complex::default(); BINS]),
+            #[cfg(test)]
+            eager_phase: false,
+            #[cfg(test)]
             previous_phase: Box::new([0.0; BINS]),
             synthesis_phase: Box::new([0.0; BINS]),
             previous_synthesis_phase: Box::new([0.0; BINS]),
@@ -504,11 +604,6 @@ impl PitchShifter {
         for i in 0..BINS {
             let value = self.spectrum[i];
             self.magnitude[i] = (value.re * value.re + value.im * value.im).sqrt();
-            self.phase[i] = value.im.atan2(value.re);
-            let advance = self.nominal_advance[i];
-            let frequency = advance + wrap(self.phase[i] - self.previous_phase[i] - advance);
-            self.phase_advance[i] = frequency;
-            self.previous_phase[i] = self.phase[i];
         }
         if self.preserve_formants {
             // Real cepstral low-pass estimates a smooth envelope without fitting harmonics.
@@ -536,6 +631,40 @@ impl PitchShifter {
                 self.peaks[count] = i;
                 count += 1;
             }
+        }
+        // Only peak phases drive lobe translation and phase locking. Retain the
+        // complex history so a newly detected/moving peak still gets the exact
+        // previous-frame phase of its current bin. No magnitude threshold or
+        // approximate angle is needed, including for quiet speech and noise.
+        #[cfg(test)]
+        let eager = self.eager_phase;
+        #[cfg(not(test))]
+        let eager = false;
+        if eager {
+            #[cfg(test)]
+            for i in 0..BINS {
+                let value = self.spectrum[i];
+                self.phase[i] = value.im.atan2(value.re);
+                let advance = self.nominal_advance[i];
+                self.phase_advance[i] =
+                    advance + wrap(self.phase[i] - self.previous_phase[i] - advance);
+                self.previous_phase[i] = self.phase[i];
+            }
+        } else if count == 0 {
+            // A spectrum without local maxima uses each bin as its own peak.
+            for i in 1..BINS - 1 {
+                self.analyze_phase(i);
+            }
+        } else {
+            for p in 0..count {
+                self.analyze_phase(self.peaks[p]);
+            }
+        }
+        self.previous_spectrum
+            .copy_from_slice(&self.spectrum[..BINS]);
+        self.phase_valid.fill(count == 0 || eager);
+        for &peak in &self.peaks[..count] {
+            self.phase_valid[peak] = true;
         }
         self.previous_synthesis_phase
             .copy_from_slice(self.synthesis_phase.as_slice());
@@ -580,6 +709,10 @@ impl PitchShifter {
         let preserve = self.preserve_formants;
         let mut rotation_peak = BINS;
         let mut rotation = Complex { re: 1.0, im: 0.0 };
+        let mut translated_peak = BINS;
+        let mut translated_offset = isize::MAX;
+        let mut lower_rotation = rotation;
+        let mut upper_rotation = rotation;
         for i in 1..BINS - 1 {
             if dc_lobe && i == 1 {
                 continue;
@@ -607,6 +740,28 @@ impl PitchShifter {
                 );
                 rotation_peak = peak;
             }
+            let offset = lower - i as isize;
+            if peak != translated_peak || offset != translated_offset {
+                // Moving from the analysis centre to the destination centre
+                // depends only on the integer translation, shared by a lobe.
+                // Combine these rotations once instead of four complex
+                // multiplications per bin (two for each destination).
+                let relative = |offset: isize| {
+                    let value = self.centre_phasor[offset.unsigned_abs()];
+                    if offset < 0 {
+                        Complex {
+                            re: value.re,
+                            im: -value.im,
+                        }
+                    } else {
+                        value
+                    }
+                };
+                lower_rotation = rotation.mul(relative(offset));
+                upper_rotation = rotation.mul(relative(offset + 1));
+                translated_peak = peak;
+                translated_offset = offset;
+            }
             let gain = if preserve {
                 let position = (destination / self.formant_ratio).clamp(0.0, (BINS - 1) as f64);
                 let env_lower = position.floor() as usize;
@@ -618,10 +773,11 @@ impl PitchShifter {
             } else {
                 1.0
             };
-            // Phase locking is a shared rotation of the original complex bins.
-            // Reuse it across the peak's lobe instead of reconstructing every bin
-            // with sin/cos. Conjugating the centre phasor moves to the analysis centre.
+            // Validate the combined rotation against the original two-centre
+            // construction and an independent polar phase-locking reference.
+            #[cfg(test)]
             let centre = self.centre_phasor[i];
+            #[cfg(test)]
             let phasor = self.spectrum[i]
                 .mul(Complex {
                     re: centre.re,
@@ -641,7 +797,7 @@ impl PitchShifter {
                     self.magnitude[i] * gain,
                     locked
                         + wrap(
-                            self.phase[i] - self.phase[peak]
+                            self.spectrum[i].im.atan2(self.spectrum[i].re) - self.phase[peak]
                                 + centre_step * (i as f64 - peak as f64),
                         ),
                 );
@@ -649,12 +805,22 @@ impl PitchShifter {
                 assert!((phasor.re - reference.re).abs() < tolerance);
                 assert!((phasor.im - reference.im).abs() < tolerance);
             }
-            for (bin, weight) in [(lower, 1.0 - fraction), (lower + 1, fraction)] {
+            for (bin, weight, rotation) in [
+                (lower, 1.0 - fraction, lower_rotation),
+                (lower + 1, fraction, upper_rotation),
+            ] {
                 if bin <= 0 || bin >= (BINS - 1) as isize || weight == 0.0 {
                     continue;
                 }
                 let bin = bin as usize;
-                let value = phasor.mul(self.centre_phasor[bin]).scale(weight);
+                let value = self.spectrum[i].mul(rotation).scale(gain).scale(weight);
+                #[cfg(test)]
+                {
+                    let reference = phasor.mul(self.centre_phasor[bin]).scale(weight);
+                    let tolerance = 1e-10 * (self.magnitude[i] * gain).max(1.0);
+                    assert!((value.re - reference.re).abs() < tolerance);
+                    assert!((value.im - reference.im).abs() < tolerance);
+                }
                 self.shifted[bin].re += value.re;
                 self.shifted[bin].im += value.im;
             }
@@ -667,6 +833,20 @@ impl PitchShifter {
             self.output[(clock + i - start) % QUEUE] +=
                 self.shifted[i].re * self.synthesis_window[i];
         }
+    }
+
+    #[inline]
+    fn analyze_phase(&mut self, bin: usize) {
+        let value = self.spectrum[bin];
+        let previous = self.previous_spectrum[bin];
+        let previous_phase = if self.phase_valid[bin] {
+            self.phase[bin]
+        } else {
+            previous.im.atan2(previous.re)
+        };
+        self.phase[bin] = value.im.atan2(value.re);
+        let advance = self.nominal_advance[bin];
+        self.phase_advance[bin] = advance + wrap(self.phase[bin] - previous_phase - advance);
     }
 
     /// Equal-length blocks; callback storage and FFT tables are never allocated here.
@@ -713,6 +893,88 @@ impl PitchShifter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[test]
+    fn avx2_fft_matches_portable_butterfly_bits() {
+        let vector = Fft::new();
+        if !vector.avx2 {
+            return;
+        }
+        let mut scalar = Fft::new();
+        scalar.avx2 = false;
+        let input = std::array::from_fn(|i| Complex {
+            re: (i as f64 * 0.31).sin(),
+            im: (i as f64 * 0.17).cos(),
+        });
+        for inverse in [false, true] {
+            let mut expected = input;
+            let mut actual = input;
+            scalar.transform(&mut expected, inverse);
+            vector.transform(&mut actual, inverse);
+            for (a, b) in actual.iter().zip(expected) {
+                assert_eq!(a.re.to_bits(), b.re.to_bits());
+                assert_eq!(a.im.to_bits(), b.im.to_bits());
+            }
+        }
+        let mut expected = input;
+        let mut actual = input;
+        let mut work = [Complex::default(); HALF];
+        scalar.forward_real(&mut expected, &mut work);
+        vector.forward_real(&mut actual, &mut work);
+        scalar.inverse_real(&mut expected, &mut work);
+        vector.inverse_real(&mut actual, &mut work);
+        for (a, b) in actual.iter().zip(expected) {
+            assert_eq!(a.re.to_bits(), b.re.to_bits());
+            assert_eq!(a.im.to_bits(), b.im.to_bits());
+        }
+    }
+
+    #[test]
+    fn peak_only_phase_analysis_matches_eager_output_bits() {
+        let mut seed = 17_u32;
+        let input: Vec<f32> = (0..16_384)
+            .map(|i| {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                let noise = seed as f64 / u32::MAX as f64 - 0.5;
+                let chirp = 0.013 * i as f64 + 0.000002 * (i * i) as f64;
+                match i / 4096 {
+                    0 => 0.0,
+                    1 => (0.12 * chirp.sin() + 0.07 * (3.0 * chirp).cos()) as f32,
+                    2 => (0.2 * noise) as f32,
+                    _ => {
+                        if i == 12_288 {
+                            0.7
+                        } else {
+                            0.0
+                        }
+                    }
+                }
+            })
+            .collect();
+        for preserve in [false, true] {
+            for formant in if preserve {
+                &[-12.0, 0.0, 12.0][..]
+            } else {
+                &[0.0][..]
+            } {
+                let mut lazy = PitchShifter::new(-12.0, preserve, *formant).unwrap();
+                let mut eager = PitchShifter::new(-12.0, preserve, *formant).unwrap();
+                eager.eager_phase = true;
+                for pitch in [-12.0, -3.0, 0.0, 3.0, 7.0, 12.0, 0.0] {
+                    lazy.set_semitones(pitch).unwrap();
+                    eager.set_semitones(pitch).unwrap();
+                    let mut actual = [0.0_f32; 127];
+                    let mut expected = actual;
+                    for chunk in input.chunks(127) {
+                        lazy.process_block(chunk, &mut actual[..chunk.len()]);
+                        eager.process_block(chunk, &mut expected[..chunk.len()]);
+                        assert_eq!(actual.map(f32::to_bits), expected.map(f32::to_bits));
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn quotient_phase_wrap_matches_remainder_over_internal_range() {
