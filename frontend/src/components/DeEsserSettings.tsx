@@ -69,8 +69,8 @@ export function DeEsserSettings() {
     (field) =>
       field.key !== "rangeDb" && Number(parameters[field.key]) !== Number(defaults[field.key]),
   );
-  const change = (key: keyof DeEsserParameters, value: string) =>
-    update("deesserParameters", { ...parameters, [key]: value });
+  const change = (key: keyof DeEsserParameters, nextValue: string) =>
+    update("deesserParameters", { ...parameters, [key]: nextValue });
   return (
     <section aria-labelledby={`${id}-title`}>
       <h2 id={`${id}-title`}>サ行の刺さり（ディエッサー）</h2>
