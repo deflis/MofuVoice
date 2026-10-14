@@ -69,6 +69,7 @@ impl Options {
         let mut shift_given = false;
         let mut eq_given = [false; 6];
         let mut level_given = false;
+        let mut level_unit_given = false;
         let mut level_fields = [false; 8];
         let mut rumble_given = false;
         let mut deesser_given = false;
@@ -129,6 +130,12 @@ impl Options {
                     options.pitch = args.next().ok_or("--pitch requires semitones")?.parse()?;
                     crate::pitch::pitch_ratio(options.pitch)?;
                     pitch_given = true;
+                }
+                "--level-unit" if !level_unit_given => {
+                    options.level.unit = crate::level::LevelUnit::parse(
+                        &args.next().ok_or("--level-unit requires lufs or dbfs")?,
+                    )?;
+                    level_unit_given = true;
                 }
                 "--auto-level" if !level_given => {
                     options.level.enabled = match args.next().as_deref() {
@@ -291,6 +298,9 @@ impl Options {
             return Err(crate::pitch::InvalidFormant.to_string().into());
         }
         options.eq.validate()?;
+        if !level_fields[0] {
+            options.level.target_db = options.level.unit.default_target();
+        }
         options.level.validate()?;
         options.deesser_parameters.validate()?;
         if !(1..=512).contains(&options.input_channel)
@@ -329,6 +339,7 @@ impl Options {
                     || formant_given
                     || shift_given
                     || eq_given.iter().any(|given| *given)
+                    || level_unit_given
                     || level_given
                     || level_fields.iter().any(|given| *given)
                     || rumble_given
@@ -345,7 +356,7 @@ impl Options {
                     || input_channel_given
                     || output_channels_given))
         {
-            return Err("Choose one CLI mode: --help, --list-devices, --inspect [--device NAME] [--frames N], or [--device NAME] [--frames N] [--seconds N] [--pitch SEMITONES] [--formant preserve|off] [--formant-shift SEMITONES] [--eq on|off] [--eq-mode simple|pro] [--eq-band1 HZ,DB,Q] [--eq-band2 HZ,DB,Q] [--eq-band3 HZ,DB,Q] [--eq-output DB] [--auto-level on|off] [--level-target LUFS] [--level-max-gain DB] [--level-floor DB] [--level-response MS] [--compress-threshold DB] [--compress-ratio N] [--compress-attack MS] [--compress-release MS] [--deesser on|off] [--deesser-mode simple|pro] [--deesser-frequency HZ] [--deesser-threshold DBFS] [--deesser-range DB] [--deesser-attack MS] [--deesser-release MS] [--rumble-filter on|off] [--gate on|off] [--gate-threshold auto|DB] [--gate-attack MS] [--gate-release MS]".into());
+            return Err("Choose one CLI mode: --help, --list-devices, --inspect [--device NAME] [--frames N], or [--device NAME] [--frames N] [--seconds N] [--pitch SEMITONES] [--formant preserve|off] [--formant-shift SEMITONES] [--eq on|off] [--eq-mode simple|pro] [--eq-band1 HZ,DB,Q] [--eq-band2 HZ,DB,Q] [--eq-band3 HZ,DB,Q] [--eq-output DB] [--auto-level on|off] [--level-unit lufs|dbfs] [--level-target DB] [--level-max-gain DB] [--level-floor DB] [--level-response MS] [--compress-threshold DB] [--compress-ratio N] [--compress-attack MS] [--compress-release MS] [--deesser on|off] [--deesser-mode simple|pro] [--deesser-frequency HZ] [--deesser-threshold DBFS] [--deesser-range DB] [--deesser-attack MS] [--deesser-release MS] [--rumble-filter on|off] [--gate on|off] [--gate-threshold auto|DB] [--gate-attack MS] [--gate-release MS]".into());
         }
         Ok(options)
     }
@@ -412,6 +423,29 @@ mod tests {
         assert!(parse(&["--output-device", "--frames"]).is_err());
         assert!(parse(&["--device", "bad\nname"]).is_err());
         assert!(parse(&["--list-devices", "--backend", "cpal"]).is_ok());
+    }
+    #[test]
+    fn level_units_defaults_and_order_independent_targets() {
+        use crate::level::LevelUnit;
+        assert_eq!(parse(&[]).unwrap().level.unit, LevelUnit::Lufs);
+        assert_eq!(parse(&[]).unwrap().level.target_db, -14.0);
+        let rms = parse(&["--level-unit", "dbfs"]).unwrap().level;
+        assert_eq!(rms.unit, LevelUnit::Dbfs);
+        assert_eq!(rms.target_db, -20.0);
+        for args in [
+            vec!["--level-unit", "dbfs", "--level-target", "-18"],
+            vec!["--level-target", "-18", "--level-unit", "dbfs"],
+        ] {
+            assert_eq!(parse(&args).unwrap().level.target_db, -18.0);
+        }
+        for args in [
+            vec!["--level-unit"],
+            vec!["--level-unit", "peak"],
+            vec!["--level-unit", "dbfs", "--level-unit", "lufs"],
+            vec!["--level-unit", "lufs", "--help"],
+        ] {
+            assert!(parse(&args).is_err());
+        }
     }
     #[test]
     fn automatic_level_and_custom_parameters_are_validated() {

@@ -1,12 +1,12 @@
 import type { LevelSettings } from "../settingsStore";
 import { useAutoLevelSettings } from "../settingsHooks";
 const levelFields: {
-  key: Exclude<keyof LevelSettings, "enabled">;
+  key: Exclude<keyof LevelSettings, "enabled" | "unit">;
   label: string;
   min: number;
   max: number;
 }[] = [
-  { key: "targetDb", label: "Target loudness (LUFS)", min: -36, max: -6 },
+  { key: "targetDb", label: "Target", min: -36, max: -6 },
   { key: "maxGainDb", label: "Max gain (dB)", min: 0, max: 18 },
   { key: "floorDb", label: "Activity floor (dBFS)", min: -90, max: -30 },
   { key: "responseMs", label: "Level response (ms)", min: 100, max: 10000 },
@@ -29,12 +29,26 @@ export function AutoLevelSettings() {
         />
         有効
       </label>
+      <label>
+        目標値の単位
+        <select
+          value={level.unit}
+          onChange={(event) => updateLevel("unit", event.target.value as LevelSettings["unit"])}
+        >
+          <option value="lufs">LUFS</option>
+          <option value="dbfs">dBFS（RMS）</option>
+        </select>
+      </label>
       <details>
         <summary>詳細設定</summary>
         <div className="level-fields">
           {levelFields.map((field) => (
             <label key={field.key}>
-              {field.label}
+              {field.key === "targetDb"
+                ? level.unit === "lufs"
+                  ? "Target loudness (LUFS)"
+                  : "Target RMS (dBFS)"
+                : field.label}
               <input
                 type="number"
                 step="any"

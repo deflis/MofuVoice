@@ -1,4 +1,4 @@
-//! Causal momentary-LUFS leveling, soft-knee peak compression and a zero-lookahead peak guard.
+//! Selectable causal RMS or momentary-LUFS leveling, soft-knee peak compression and a zero-lookahead peak guard.
 //! Envelope response times change gain, not sample positions. No audio is buffered.
 use crate::{pitch::Sample, RATE};
 use std::{error::Error, fmt};
@@ -26,10 +26,38 @@ pub const KEYS: [&str; 8] = [
     "compress_release_ms",
 ];
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LevelUnit {
+    Lufs,
+    Dbfs,
+}
+impl LevelUnit {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Lufs => "lufs",
+            Self::Dbfs => "dbfs",
+        }
+    }
+    pub fn parse(value: &str) -> Result<Self, InvalidLevel> {
+        match value {
+            "lufs" => Ok(Self::Lufs),
+            "dbfs" => Ok(Self::Dbfs),
+            _ => Err(InvalidLevel("level unit must be lufs or dbfs (RMS)".into())),
+        }
+    }
+    pub fn default_target(self) -> f64 {
+        match self {
+            Self::Lufs => -14.0,
+            Self::Dbfs => -20.0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LevelSettings {
     pub enabled: bool,
-    /// Mono K-weighted momentary loudness target in LUFS.
+    pub unit: LevelUnit,
+    /// Target in LUFS or RMS dBFS, as selected by unit.
     pub target_db: f64,
     pub max_gain_db: f64,
     pub floor_db: f64,
@@ -43,6 +71,7 @@ impl Default for LevelSettings {
     fn default() -> Self {
         Self {
             enabled: false,
+            unit: LevelUnit::Lufs,
             target_db: -14.0,
             max_gain_db: 9.0,
             floor_db: -50.0,
@@ -118,7 +147,7 @@ impl LevelSettings {
         Ok(AutoLevel {
             settings: self,
             power: 0.0,
-            loudness: MomentaryLoudness::new(),
+            loudness: (self.unit == LevelUnit::Lufs).then(MomentaryLoudness::new),
             loudness_warmup_frames: 0,
             below_floor_frames: 0,
             peak: 0.0,
@@ -211,7 +240,7 @@ impl MomentaryLoudness {
 pub struct AutoLevel {
     settings: LevelSettings,
     power: f64,
-    loudness: MomentaryLoudness,
+    loudness: Option<MomentaryLoudness>,
     loudness_warmup_frames: usize,
     below_floor_frames: usize,
     peak: f64,
@@ -238,28 +267,35 @@ impl AutoLevel {
             };
             self.power += (input * input - self.power) * self.rms_rate;
             let rms_db = db(self.power.sqrt());
-            let input_lufs = self.loudness.process(input);
             let above_floor = db(input.abs()) > self.settings.floor_db;
-            if above_floor {
-                self.below_floor_frames = 0;
-            } else {
-                self.below_floor_frames = (self.below_floor_frames + 1).min(LOUDNESS_WINDOW_FRAMES);
-            }
-            // Start a full detector window at the first active sample. After a
-            // window of silence/low noise, hold the existing gain until refilled.
-            // Count zero crossings too; they are part of the active waveform.
-            if self.below_floor_frames == LOUDNESS_WINDOW_FRAMES {
-                self.loudness_warmup_frames = 0;
-            } else if above_floor || self.loudness_warmup_frames > 0 {
-                self.loudness_warmup_frames =
-                    (self.loudness_warmup_frames + 1).min(LOUDNESS_WINDOW_FRAMES);
-            }
-            if self.loudness_warmup_frames == LOUDNESS_WINDOW_FRAMES
-                && rms_db > self.settings.floor_db
-                && above_floor
-            {
-                // Compensate compressor attenuation so the target describes its output.
-                let target = (self.settings.target_db - input_lufs + self.compression_db)
+            let (measured_db, ready, compression_compensation) = match &mut self.loudness {
+                Some(loudness) => {
+                    let input_lufs = loudness.process(input);
+                    if above_floor {
+                        self.below_floor_frames = 0;
+                    } else {
+                        self.below_floor_frames =
+                            (self.below_floor_frames + 1).min(LOUDNESS_WINDOW_FRAMES);
+                    }
+                    // Count the full waveform, including zero crossings. Hold gain
+                    // until the window refills after startup or sustained low input.
+                    if self.below_floor_frames == LOUDNESS_WINDOW_FRAMES {
+                        self.loudness_warmup_frames = 0;
+                    } else if above_floor || self.loudness_warmup_frames > 0 {
+                        self.loudness_warmup_frames =
+                            (self.loudness_warmup_frames + 1).min(LOUDNESS_WINDOW_FRAMES);
+                    }
+                    (
+                        input_lufs,
+                        self.loudness_warmup_frames == LOUDNESS_WINDOW_FRAMES,
+                        self.compression_db,
+                    )
+                }
+                // Preserve the original pre-compressor RMS leveling behavior.
+                None => (rms_db, true, 0.0),
+            };
+            if ready && rms_db > self.settings.floor_db && above_floor {
+                let target = (self.settings.target_db - measured_db + compression_compensation)
                     .clamp(-18.0, self.settings.max_gain_db);
                 self.level_gain_db += (target - self.level_gain_db) * self.level_rate;
             }
@@ -375,6 +411,45 @@ mod tests {
                 dsp.process_in_place(&mut resumed[warmup..]);
                 assert!(dsp.level_gain_db < -3.0);
             }
+        }
+    }
+    #[test]
+    fn dbfs_mode_levels_unweighted_rms_without_lufs_warmup() {
+        for frequency in [100.0, 10000.0] {
+            let mut dsp = LevelSettings {
+                unit: LevelUnit::Dbfs,
+                target_db: -20.0,
+                response_ms: 100.0,
+                ratio: 1.0,
+                ..active()
+            }
+            .build()
+            .unwrap();
+            assert!(dsp.loudness.is_none());
+            let mut samples: Vec<f32> = (0..RATE * 3)
+                .map(|i| {
+                    (0.15 * (std::f64::consts::TAU * frequency * i as f64 / RATE as f64).sin())
+                        as f32
+                })
+                .collect();
+            let mut chunked = samples.clone();
+            let mut other = LevelSettings {
+                unit: LevelUnit::Dbfs,
+                ..dsp.settings
+            }
+            .build()
+            .unwrap();
+            for block in chunked.chunks_mut(63) {
+                other.process_in_place(block);
+            }
+            dsp.process_in_place(&mut samples[..RATE as usize / 10]);
+            assert!(
+                dsp.level_gain_db.abs() > 1e-4,
+                "RMS leveling updates before 400 ms"
+            );
+            dsp.process_in_place(&mut samples[RATE as usize / 10..]);
+            assert_eq!(samples, chunked);
+            assert!((db(rms(&samples[RATE as usize * 2..])) + 20.0).abs() < 0.2);
         }
     }
     #[test]
