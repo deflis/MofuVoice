@@ -71,10 +71,10 @@ export function DeviceSettings() {
         <legend>チャンネル</legend>
         <div className="routing-choices">
           <button type="button" aria-pressed={singleOutput} onClick={() => updateRouting(1, [1])}>
-            入力1 → 出力1
+            モノラル（1 → 1）
           </button>
           <button type="button" aria-pressed={dualOutput} onClick={() => updateRouting(1, [1, 2])}>
-            入力1 → 出力1・2
+            ステレオ（1 → 1, 2）
           </button>
         </div>
         {!singleOutput && !dualOutput && (

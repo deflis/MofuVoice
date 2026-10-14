@@ -4,7 +4,7 @@ export function RumbleSettings() {
   const { rumbleFilter, update } = useVoiceSettings();
   return (
     <section>
-      <h2>低い唸りを減らす</h2>
+      <h2>低い唸りを減らす（低域ノイズ除去）</h2>
       <label className="check">
         <input
           type="checkbox"

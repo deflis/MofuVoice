@@ -46,7 +46,7 @@ export function EqSettings() {
   );
   return (
     <section aria-labelledby={`${id}-title`} className="eq-section">
-      <h2 id={`${id}-title`}>声の音色</h2>
+      <h2 id={`${id}-title`}>声の音色（EQ）</h2>
       <label className="check">
         <input
           type="checkbox"

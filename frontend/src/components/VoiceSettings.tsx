@@ -7,10 +7,14 @@ export function VoiceSettings() {
   return (
     <section>
       <h2>声の変換</h2>
-      <SemitonesInput label="声の高さ" value={pitch} onChange={(value) => update("pitch", value)} />
+      <SemitonesInput
+        label="声の高さ（ピッチ）"
+        value={pitch}
+        onChange={(value) => update("pitch", value)}
+      />
       <fieldset className="settings" disabled={!preserveFormants}>
         <SemitonesInput
-          label="声の響き"
+          label="声の響き（フォルマント）"
           lowerLabel="太く"
           upperLabel="明るく"
           value={formantShift}
