@@ -1,6 +1,10 @@
 //! Soft downward-expander noise gate with optional noise-floor threshold tracking.
 //! Zero algorithmic delay: no lookahead. Hold time is internal and not exposed.
-use crate::pitch::Sample;
+use crate::dsp::{
+    envelope::decay,
+    gain::{amplitude, amplitude_db},
+    Sample,
+};
 use crate::RATE;
 use std::{error::Error, fmt};
 
@@ -78,18 +82,6 @@ impl GateSettings {
     }
 }
 
-fn coef(ms: f64) -> f64 {
-    (-1.0 / (ms * 0.001 * RATE as f64)).exp()
-}
-
-fn to_db(level: f64) -> f64 {
-    20.0 * level.max(1e-10).log10()
-}
-
-fn from_db(db: f64) -> f64 {
-    10.0_f64.powf(db / 20.0)
-}
-
 /// Downward expansion gain in dB. Attack/release smoothing softens the open/close edge.
 #[cfg(test)]
 fn expansion_gain_db(level_db: f64, threshold_db: f64) -> f64 {
@@ -142,21 +134,21 @@ impl NoiseGate {
         Ok(Self {
             enabled,
             threshold,
-            attack: 1.0 - coef(attack_ms),
-            release: 1.0 - coef(release_ms),
+            attack: 1.0 - decay(attack_ms, RATE as f64),
+            release: 1.0 - decay(release_ms, RATE as f64),
             hold_samples: (HOLD_MS * 0.001 * RATE as f64).round() as u64,
-            detect_attack: 1.0 - coef(DETECT_ATTACK_MS),
-            detect_release: 1.0 - coef(DETECT_RELEASE_MS),
-            floor_fall: 1.0 - coef(FLOOR_FALL_MS),
-            floor_rise: 1.0 - coef(FLOOR_RISE_MS),
+            detect_attack: 1.0 - decay(DETECT_ATTACK_MS, RATE as f64),
+            detect_release: 1.0 - decay(DETECT_RELEASE_MS, RATE as f64),
+            floor_fall: 1.0 - decay(FLOOR_FALL_MS, RATE as f64),
+            floor_rise: 1.0 - decay(FLOOR_RISE_MS, RATE as f64),
             envelope: 0.0,
             gain: 1.0,
             hold_remaining: 0,
             noise_floor_db: -60.0,
             floor_ceiling_db: -48.0,
-            floor_ceiling: from_db(-48.0),
+            floor_ceiling: amplitude(-48.0),
             cached_threshold_db: threshold_db,
-            inverse_threshold: from_db(-threshold_db),
+            inverse_threshold: amplitude(-threshold_db),
         })
     }
 
@@ -196,7 +188,7 @@ impl NoiseGate {
         let limit = self.noise_floor_db + AUTO_MARGIN_DB;
         if limit > self.floor_ceiling_db || limit < self.floor_ceiling_db - 6.0 {
             self.floor_ceiling_db = (limit / 6.0).ceil() * 6.0;
-            self.floor_ceiling = from_db(self.floor_ceiling_db);
+            self.floor_ceiling = amplitude(self.floor_ceiling_db);
         }
     }
 
@@ -211,12 +203,12 @@ impl NoiseGate {
         }
         if matches!(self.threshold, GateThreshold::Auto) {
             if self.envelope <= self.floor_ceiling {
-                self.update_noise_floor(to_db(self.envelope));
+                self.update_noise_floor(amplitude_db(self.envelope, 1e-10));
             }
             let threshold_db = self.threshold_db();
             if threshold_db != self.cached_threshold_db {
                 self.cached_threshold_db = threshold_db;
-                self.inverse_threshold = from_db(-threshold_db);
+                self.inverse_threshold = amplitude(-threshold_db);
             }
         }
         // 10^(3 * (20 log10(envelope) - threshold_db) / 20)
@@ -250,10 +242,10 @@ impl NoiseGate {
         } else {
             self.envelope += (level - self.envelope) * self.detect_release;
         }
-        let level_db = to_db(self.envelope);
+        let level_db = amplitude_db(self.envelope, 1e-10);
         self.update_noise_floor(level_db);
         let threshold_db = self.threshold_db();
-        let mut target = from_db(expansion_gain_db(level_db, threshold_db));
+        let mut target = amplitude(expansion_gain_db(level_db, threshold_db));
         if target >= 0.999 {
             self.hold_remaining = self.hold_samples;
             target = 1.0;
@@ -325,7 +317,8 @@ mod tests {
                             }
                         }
                         3 | 4 => {
-                            from_db(-110.0 + (i % 40_000) as f64 * 0.003) * (i as f64 * 0.031).sin()
+                            amplitude(-110.0 + (i % 40_000) as f64 * 0.003)
+                                * (i as f64 * 0.031).sin()
                         }
                         _ => 0.0,
                     };
@@ -347,7 +340,7 @@ mod tests {
     fn active_formats_and_irregular_blocks_preserve_state() {
         let input: Vec<f32> = (0..48_000)
             .map(|i| {
-                (from_db(-80.0 + (i % 24_000) as f64 / 400.0) * (i as f64 * 0.07).sin()) as f32
+                (amplitude(-80.0 + (i % 24_000) as f64 / 400.0) * (i as f64 * 0.07).sin()) as f32
             })
             .collect();
         for threshold in [GateThreshold::Db(-40.0), GateThreshold::Auto] {
@@ -504,7 +497,7 @@ mod tests {
     fn auto_suppresses_repeated_quiet_clicks_after_silence() {
         let mut gate = NoiseGate::new(true, GateThreshold::Auto, 5.0, 80.0).unwrap();
         gate.process_in_place(&mut vec![0.0_f32; RATE as usize * 2]);
-        let amplitude = from_db(-52.0) as f32;
+        let amplitude = amplitude(-52.0) as f32;
         let mut clicks = vec![0.0_f32; RATE as usize];
         for start in (0..clicks.len()).step_by(RATE as usize / 10) {
             // Three millisecond alternating transients, ten keystrokes per second.
@@ -523,34 +516,37 @@ mod tests {
     fn auto_opens_for_quiet_voice_after_silence_and_closes_after_speech() {
         let mut gate = NoiseGate::new(true, GateThreshold::Auto, 5.0, 80.0).unwrap();
         gate.process_in_place(&mut vec![0.0_f32; RATE as usize * 2]);
-        let amplitude = from_db(-34.0) as f32;
+        let tone_amplitude = amplitude(-34.0) as f32;
         let mut voice: Vec<f32> = (0..RATE as usize / 2)
             .map(|i| {
-                (std::f64::consts::TAU * 180.0 * i as f64 / RATE as f64).sin() as f32 * amplitude
+                (std::f64::consts::TAU * 180.0 * i as f64 / RATE as f64).sin() as f32
+                    * tone_amplitude
             })
             .collect();
         let original = voice.clone();
         gate.process_in_place(&mut voice);
         // Gain attack must open promptly without buffering the speech onset.
         let onset = (0..960).find(|&i| {
-            original[i].abs() > amplitude * 0.5 && voice[i].abs() > original[i].abs() * 0.8
+            original[i].abs() > tone_amplitude * 0.5 && voice[i].abs() > original[i].abs() * 0.8
         });
         assert!(onset.is_some(), "voice must open within 20 ms");
         for (input, output) in original[2400..].iter().zip(&voice[2400..]) {
-            assert!((input - output).abs() < amplitude * 0.001);
+            assert!((input - output).abs() < tone_amplitude * 0.001);
         }
         gate.process_in_place(&mut vec![0.0_f32; RATE as usize]);
-        let mut noise = vec![from_db(-52.0) as f32; RATE as usize / 2];
+        let mut noise = vec![amplitude(-52.0) as f32; RATE as usize / 2];
         gate.process_in_place(&mut noise);
-        assert!(noise.iter().all(|x| x.abs() < from_db(-52.0) as f32 * 0.1));
+        assert!(noise
+            .iter()
+            .all(|x| x.abs() < amplitude(-52.0) as f32 * 0.1));
     }
 
     #[test]
     fn manual_threshold_can_still_be_lower_than_auto_minimum() {
         let mut gate = NoiseGate::new(true, GateThreshold::Db(-80.0), 5.0, 80.0).unwrap();
-        let mut quiet = vec![from_db(-65.0) as f32; RATE as usize / 2];
+        let mut quiet = vec![amplitude(-65.0) as f32; RATE as usize / 2];
         gate.process_in_place(&mut quiet);
         assert_eq!(gate.threshold_db(), -80.0);
-        assert!(quiet.last().unwrap().abs() > from_db(-65.0) as f32 * 0.99);
+        assert!(quiet.last().unwrap().abs() > amplitude(-65.0) as f32 * 0.99);
     }
 }

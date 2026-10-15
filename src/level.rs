@@ -1,6 +1,13 @@
 //! Causal RMS leveling, soft-knee peak compression and a zero-lookahead peak guard.
 //! Envelope response times change gain, not sample positions. No audio is buffered.
-use crate::{pitch::Sample, RATE};
+use crate::{
+    dsp::{
+        envelope::update_rate,
+        gain::{amplitude, amplitude_db},
+        Sample,
+    },
+    RATE,
+};
 use std::{error::Error, fmt};
 
 pub const FLAGS: [&str; 8] = [
@@ -120,21 +127,12 @@ impl LevelSettings {
             level_gain_db: 0.0,
             compression_db: 0.0,
             guard_gain: 1.0,
-            rms_rate: rate(30.0),
-            level_rate: rate(self.response_ms),
-            attack_rate: rate(self.attack_ms),
-            release_rate: rate(self.release_ms),
+            rms_rate: update_rate(30.0, RATE as f64),
+            level_rate: update_rate(self.response_ms, RATE as f64),
+            attack_rate: update_rate(self.attack_ms, RATE as f64),
+            release_rate: update_rate(self.release_ms, RATE as f64),
         })
     }
-}
-fn rate(ms: f64) -> f64 {
-    -(-1.0 / (ms * 0.001 * RATE as f64)).exp_m1()
-}
-fn amplitude(db: f64) -> f64 {
-    10.0_f64.powf(db / 20.0)
-}
-fn db(value: f64) -> f64 {
-    20.0 * value.max(1e-12).log10()
 }
 fn reduction(level: f64, threshold: f64, ratio: f64) -> f64 {
     let over = level - threshold;
@@ -168,7 +166,7 @@ impl AutoLevel {
             0.0
         } else {
             reduction(
-                db(self.peak),
+                amplitude_db(self.peak, 1e-12),
                 self.settings.threshold_db,
                 self.settings.ratio,
             )
@@ -187,8 +185,10 @@ impl AutoLevel {
                 0.0
             };
             self.power += (input * input - self.power) * self.rms_rate;
-            let rms_db = db(self.power.sqrt());
-            if rms_db > self.settings.floor_db && db(input.abs()) > self.settings.floor_db {
+            let rms_db = amplitude_db(self.power.sqrt(), 1e-12);
+            if rms_db > self.settings.floor_db
+                && amplitude_db(input.abs(), 1e-12) > self.settings.floor_db
+            {
                 let target =
                     (self.settings.target_db - rms_db).clamp(-18.0, self.settings.max_gain_db);
                 self.level_gain_db += (target - self.level_gain_db) * self.level_rate;
@@ -237,8 +237,10 @@ mod tests {
                     0.0
                 };
                 self.power += (input * input - self.power) * self.rms_rate;
-                let rms_db = db(self.power.sqrt());
-                if rms_db > self.settings.floor_db && db(input.abs()) > self.settings.floor_db {
+                let rms_db = amplitude_db(self.power.sqrt(), 1e-12);
+                if rms_db > self.settings.floor_db
+                    && amplitude_db(input.abs(), 1e-12) > self.settings.floor_db
+                {
                     let target =
                         (self.settings.target_db - rms_db).clamp(-18.0, self.settings.max_gain_db);
                     self.level_gain_db += (target - self.level_gain_db) * self.level_rate;
@@ -247,7 +249,7 @@ mod tests {
                 self.peak += (0.0 - self.peak) * self.rms_rate;
                 self.peak = self.peak.max(leveled.abs());
                 let target = reduction(
-                    db(self.peak),
+                    amplitude_db(self.peak, 1e-12),
                     self.settings.threshold_db,
                     self.settings.ratio,
                 );
@@ -289,7 +291,7 @@ mod tests {
                 peaks.extend([0.0, 1e-300]);
                 for peak in peaks {
                     dsp.peak = peak;
-                    let expected = reduction(db(peak), threshold_db, ratio);
+                    let expected = reduction(amplitude_db(peak, 1e-12), threshold_db, ratio);
                     assert!(
                         (dsp.compression_target() - expected).abs() < 1e-25,
                         "threshold={threshold_db}, ratio={ratio}, peak={peak}"
@@ -428,7 +430,11 @@ mod tests {
         let mut quiet = tone(0.05, 12);
         dsp.process_in_place(&mut quiet);
         let last = &quiet[quiet.len() - RATE as usize..];
-        assert!((db(rms(last)) + 20.0).abs() < 1.5, "{}", db(rms(last)));
+        assert!(
+            (amplitude_db(rms(last), 1e-12) + 20.0).abs() < 1.5,
+            "{}",
+            amplitude_db(rms(last), 1e-12)
+        );
         let gain = dsp.level_gain_db;
         let mut silence = vec![0.0_f32; RATE as usize * 5];
         dsp.process_in_place(&mut silence);

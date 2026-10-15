@@ -1,8 +1,9 @@
 //! Audio-API-independent mono DSP. Backends own buffer layout and callback lifetime.
 use crate::{
+    dsp::Sample,
     gate::{GateSettings, NoiseGate},
     level::{AutoLevel, LevelSettings},
-    pitch::{PitchSettings, PitchShifter, Sample},
+    pitch::{PitchSettings, PitchShifter},
 };
 use std::error::Error;
 

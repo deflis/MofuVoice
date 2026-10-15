@@ -3,7 +3,8 @@ use crate::{
     audio::{AudioProcessor, DspSettings},
     audio_queue::{self, Consumer, Producer},
     backend::{AudioBackend, AudioStream, ChannelRouting, Result},
-    pitch::{Sample, LATENCY},
+    dsp::Sample,
+    pitch::LATENCY,
     RATE,
 };
 use cpal::{

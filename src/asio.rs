@@ -1,9 +1,5 @@
 //! Direct ASIO buffer callbacks. asio-sys is used only to load/unload the driver.
-use crate::{
-    audio::DspChain,
-    pitch::{Sample, LATENCY},
-    RATE,
-};
+use crate::{audio::DspChain, dsp::Sample, pitch::LATENCY, RATE};
 use asio_sys::{bindings::asio_import as ffi, Driver};
 use std::{
     cell::UnsafeCell,

@@ -9,6 +9,7 @@ pub mod cli;
 #[cfg(feature = "cpal-backend")]
 mod cpal_backend;
 pub mod deesser;
+pub mod dsp;
 pub mod eq;
 pub mod gate;
 #[cfg(feature = "desktop")]

@@ -1,7 +1,14 @@
 //! Causal split-band de-esser for the 48 kHz mono voice pipeline.
 //! First-order complementary bands sum to the original signal at unity gain.
 //! No lookahead, allocation, or buffered sample delay. Not phoneme recognition.
-use crate::{pitch::Sample, RATE};
+use crate::{
+    dsp::{
+        envelope::decay,
+        gain::{amplitude, power},
+        Sample,
+    },
+    RATE,
+};
 
 pub const FLAGS: [&str; 5] = [
     "--deesser-frequency",
@@ -106,17 +113,16 @@ impl DeEsser {
             enabled,
             parameters,
             coefficient: k / (1.0 + k),
-            threshold_power: 10.0_f64.powf(parameters.threshold_db / 10.0),
-            saturated_power: 10.0_f64
-                .powf((parameters.threshold_db + parameters.range_db / 0.75) / 10.0),
-            minimum_gain: 10.0_f64.powf(-parameters.range_db / 20.0),
+            threshold_power: power(parameters.threshold_db),
+            saturated_power: power(parameters.threshold_db + parameters.range_db / 0.75),
+            minimum_gain: amplitude(-parameters.range_db),
             previous_input: 0.0,
             low: 0.0,
             high_power: 0.0,
             full_power: 0.0,
             detector: (-1.0 / (0.002 * RATE as f64)).exp(),
-            attack: (-1.0 / (parameters.attack_ms * 0.001 * RATE as f64)).exp(),
-            release: (-1.0 / (parameters.release_ms * 0.001 * RATE as f64)).exp(),
+            attack: decay(parameters.attack_ms, RATE as f64),
+            release: decay(parameters.release_ms, RATE as f64),
             gain: 1.0,
         })
     }
