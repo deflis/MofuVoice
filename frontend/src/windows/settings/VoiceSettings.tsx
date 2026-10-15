@@ -1,4 +1,3 @@
-import { DetailsPopup } from "./DetailsPopup";
 import { useVoiceSettings } from "./hooks";
 import { SemitonesInput } from "./SemitonesInput";
 
@@ -8,7 +7,6 @@ export function VoiceSettings() {
     <section>
       <h2>声の変換</h2>
       <SemitonesInput
-        precise={false}
         lowerLabel="低く"
         upperLabel="高く"
         label="声の高さ（ピッチ）"
@@ -17,7 +15,6 @@ export function VoiceSettings() {
       />
       <fieldset className="settings" disabled={!preserveFormants}>
         <SemitonesInput
-          precise={false}
           label="声の響き（フォルマント）"
           lowerLabel="太く"
           upperLabel="明るく"
@@ -34,36 +31,20 @@ export function VoiceSettings() {
       >
         元の声に戻す
       </button>
-      <DetailsPopup title="声の変換" buttonLabel="詳細設定">
-        <SemitonesInput
-          precise
-          label="声の高さ（ピッチ）"
-          value={pitch}
-          onChange={(value) => update("pitch", value)}
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={preserveFormants}
+          onChange={(event) => {
+            update("preserveFormants", event.target.checked);
+            if (!event.target.checked) {
+              update("formantShift", "0");
+            }
+          }}
         />
-        <fieldset className="settings" disabled={!preserveFormants}>
-          <SemitonesInput
-            precise
-            label="声の響き（フォルマント）"
-            value={formantShift}
-            onChange={(value) => update("formantShift", value)}
-          />
-        </fieldset>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={preserveFormants}
-            onChange={(event) => {
-              update("preserveFormants", event.target.checked);
-              if (!event.target.checked) {
-                update("formantShift", "0");
-              }
-            }}
-          />
-          声の響きを独立して調整する
-        </label>
-        <p>オフでは高さの変更に合わせて響きも変わります。響きの調整値は0に戻ります。</p>
-      </DetailsPopup>
+        声の響きを独立して調整する
+      </label>
+      <p>オフでは高さの変更に合わせて響きも変わります。響きの調整値は0に戻ります。</p>
     </section>
   );
 }
