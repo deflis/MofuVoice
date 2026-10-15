@@ -1,13 +1,16 @@
-import { openSettings, type SettingsSection } from "../../settingsNavigation";
-import { openLog } from "../../logNavigation";
-import { useSettingsStore } from "../../settingsStore";
-import { useAudioStore } from "../../audioStore";
-import { useAudioControls } from "../../audioHooks";
-import { AudioControls } from "../../components/AudioControls";
-import { AppHeader } from "../../components/AppHeader";
+import type { SettingsSection } from "../settings/navigation";
+import { useMainStore } from "./store";
+import { canOpenSpectrum, setupGuidance } from "./selectors";
+import { AudioControls } from "./AudioControls";
+import { AppHeader } from "./AppHeader";
 
 export function Home() {
-  const { spectrumDisabled, spectrum } = useAudioControls();
+  const machine = useMainStore((state) => state.machine);
+  const spectrum = useMainStore((state) => state.spectrum);
+  const openLog = useMainStore((state) => state.openLog);
+  if (!("view" in machine)) {
+    throw new Error("メイン画面の表示状態が不正です。");
+  }
   return (
     <div className="home-layout">
       <AppHeader />
@@ -16,21 +19,13 @@ export function Home() {
         <OpenSettingsButton className="home-primary-action" section="voice">
           声を調整する
         </OpenSettingsButton>
-        <button
-          type="button"
-          className="home-secondary-action"
-          onClick={() => {
-            void openLog().catch((error: unknown) =>
-              useAudioStore.setState({ error: String(error) }),
-            );
-          }}
-        >
+        <button type="button" className="home-secondary-action" onClick={() => void openLog()}>
           ログ
         </button>
         <button
           type="button"
           className="home-secondary-action"
-          disabled={spectrumDisabled}
+          disabled={!canOpenSpectrum(machine)}
           onClick={() => void spectrum()}
         >
           スペアナ
@@ -53,42 +48,21 @@ function OpenSettingsButton({
   children: string;
   className: string;
 }) {
+  const openSettings = useMainStore((state) => state.openSettings);
   return (
-    <button
-      type="button"
-      className={className}
-      onClick={() => {
-        void openSettings(section).catch((error: unknown) =>
-          useAudioStore.setState({ error: String(error) }),
-        );
-      }}
-    >
+    <button type="button" className={className} onClick={() => void openSettings(section)}>
       {children}
     </button>
   );
 }
 
 function DeviceSetupGuidance() {
-  const reason = useSettingsStore((state) => {
-    const settings = state.settings;
-    if (!settings || state.switchingBackend) {
+  const reason = useMainStore((state) => {
+    const { machine } = state;
+    if (!("view" in machine)) {
       return "";
     }
-    if (!state.audioAvailable) {
-      return "使える音声機器が見つかりません。接続と設定を確認してください。";
-    }
-    if (state.resolvedBackend === "asio" && !settings.device) {
-      return "最初に、入力・出力デバイスを設定してください。";
-    }
-    if (
-      (settings.device && !state.devices.includes(settings.device)) ||
-      (state.resolvedBackend === "cpal" &&
-        settings.outputDevice &&
-        !state.outputDevices.includes(settings.outputDevice))
-    ) {
-      return "前回使った音声機器が見つかりません。入力・出力デバイスを確認してください。";
-    }
-    return "";
+    return setupGuidance(machine.view);
   });
   if (!reason) {
     return null;

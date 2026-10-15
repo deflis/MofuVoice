@@ -1,7 +1,7 @@
 import { DetailsPopup } from "./DetailsPopup";
 import { useId } from "react";
-import { useVoiceSettings } from "../settingsHooks";
-import type { DeEsserParameters } from "../types";
+import { useVoiceSettings } from "./hooks";
+import type { DeEsserParameters } from "../../types";
 
 const defaults: DeEsserParameters = {
   frequencyHz: "5000",

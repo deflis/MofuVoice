@@ -1,10 +1,6 @@
-import {
-  connectSettingsNavigation,
-  readSettingsSection,
-  type SettingsSection,
-} from "../settingsNavigation";
+import { connectSettingsNavigation, readSettingsSection, type SettingsSection } from "./navigation";
 import { useEffect, useState } from "react";
-import { useSettingsLocked } from "../settingsHooks";
+import { useSettingsLocked } from "./hooks";
 import { DeviceSettings } from "./DeviceSettings";
 import { DeEsserSettings } from "./DeEsserSettings";
 import { VoiceSettings } from "./VoiceSettings";

@@ -45,8 +45,24 @@ export type Settings = {
   gateAttackMs: string;
   gateReleaseMs: string;
 };
+export type MainSetup = {
+  audioAvailable: boolean;
+  resolvedBackend: string;
+  inputConfigured: boolean;
+  outputConfigured: boolean;
+  rememberedDeviceMissing: boolean;
+};
+export type MainView = {
+  canStart: boolean;
+  spectrumAvailable: boolean;
+  setup: MainSetup;
+};
+export type AudioPhase = {
+  phase: string;
+  error: string | null;
+};
 export type AudioInfo = {
-  phase: "ready" | "opening" | "running" | "stopped" | "inspected" | "error";
+  phase: string;
   error: string | null;
   device: string | null;
   outputDevice: string | null;
@@ -83,7 +99,6 @@ export type AudioLog = {
     maxOutputCallbackUs: number | null;
   } | null;
 };
-export type Snapshot = { busy: boolean; info: Partial<AudioInfo> };
 export type DeviceChoices = {
   devices: string[];
   outputDevices: string[];
@@ -91,9 +106,9 @@ export type DeviceChoices = {
   deviceError: string;
   resolvedBackend: string;
 };
-export type Bootstrap = DeviceChoices & {
+export type SettingsView = DeviceChoices & {
   settings: Settings;
   levelDefaults: LevelSettings;
   backends: string[];
-  spectrumAvailable: boolean;
+  audioBusy: boolean;
 };

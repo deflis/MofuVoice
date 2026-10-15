@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-const { bootstrap, settingsStore, commands } = await import("./testing/tauriMocks.mjs");
+const { settingsView, settingsStore, commands } = await import("./testing/tauriMocks.mjs");
 
 test("EQ mode changes preserve bands and persist through save", async () => {
-  settingsStore.setState(bootstrap);
+  settingsStore.setState({ ...settingsStore.getState(), ...settingsView, status: "ready" });
   settingsStore.getState().updateEqBand(1, "frequency", "2200");
   settingsStore.getState().updateEqBand(1, "gainDb", "3.5");
   const original = settingsStore.getState().settings.eq;
@@ -19,7 +19,7 @@ test("EQ mode changes preserve bands and persist through save", async () => {
 });
 
 test("EQ changes and reset leave voice and level settings alone", () => {
-  settingsStore.setState(bootstrap);
+  settingsStore.setState({ ...settingsStore.getState(), ...settingsView, status: "ready" });
   const original = settingsStore.getState().settings;
   settingsStore
     .getState()

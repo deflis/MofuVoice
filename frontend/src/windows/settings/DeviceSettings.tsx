@@ -1,6 +1,6 @@
 import { DetailsPopup } from "./DetailsPopup";
 import { useState } from "react";
-import { useDeviceSettings } from "../settingsHooks";
+import { useDeviceSettings } from "./hooks";
 
 export function DeviceSettings() {
   const [extraChannel, setExtraChannel] = useState("");

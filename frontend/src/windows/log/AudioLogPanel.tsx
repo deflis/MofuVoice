@@ -1,7 +1,8 @@
-import { useAudioLog } from "../useAudioLog";
+import { useLogStore } from "./store";
 
 export function AudioLogPanel() {
-  const { log, error } = useAudioLog();
+  const log = useLogStore((state) => state.log);
+  const error = useLogStore((state) => state.error);
   const metrics = log?.telemetry;
   const elapsedSeconds = log?.elapsedSeconds;
   return (

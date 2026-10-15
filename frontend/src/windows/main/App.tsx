@@ -1,36 +1,36 @@
-import { useEffect, useReducer } from "react";
-import { connectMain } from "./connect";
-import { useSettingsReady, useSettingsLoadFailed } from "../../settingsHooks";
-import { Notifications } from "../../components/Notifications";
+import { useEffect } from "react";
+import { useMainStore } from "./store";
+import { Notifications } from "./Notifications";
 import { Home } from "./Home";
 
-function MainConnection() {
-  useEffect(() => connectMain().disconnect, []);
-  return null;
-}
-
 export function MainApp() {
-  const ready = useSettingsReady();
-  const loadFailed = useSettingsLoadFailed();
-  const [connectionAttempt, retryConnection] = useReducer((attempt: number) => attempt + 1, 0);
+  const status = useMainStore((state) => state.machine.status);
+  const retry = useMainStore((state) => state.retry);
+  useEffect(() => useMainStore.getState().mount(), []);
+
+  let body;
+  if (status === "bootstrapping") {
+    body = (
+      <div>
+        <p>設定を読み込んでいます…</p>
+      </div>
+    );
+  } else if (status === "bootstrapFailed") {
+    body = (
+      <div>
+        <button type="button" onClick={() => retry()}>
+          設定の読み込みを再試行
+        </button>
+      </div>
+    );
+  } else {
+    body = <Home />;
+  }
 
   return (
     <main>
-      <MainConnection key={connectionAttempt} />
       <Notifications />
-      {!ready ? (
-        <div>
-          {loadFailed ? (
-            <button type="button" onClick={retryConnection}>
-              設定の読み込みを再試行
-            </button>
-          ) : (
-            <p>設定を読み込んでいます…</p>
-          )}
-        </div>
-      ) : (
-        <Home />
-      )}
+      {body}
     </main>
   );
 }

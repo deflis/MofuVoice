@@ -1,5 +1,5 @@
 import { DetailsPopup } from "./DetailsPopup";
-import { useVoiceSettings } from "../settingsHooks";
+import { useVoiceSettings } from "./hooks";
 import { SemitonesInput } from "./SemitonesInput";
 
 export function VoiceSettings() {

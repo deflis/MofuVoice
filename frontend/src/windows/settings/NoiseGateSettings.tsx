@@ -1,5 +1,5 @@
 import { DetailsPopup } from "./DetailsPopup";
-import { useNoiseGateSettings } from "../settingsHooks";
+import { useNoiseGateSettings } from "./hooks";
 
 export function NoiseGateSettings() {
   const { gate, gateThresholdMode, gateThresholdDb, gateAttackMs, gateReleaseMs, update } =

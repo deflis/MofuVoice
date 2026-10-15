@@ -1,21 +1,14 @@
 import { useShallow } from "zustand/react/shallow";
-import { useAudioStore } from "./audioStore";
-import { requireSettings, useSettingsStore } from "./settingsStore";
-
-export function useSettingsReady() {
-  return useSettingsStore((state) => state.settings !== undefined);
-}
-
-export function useSettingsLoadFailed() {
-  return useSettingsStore((state) => state.loadFailed);
-}
+import { requireSettings, useSettingsStore } from "./store";
 
 export function useSettingsLocked() {
-  const audioLocked = useAudioStore(
-    (state) => state.pending || state.closing || state.snapshot.busy,
+  return useSettingsStore(
+    (state) =>
+      state.audioBusy ||
+      state.status === "saving" ||
+      state.status === "switchingBackend" ||
+      state.status === "closing",
   );
-  const saving = useSettingsStore((state) => state.saving || state.switchingBackend);
-  return audioLocked || saving;
 }
 
 export function useDeviceSettings() {
@@ -87,11 +80,12 @@ export function useAutoLevelSettings() {
 }
 
 export function useSaveSettings() {
-  const operating = useAudioStore((state) => state.pending || state.closing);
-  const { saving, save } = useSettingsStore(
-    useShallow((state) => ({ saving: state.saving || state.switchingBackend, save: state.save })),
+  return useSettingsStore(
+    useShallow((state) => ({
+      disabled: state.status !== "ready" || state.audioBusy,
+      save: state.save,
+    })),
   );
-  return { disabled: operating || saving, save };
 }
 
 export function useEqSettings() {

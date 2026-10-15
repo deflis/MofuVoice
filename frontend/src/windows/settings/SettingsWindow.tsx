@@ -1,9 +1,11 @@
 import { SettingsPanel } from "./SettingsPanel";
 import { SaveSettingsButton } from "./SaveSettingsButton";
-import { useAudioStore } from "../audioStore";
+import { useSettingsStore } from "./store";
 
 export function SettingsWindow() {
-  const busy = useAudioStore((state) => state.snapshot.busy || state.pending);
+  const busy = useSettingsStore(
+    (state) => state.audioBusy || state.status === "saving" || state.status === "switchingBackend",
+  );
   return (
     <div className="settings-window">
       <header>

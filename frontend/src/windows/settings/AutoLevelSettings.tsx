@@ -1,6 +1,6 @@
 import { DetailsPopup } from "./DetailsPopup";
-import type { LevelSettings } from "../settingsStore";
-import { useAutoLevelSettings } from "../settingsHooks";
+import type { LevelSettings } from "../../types";
+import { useAutoLevelSettings } from "./hooks";
 const levelFields: {
   key: Exclude<keyof LevelSettings, "enabled">;
   label: string;
