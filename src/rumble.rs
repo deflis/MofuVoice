@@ -12,8 +12,12 @@ pub struct RumbleFilter {
 
 impl RumbleFilter {
     pub fn new(enabled: bool) -> Self {
+        Self::with_sample_rate(enabled, RATE)
+    }
+    pub fn with_sample_rate(enabled: bool, rate: u32) -> Self {
+        assert!(crate::validate_sample_rate(rate).is_ok());
         // Bilinear transform with prewarping at 80 Hz; Q = 1/sqrt(2).
-        let k = (std::f64::consts::PI * 80.0 / RATE as f64).tan();
+        let k = (std::f64::consts::PI * 80.0 / rate as f64).tan();
         let norm = 1.0 / (1.0 + std::f64::consts::SQRT_2 * k + k * k);
         Self {
             enabled,

@@ -1,0 +1,60 @@
+import { DetailsPopup } from "./DetailsPopup";
+import { ChannelRoutingDetails } from "./ChannelRoutingSettings";
+import { useBackendSettings, useBufferSettings } from "./hooks";
+
+function BackendSettings() {
+  const { backend, backends, updateBackend } = useBackendSettings();
+  return (
+    <fieldset className="settings">
+      <legend>音声バックエンド</legend>
+      <div className="routing-choices">
+        {backends.map((available) => (
+          <button
+            key={available}
+            type="button"
+            aria-pressed={backend === available}
+            onClick={() => void updateBackend(available)}
+          >
+            {{ auto: "自動", cpal: "標準", asio: "ASIO" }[available] ?? available}
+          </button>
+        ))}
+      </div>
+      {!backends.includes(backend) && (
+        <p role="alert">現在の接続方式「{backend}」は利用できません。選び直してください。</p>
+      )}
+    </fieldset>
+  );
+}
+
+function BufferSettings() {
+  const { frames, update } = useBufferSettings();
+  return (
+    <>
+      <label>
+        バッファサイズ（サンプル）
+        <input
+          type="number"
+          min="1"
+          max="8192"
+          step="1"
+          required
+          value={frames}
+          onChange={(event) => update("frames", event.target.value)}
+        />
+      </label>
+      <p>
+        小さくすると遅延が減ります。音切れする場合は大きくしてください。デバイスによっては指定値が調整されます。
+      </p>
+    </>
+  );
+}
+
+export function DeviceAdvancedSettings() {
+  return (
+    <DetailsPopup title="音声デバイス" buttonLabel="プロ向け設定">
+      <BackendSettings />
+      <ChannelRoutingDetails />
+      <BufferSettings />
+    </DetailsPopup>
+  );
+}

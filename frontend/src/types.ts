@@ -32,6 +32,7 @@ export type Settings = {
   outputChannels: number[];
   backend: string;
   frames: string;
+  sampleRate: string;
   pitch: string;
   formantShift: string;
   preserveFormants: boolean;
@@ -114,3 +115,5 @@ export type SettingsView = DeviceChoices & {
   backends: string[];
   audioBusy: boolean;
 };
+
+export type DeviceSampleRates = { input: number[]; output: number[]; common: number[] };

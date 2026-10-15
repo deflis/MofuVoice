@@ -73,6 +73,17 @@ impl ChannelRouting {
     }
 }
 
+/// Rates supported by the selected devices among the engine's available choices.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "desktop", derive(serde::Serialize))]
+#[cfg_attr(feature = "desktop", serde(rename_all = "camelCase"))]
+pub struct DeviceSampleRates {
+    pub input: Vec<u32>,
+    pub output: Vec<u32>,
+    /// Requires a common sample format as well as the same rate.
+    pub common: Vec<u32>,
+}
+
 pub struct AudioInspection {
     pub configuration: AudioConfiguration,
     pub details: String,
@@ -104,11 +115,14 @@ pub trait AudioStream {
 }
 
 /// Implement native device discovery/configuration separately from shared DSP.
-/// Inspect validates the requested 48 kHz period without starting audio callbacks.
+/// Inspect validates the requested sample rate and period without starting audio callbacks.
 pub trait AudioBackend {
     fn device_names(&self) -> Result<Vec<String>>;
     fn output_device_names(&self) -> Result<Vec<String>> {
         Ok(Vec::new())
+    }
+    fn supported_sample_rates(&self, _name: &str) -> Result<DeviceSampleRates> {
+        Err("This backend cannot query supported sample rates".into())
     }
     fn inspect_configuration(
         &self,
@@ -181,6 +195,14 @@ pub fn resolve(kind: BackendKind) -> BackendKind {
 }
 
 pub fn select(kind: BackendKind, output_device: &str) -> Result<Box<dyn AudioBackend>> {
+    select_with_sample_rate(kind, output_device, crate::RATE)
+}
+pub fn select_with_sample_rate(
+    kind: BackendKind,
+    output_device: &str,
+    sample_rate: u32,
+) -> Result<Box<dyn AudioBackend>> {
+    crate::validate_sample_rate(sample_rate)?;
     match resolve(kind) {
         BackendKind::Auto => unreachable!("auto resolves to a concrete backend"),
         BackendKind::Cpal => {
@@ -188,6 +210,7 @@ pub fn select(kind: BackendKind, output_device: &str) -> Result<Box<dyn AudioBac
             {
                 Ok(Box::new(crate::cpal_backend::CpalBackend::new(
                     output_device,
+                    sample_rate,
                 )))
             }
             #[cfg(not(feature = "cpal-backend"))]
@@ -205,7 +228,7 @@ pub fn select(kind: BackendKind, output_device: &str) -> Result<Box<dyn AudioBac
             }
             #[cfg(all(windows, feature = "asio"))]
             {
-                Ok(Box::new(AsioBackend))
+                Ok(Box::new(AsioBackend { sample_rate }))
             }
             #[cfg(not(all(windows, feature = "asio")))]
             {
@@ -220,7 +243,9 @@ pub fn default_backend() -> Result<Box<dyn AudioBackend>> {
 }
 
 #[cfg(all(windows, feature = "asio"))]
-pub struct AsioBackend;
+pub struct AsioBackend {
+    sample_rate: u32,
+}
 
 #[cfg(all(windows, feature = "asio"))]
 fn load_driver(name: &str) -> Result<asio_sys::Driver> {
@@ -235,6 +260,15 @@ fn load_driver(name: &str) -> Result<asio_sys::Driver> {
 
 #[cfg(all(windows, feature = "asio"))]
 impl AudioBackend for AsioBackend {
+    fn supported_sample_rates(&self, name: &str) -> Result<DeviceSampleRates> {
+        let _driver = load_driver(name)?;
+        let rates = crate::asio::supported_sample_rates()?;
+        Ok(DeviceSampleRates {
+            input: rates.clone(),
+            output: rates.clone(),
+            common: rates,
+        })
+    }
     fn device_names(&self) -> Result<Vec<String>> {
         Ok(asio_sys::Asio::new().driver_names())
     }
@@ -246,7 +280,7 @@ impl AudioBackend for AsioBackend {
     ) -> Result<AudioInspection> {
         let driver = load_driver(name)?;
         let config = crate::asio::Configuration::query(&driver)?;
-        config.validate(frames)?;
+        config.validate_rate(frames, self.sample_rate)?;
         let mut configuration = config.audio_configuration();
         routing.validate(configuration.inputs, configuration.outputs)?;
         configuration.device = name.to_string();
@@ -270,7 +304,14 @@ impl AudioBackend for AsioBackend {
     ) -> Result<Box<dyn AudioStream>> {
         let driver = load_driver(name)?;
         let config = crate::asio::Configuration::query(&driver)?;
-        let mut engine = crate::asio::Engine::open(driver, config, frames, routing, dsp)?;
+        let mut engine = crate::asio::Engine::open_with_sample_rate(
+            driver,
+            config,
+            frames,
+            routing,
+            dsp,
+            self.sample_rate,
+        )?;
         engine.set_device_name(name);
         Ok(Box::new(engine))
     }

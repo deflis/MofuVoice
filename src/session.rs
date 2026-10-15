@@ -12,26 +12,26 @@ use std::{
 #[cfg(all(windows, feature = "asio"))]
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 #[cfg(all(windows, feature = "asio"))]
-struct ComApartment;
+pub(crate) struct ComApartment(std::marker::PhantomData<std::rc::Rc<()>>);
 #[cfg(all(windows, feature = "asio"))]
 impl ComApartment {
-    fn initialize() -> Result<Self, Box<dyn Error>> {
-        // SAFETY: called only on the owning audio worker, before loading ASIO.
+    pub(crate) fn initialize() -> Result<Self, Box<dyn Error>> {
+        // SAFETY: called on the owning control thread, before loading ASIO.
         let result = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
         if result.is_err() {
             return Err(format!(
-                "Audio worker COM initialization failed: HRESULT 0x{:08x}",
+                "ASIO control thread COM initialization failed: HRESULT 0x{:08x}",
                 result.0 as u32
             )
             .into());
         }
-        Ok(Self)
+        Ok(Self(std::marker::PhantomData))
     }
 }
 #[cfg(all(windows, feature = "asio"))]
 impl Drop for ComApartment {
     fn drop(&mut self) {
-        // SAFETY: RAII value is local to run_audio; the driver is dropped first.
+        // SAFETY: the non-Send guard stays on its initializing thread; the driver drops first.
         unsafe { CoUninitialize() };
     }
 }
@@ -218,7 +218,8 @@ fn run_audio(
     } else {
         None
     };
-    let backend = backend::select(kind, &options.output_device)?;
+    let backend =
+        backend::select_with_sample_rate(kind, &options.output_device, options.sample_rate)?;
     let routing = backend::ChannelRouting::from(&options);
     if options.inspect {
         let inspection =
@@ -254,6 +255,8 @@ fn run_audio(
         set_status(status, format!("Stopped before playback.\n{details}"));
         return Ok(());
     }
+    #[cfg(windows)]
+    crate::spectrum::set_sample_rate(options.sample_rate);
     engine.start()?;
     let (input, output) = engine.latency_ms()?;
     {
@@ -263,7 +266,7 @@ fn run_audio(
             if options.pitch.semitones == 0.0 && options.pitch.formant_shift == 0.0 {
                 0.0
             } else {
-                crate::pitch::LATENCY as f64 * 1000.0 / crate::RATE as f64
+                crate::pitch::LATENCY as f64 * 1000.0 / configuration.sample_rate
             },
         );
         info.input_latency_ms = input;
@@ -324,6 +327,19 @@ fn run_audio(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(all(windows, feature = "asio"))]
+    #[test]
+    fn asio_discovery_can_initialize_and_release_com_on_a_fresh_worker() {
+        std::thread::spawn(|| {
+            let _outer = ComApartment::initialize().unwrap();
+            {
+                let _nested = ComApartment::initialize().unwrap();
+            }
+            let _still_initialized = ComApartment::initialize().unwrap();
+        })
+        .join()
+        .unwrap();
+    }
     #[test]
     fn status_uses_opened_devices_and_keeps_requested_period_separate() {
         let options = Options::parse(

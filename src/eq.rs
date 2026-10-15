@@ -118,11 +118,15 @@ impl EqSettings {
         self.bands.iter().map(|band| band.gain_db.max(0.0)).sum()
     }
     pub fn build(self) -> Result<Equalizer, Box<dyn Error>> {
+        self.build_with_sample_rate(RATE)
+    }
+    pub fn build_with_sample_rate(self, rate: u32) -> Result<Equalizer, Box<dyn Error>> {
+        crate::validate_sample_rate(rate)?;
         self.validate()?;
         Ok(Equalizer {
             active: self.enabled
                 && (self.output_db != 0.0 || self.bands.iter().any(|b| b.gain_db != 0.0)),
-            filters: self.bands.map(PeakingFilter::new),
+            filters: self.bands.map(|band| PeakingFilter::new(band, rate)),
             gain: amplitude(self.output_db - self.headroom_db()),
         })
     }
@@ -132,10 +136,10 @@ struct PeakingFilter {
     active: bool,
 }
 impl PeakingFilter {
-    fn new(band: Band) -> Self {
+    fn new(band: Band, rate: u32) -> Self {
         // Peaking EQ coefficients: https://www.w3.org/TR/audio-eq-cookbook/
         let a = 10.0_f64.powf(band.gain_db / 40.0);
-        let omega = std::f64::consts::TAU * band.frequency / RATE as f64;
+        let omega = std::f64::consts::TAU * band.frequency / rate as f64;
         let alpha = omega.sin() / (2.0 * band.q);
         let norm = 1.0 / (1.0 + alpha / a);
         Self {

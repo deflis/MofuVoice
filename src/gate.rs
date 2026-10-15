@@ -73,7 +73,11 @@ pub struct GateSettings {
 
 impl GateSettings {
     pub fn build(self) -> Result<NoiseGate, InvalidGate> {
-        NoiseGate::new(
+        self.build_with_sample_rate(RATE)
+    }
+    pub fn build_with_sample_rate(self, rate: u32) -> Result<NoiseGate, InvalidGate> {
+        NoiseGate::with_sample_rate(
+            rate,
             self.enabled,
             self.threshold,
             self.attack_ms,
@@ -120,6 +124,16 @@ impl NoiseGate {
         attack_ms: f64,
         release_ms: f64,
     ) -> Result<Self, InvalidGate> {
+        Self::with_sample_rate(RATE, enabled, threshold, attack_ms, release_ms)
+    }
+    pub fn with_sample_rate(
+        rate: u32,
+        enabled: bool,
+        threshold: GateThreshold,
+        attack_ms: f64,
+        release_ms: f64,
+    ) -> Result<Self, InvalidGate> {
+        crate::validate_sample_rate(rate).map_err(|_| InvalidGate)?;
         let attack_ms = validate_time_ms(attack_ms)?;
         let release_ms = validate_time_ms(release_ms)?;
         match threshold {
@@ -134,13 +148,13 @@ impl NoiseGate {
         Ok(Self {
             enabled,
             threshold,
-            attack: 1.0 - decay(attack_ms, RATE as f64),
-            release: 1.0 - decay(release_ms, RATE as f64),
-            hold_samples: (HOLD_MS * 0.001 * RATE as f64).round() as u64,
-            detect_attack: 1.0 - decay(DETECT_ATTACK_MS, RATE as f64),
-            detect_release: 1.0 - decay(DETECT_RELEASE_MS, RATE as f64),
-            floor_fall: 1.0 - decay(FLOOR_FALL_MS, RATE as f64),
-            floor_rise: 1.0 - decay(FLOOR_RISE_MS, RATE as f64),
+            attack: 1.0 - decay(attack_ms, rate as f64),
+            release: 1.0 - decay(release_ms, rate as f64),
+            hold_samples: (HOLD_MS * 0.001 * rate as f64).round() as u64,
+            detect_attack: 1.0 - decay(DETECT_ATTACK_MS, rate as f64),
+            detect_release: 1.0 - decay(DETECT_RELEASE_MS, rate as f64),
+            floor_fall: 1.0 - decay(FLOOR_FALL_MS, rate as f64),
+            floor_rise: 1.0 - decay(FLOOR_RISE_MS, rate as f64),
             envelope: 0.0,
             gain: 1.0,
             hold_remaining: 0,

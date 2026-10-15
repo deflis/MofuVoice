@@ -23,7 +23,18 @@ pub mod pitch;
 pub mod rumble;
 pub mod session;
 pub mod spectrum;
+/// Default sample rate; runtime sessions carry their selected rate separately.
 pub const RATE: u32 = 48_000;
+// Keep the fixed-window pitch/formant engine near its validated 48 kHz design.
+// Higher rates require scaled analysis windows and independent quality validation.
+pub const SAMPLE_RATES: [u32; 2] = [44_100, 48_000];
+pub fn validate_sample_rate(rate: u32) -> Result<(), &'static str> {
+    if SAMPLE_RATES.contains(&rate) {
+        Ok(())
+    } else {
+        Err("Sample rate must be 44100 or 48000 Hz; higher rates are not supported by the pitch/formant engine")
+    }
+}
 pub const DEFAULT_FRAMES: u32 = 512;
 pub const TARGET_FRAMES: u32 = 64;
 

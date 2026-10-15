@@ -144,6 +144,7 @@ pub struct Settings {
     output_channels: Vec<usize>,
     backend: String,
     frames: String,
+    sample_rate: String,
     pitch: String,
     formant_shift: String,
     preserve_formants: bool,
@@ -168,6 +169,7 @@ impl Settings {
             output_channels: options.output_channels.clone(),
             backend: options.backend.name().into(),
             frames: options.frames.to_string(),
+            sample_rate: options.sample_rate.to_string(),
             pitch: options.pitch.semitones.to_string(),
             formant_shift: options.pitch.formant_shift.to_string(),
             preserve_formants: options.pitch.preserve_formants,
@@ -213,6 +215,8 @@ impl Settings {
                 .join(","),
             "--backend".into(),
             self.backend.clone(),
+            "--sample-rate".into(),
+            self.sample_rate.clone(),
             "--frames".into(),
             self.frames.clone(),
             "--pitch".into(),
@@ -495,6 +499,37 @@ async fn device_choices(backend: String) -> Result<DeviceChoices, String> {
         .map_err(|error| error.to_string())
 }
 #[tauri::command]
+async fn device_sample_rates(
+    backend: String,
+    device: String,
+    output_device: String,
+    app: tauri::AppHandle,
+) -> Result<backend::DeviceSampleRates, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<DesktopState>();
+        let mut desktop = state.lock().map_err(|error| error.to_string())?;
+        // Hold the session lock through discovery so audio cannot start midway,
+        // and never load or unload an ASIO driver while callbacks own it.
+        if desktop.closing || desktop.session.poll() {
+            return Err("対応レートの確認は音声を停止してから行ってください。".into());
+        }
+        let kind = backend::resolve(
+            backend::BackendKind::parse(&backend).map_err(|error| error.to_string())?,
+        );
+        #[cfg(all(windows, feature = "asio"))]
+        let _apartment = if kind == backend::BackendKind::Asio {
+            Some(crate::session::ComApartment::initialize().map_err(|error| error.to_string())?)
+        } else {
+            None
+        };
+        backend::select(kind, &output_device)
+            .and_then(|selected| selected.supported_sample_rates(&device))
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+#[tauri::command]
 fn set_logging(
     logging: bool,
     state: State<'_, DesktopState>,
@@ -510,7 +545,8 @@ fn start_audio(inspect: bool, state: State<'_, DesktopState>) -> Result<(), Stri
         return Err("Application is closing".into());
     }
     let mut options = desktop.settings.options()?;
-    backend::select(options.backend, &options.output_device).map_err(|error| error.to_string())?;
+    backend::select_with_sample_rate(options.backend, &options.output_device, options.sample_rate)
+        .map_err(|error| error.to_string())?;
     if backend::resolve(options.backend) == backend::BackendKind::Asio && options.device.is_empty()
     {
         return Err("Select an audio device first".into());
@@ -749,6 +785,7 @@ pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
             settings_view,
             log_view,
             device_choices,
+            device_sample_rates,
             set_logging,
             start_audio,
             stop_audio,
@@ -897,6 +934,19 @@ pub fn show_message(message: &str, _error: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn sample_rate_controls_round_trip_and_validate() {
+        let options = Options::parse_gui(["--sample-rate", "44100"].map(String::from)).unwrap();
+        let mut settings = Settings::from_options(&options);
+        assert_eq!(settings.sample_rate, "44100");
+        assert_eq!(settings.options().unwrap(), options);
+        settings.sample_rate = "48000".into();
+        assert_eq!(settings.options().unwrap().sample_rate, 48000);
+        for value in ["", "0", "32000", "NaN", "48000.5"] {
+            settings.sample_rate = value.into();
+            assert!(settings.options().is_err(), "{value}");
+        }
+    }
     #[test]
     fn unacknowledged_shutdown_falls_back_once_and_rejects_late_ack() {
         let mut requests = CloseRequests::default();
