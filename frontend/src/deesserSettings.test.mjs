@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-const { settingsView, settingsStore, commands } = await import("./testing/tauriMocks.mjs");
+import { settingsView, settingsStore, settingsApi } from "./testing/storeMocks.mjs";
 
 test("de-esser mode changes retain custom controls and save the selected mode", async () => {
   settingsStore.setState({ ...settingsStore.getState(), ...settingsView, status: "ready" });
@@ -17,7 +17,7 @@ test("de-esser mode changes retain custom controls and save the selected mode", 
   assert.deepEqual(settingsStore.getState().settings.level, original.level);
   assert.equal(settingsStore.getState().settings.pitch, original.pitch);
   await settingsStore.getState().save();
-  const saved = commands.save_settings.mock.calls.at(-1).arguments[0].settings;
+  const saved = settingsApi.save.mock.calls.at(-1).arguments[0];
   assert.equal(saved.deesserMode, "pro");
   assert.deepEqual(saved.deesserParameters, parameters);
 });

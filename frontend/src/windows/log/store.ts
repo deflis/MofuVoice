@@ -1,6 +1,5 @@
+import { logApi, type LogApi } from "./api";
 import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { AudioInfo, AudioLog } from "../../types";
 
 type LogStore = {
@@ -13,150 +12,170 @@ type LogStore = {
   requestClose: () => void;
 };
 
-let loggingTransition: Promise<void> = Promise.resolve();
+export function createLogStore(api: LogApi = logApi) {
+  return create<LogStore>()((set, get) => {
+    let lifetime = 0;
+    let disconnectCurrent: (() => void) | undefined;
+    let loggingTransition: Promise<void> = Promise.resolve();
+    let logUnlisten: (() => void) | undefined;
+    let logGeneration = 0;
 
-export const useLogStore = create<LogStore>()((set, get) => {
-  let logUnlisten: UnlistenFn | undefined;
-  let logGeneration = 0;
-
-  const stopLogging = () => {
-    const generation = ++logGeneration;
-    logUnlisten?.();
-    logUnlisten = undefined;
-    loggingTransition = loggingTransition
-      .then(async () => {
-        if (generation !== logGeneration) {
-          return undefined;
-        }
-        await invoke<AudioLog | null>("set_logging", { logging: false });
-        if (generation === logGeneration) {
-          set({ log: null });
-        }
-        return undefined;
-      })
-      .catch((failure: unknown) => {
-        if (generation === logGeneration) {
-          set({ error: String(failure) });
-        }
-        return undefined;
-      });
-  };
-
-  const startLogging = () => {
-    const generation = ++logGeneration;
-    let disposed = false;
-    let receivedEvent = false;
-    loggingTransition = loggingTransition
-      .then(async () => {
-        if (generation !== logGeneration) {
-          return undefined;
-        }
-        const remove = await listen<AudioLog>("audio-log", ({ payload }) => {
-          if (!disposed && generation === logGeneration) {
-            receivedEvent = true;
-            set({ log: payload });
-          }
-        });
-        if (disposed || generation !== logGeneration) {
-          remove();
-          return undefined;
-        }
-        logUnlisten = remove;
-        const log = await invoke<AudioLog | null>("set_logging", { logging: true });
-        if (!disposed && generation === logGeneration && !receivedEvent && log) {
-          set({ log });
-        }
-        return undefined;
-      })
-      .catch((failure: unknown) => {
-        if (generation === logGeneration) {
-          set({ error: String(failure) });
-        }
-        return undefined;
-      });
-
-    return () => {
-      disposed = true;
-    };
-  };
-
-  return {
-    info: null,
-    log: null,
-    logging: false,
-    error: "",
-    mount: () => {
-      let disposed = false;
-      let infoSeen = false;
-      set({ info: null, error: "" });
-
-      const unlistenInfo = listen<AudioInfo>("log-info", ({ payload }) => {
-        if (!disposed) {
-          infoSeen = true;
-          set({ info: payload });
-        }
-      });
-      void unlistenInfo.catch((failure: unknown) => {
-        if (!disposed) {
-          set({ error: String(failure) });
-        }
-      });
-
-      const unlistenClose = listen("request-close", () => {
-        if (!disposed) {
-          get().requestClose();
-        }
-      });
-      void unlistenClose.catch((failure: unknown) => {
-        if (!disposed) {
-          set({ error: String(failure) });
-        }
-      });
-
-      void invoke<AudioInfo>("log_view")
-        .then((info) => {
-          if (!disposed && !infoSeen) {
-            set({ info });
+    const stopLogging = () => {
+      const generation = ++logGeneration;
+      const mounted = lifetime;
+      set({ log: null });
+      logUnlisten?.();
+      logUnlisten = undefined;
+      loggingTransition = loggingTransition
+        .then(async () => {
+          // Always disable the old backend subscription before a queued activation.
+          await api.setLogging(false);
+          if (generation === logGeneration) {
+            set({ log: null });
           }
           return undefined;
         })
         .catch((failure: unknown) => {
-          if (!disposed) {
+          if (generation === logGeneration && mounted === lifetime) {
             set({ error: String(failure) });
           }
           return undefined;
         });
+    };
 
-      return () => {
-        disposed = true;
-        infoSeen = false;
-        if (get().logging) {
-          stopLogging();
-          set({ logging: false });
+    const startLogging = () => {
+      const generation = ++logGeneration;
+      let receivedEvent = false;
+      loggingTransition = loggingTransition
+        .then(async () => {
+          if (generation !== logGeneration) {
+            return undefined;
+          }
+          const remove = await api.onLog((payload) => {
+            if (generation === logGeneration) {
+              receivedEvent = true;
+              set({ log: payload });
+            }
+          });
+          if (generation !== logGeneration) {
+            remove();
+            return undefined;
+          }
+          logUnlisten = remove;
+          const log = await api.setLogging(true);
+          if (generation === logGeneration && !receivedEvent && log) {
+            set({ log });
+          }
+          return undefined;
+        })
+        .catch(async (failure: unknown) => {
+          if (generation === logGeneration) {
+            logGeneration += 1;
+            logUnlisten?.();
+            logUnlisten = undefined;
+            set({ logging: false, log: null, error: String(failure) });
+            // An activation may have reached the backend before its response failed.
+            await api.setLogging(false).catch(() => {});
+          }
+          return undefined;
+        });
+    };
+
+    return {
+      info: null,
+      log: null,
+      logging: false,
+      error: "",
+      mount: () => {
+        disconnectCurrent?.();
+        const mounted = ++lifetime;
+        let disposed = false;
+        let infoSeen = false;
+        set({ info: null, error: "" });
+
+        const unlistenInfo = api.onInfo((payload) => {
+          if (!disposed) {
+            infoSeen = true;
+            set({ info: payload });
+          }
+        });
+        void unlistenInfo.catch((failure: unknown) => {
+          if (!disposed) {
+            set({ error: String(failure) });
+          }
+        });
+
+        const unlistenClose = api.onClose(() => {
+          if (!disposed) {
+            get().requestClose();
+          }
+        });
+        void unlistenClose.catch((failure: unknown) => {
+          if (!disposed) {
+            set({ error: String(failure) });
+          }
+        });
+
+        void api
+          .getView()
+          .then((info) => {
+            if (!disposed && !infoSeen) {
+              set({ info });
+            }
+            return undefined;
+          })
+          .catch((failure: unknown) => {
+            if (!disposed && !infoSeen) {
+              set({ error: String(failure) });
+            }
+            return undefined;
+          });
+
+        disconnectCurrent = () => {
+          if (disposed) {
+            return;
+          }
+          disposed = true;
+          if (lifetime === mounted) {
+            lifetime += 1;
+          }
+          infoSeen = false;
+          if (get().logging) {
+            stopLogging();
+            set({ logging: false });
+          }
+          void unlistenInfo.then(
+            (remove) => remove(),
+            () => {},
+          );
+          void unlistenClose.then(
+            (remove) => remove(),
+            () => {},
+          );
+        };
+        return disconnectCurrent;
+      },
+      setLogging: (logging) => {
+        if (logging === get().logging) {
+          return;
         }
-        void unlistenInfo.then(
-          (remove) => remove(),
-          () => {},
-        );
-        void unlistenClose.then(
-          (remove) => remove(),
-          () => {},
-        );
-      };
-    },
-    setLogging: (logging) => {
-      if (logging === get().logging) {
-        return;
-      }
-      set({ logging, error: "" });
-      if (logging) {
-        startLogging();
-      } else {
-        stopLogging();
-      }
-    },
-    requestClose: () => {
-      void invoke("close_log").catch((failure: unknown) => set({ error: String(failure) }));
-    },
-  };
-});
+        set({ logging, error: "" });
+        if (logging) {
+          startLogging();
+        } else {
+          stopLogging();
+        }
+      },
+      requestClose: () => {
+        const generation = lifetime;
+        void api.hide().catch((failure: unknown) => {
+          if (generation === lifetime) {
+            set({ error: String(failure) });
+          }
+        });
+      },
+    };
+  });
+}
+
+export const useLogStore = createLogStore();
