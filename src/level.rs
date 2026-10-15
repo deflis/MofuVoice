@@ -79,19 +79,6 @@ impl LevelSettings {
             self.release_ms,
         ]
     }
-    pub fn set(&mut self, index: usize, value: f64) {
-        match index {
-            0 => self.target_db = value,
-            1 => self.max_gain_db = value,
-            2 => self.floor_db = value,
-            3 => self.response_ms = value,
-            4 => self.threshold_db = value,
-            5 => self.ratio = value,
-            6 => self.attack_ms = value,
-            7 => self.release_ms = value,
-            _ => panic!("Invalid level field index"),
-        }
-    }
     pub fn validate(self) -> Result<(), InvalidLevel> {
         let ranges = [
             (-36.0, -6.0),
@@ -391,11 +378,42 @@ mod tests {
     }
     #[test]
     fn invalid_settings_fail_even_when_disabled() {
-        for i in 0..8 {
-            for value in [f64::NAN, f64::INFINITY, -100000.0, 100000.0] {
-                let mut settings = LevelSettings::default();
-                settings.set(i, value);
-                assert!(settings.build().is_err(), "{i}: {value}");
+        for value in [f64::NAN, f64::INFINITY, -100000.0, 100000.0] {
+            for settings in [
+                LevelSettings {
+                    target_db: value,
+                    ..LevelSettings::default()
+                },
+                LevelSettings {
+                    max_gain_db: value,
+                    ..LevelSettings::default()
+                },
+                LevelSettings {
+                    floor_db: value,
+                    ..LevelSettings::default()
+                },
+                LevelSettings {
+                    response_ms: value,
+                    ..LevelSettings::default()
+                },
+                LevelSettings {
+                    threshold_db: value,
+                    ..LevelSettings::default()
+                },
+                LevelSettings {
+                    ratio: value,
+                    ..LevelSettings::default()
+                },
+                LevelSettings {
+                    attack_ms: value,
+                    ..LevelSettings::default()
+                },
+                LevelSettings {
+                    release_ms: value,
+                    ..LevelSettings::default()
+                },
+            ] {
+                assert!(settings.build().is_err(), "{settings:?}");
             }
         }
         assert!(LevelSettings {

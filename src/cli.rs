@@ -147,7 +147,17 @@ impl Options {
                         .next()
                         .ok_or_else(|| format!("{flag} requires a value"))?
                         .parse()?;
-                    options.level.set(index, value);
+                    match flag {
+                        "--level-target" => options.level.target_db = value,
+                        "--level-max-gain" => options.level.max_gain_db = value,
+                        "--level-floor" => options.level.floor_db = value,
+                        "--level-response" => options.level.response_ms = value,
+                        "--compress-threshold" => options.level.threshold_db = value,
+                        "--compress-ratio" => options.level.ratio = value,
+                        "--compress-attack" => options.level.attack_ms = value,
+                        "--compress-release" => options.level.release_ms = value,
+                        _ => unreachable!(),
+                    }
                     level_fields[index] = true;
                 }
                 "--deesser-mode" if !deesser_mode_given => {
@@ -170,7 +180,14 @@ impl Options {
                         .next()
                         .ok_or_else(|| format!("{flag} requires a value"))?
                         .parse()?;
-                    options.deesser_parameters.set(index, value);
+                    match flag {
+                        "--deesser-frequency" => options.deesser_parameters.frequency_hz = value,
+                        "--deesser-threshold" => options.deesser_parameters.threshold_db = value,
+                        "--deesser-range" => options.deesser_parameters.range_db = value,
+                        "--deesser-attack" => options.deesser_parameters.attack_ms = value,
+                        "--deesser-release" => options.deesser_parameters.release_ms = value,
+                        _ => unreachable!(),
+                    }
                     deesser_fields[index] = true;
                 }
                 "--deesser" if !deesser_given => {

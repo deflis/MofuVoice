@@ -53,16 +53,6 @@ impl DeEsserParameters {
             self.release_ms,
         ]
     }
-    pub fn set(&mut self, index: usize, value: f64) {
-        match index {
-            0 => self.frequency_hz = value,
-            1 => self.threshold_db = value,
-            2 => self.range_db = value,
-            3 => self.attack_ms = value,
-            4 => self.release_ms = value,
-            _ => unreachable!(),
-        }
-    }
     pub fn validate(self) -> Result<(), &'static str> {
         let limits = [
             (2000.0, 12000.0),
@@ -355,10 +345,29 @@ mod tests {
     }
     #[test]
     fn custom_parameters_validate_even_when_disabled_and_remain_block_continuous() {
-        for index in 0..5 {
-            for value in [f64::NAN, f64::INFINITY, -1e6, 1e6] {
-                let mut parameters = DeEsserParameters::default();
-                parameters.set(index, value);
+        for value in [f64::NAN, f64::INFINITY, -1e6, 1e6] {
+            for parameters in [
+                DeEsserParameters {
+                    frequency_hz: value,
+                    ..DeEsserParameters::default()
+                },
+                DeEsserParameters {
+                    threshold_db: value,
+                    ..DeEsserParameters::default()
+                },
+                DeEsserParameters {
+                    range_db: value,
+                    ..DeEsserParameters::default()
+                },
+                DeEsserParameters {
+                    attack_ms: value,
+                    ..DeEsserParameters::default()
+                },
+                DeEsserParameters {
+                    release_ms: value,
+                    ..DeEsserParameters::default()
+                },
+            ] {
                 assert!(DeEsser::with_parameters(false, parameters).is_err());
             }
         }
