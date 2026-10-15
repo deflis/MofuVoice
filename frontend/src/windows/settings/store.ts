@@ -180,8 +180,7 @@ export const useSettingsStore = create<SettingsStore>()((set, get) => {
           return;
         }
         phaseSeen = true;
-        const busy = payload.phase === "opening" || payload.phase === "running";
-        set({ audioBusy: busy });
+        set({ audioBusy: payload.busy });
       });
       void unlistenPhase.catch((error: unknown) => {
         if (!disposed) {

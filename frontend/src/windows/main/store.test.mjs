@@ -11,11 +11,11 @@ test("start and stop use server settings and drive the state machine", async () 
   await mainStore.getState().start(false);
   assert.deepEqual(commands.start_audio.mock.calls[0].arguments, [{ inspect: false }]);
   assert.equal(mainStore.getState().machine.status, "starting");
-  callback("audio-phase")({ payload: { phase: "running", error: null } });
+  callback("audio-phase")({ payload: { phase: "running", error: null, busy: true } });
   assert.equal(mainStore.getState().machine.status, "running");
   await mainStore.getState().stop();
   assert.equal(mainStore.getState().machine.status, "stopping");
-  callback("audio-phase")({ payload: { phase: "ready", error: null } });
+  callback("audio-phase")({ payload: { phase: "ready", error: null, busy: false } });
   assert.equal(mainStore.getState().machine.status, "idle");
 });
 
@@ -37,7 +37,7 @@ test("close waits while starting then shuts down once running", async () => {
   await mainStore.getState().start(false);
   mainStore.getState().requestClose();
   assert.equal(commands.close_application.mock.callCount(), 0);
-  callback("audio-phase")({ payload: { phase: "running", error: null } });
+  callback("audio-phase")({ payload: { phase: "running", error: null, busy: true } });
   assert.equal(commands.close_application.mock.callCount(), 1);
   assert.equal(mainStore.getState().machine.status, "closing");
 });
@@ -57,7 +57,7 @@ test("open_log failure keeps running audio and reports action error", async () =
   cleanups.push(mainStore.getState().mount());
   await setImmediate();
   await mainStore.getState().start(false);
-  callback("audio-phase")({ payload: { phase: "running", error: null } });
+  callback("audio-phase")({ payload: { phase: "running", error: null, busy: true } });
   commands.open_log.mock.mockImplementationOnce(async () => {
     throw new Error("log window failed");
   });
@@ -79,11 +79,23 @@ test("faulted audio can be retried when canStart is true", async () => {
   assert.equal(mainStore.getState().machine.status, "starting");
 });
 
+test("stopped phase keeps stopping until worker busy clears", async () => {
+  cleanups.push(mainStore.getState().mount());
+  await setImmediate();
+  await mainStore.getState().start(false);
+  callback("audio-phase")({ payload: { phase: "running", error: null, busy: true } });
+  await mainStore.getState().stop();
+  callback("audio-phase")({ payload: { phase: "stopped", error: null, busy: true } });
+  assert.equal(mainStore.getState().machine.status, "stopping");
+  callback("audio-phase")({ payload: { phase: "stopped", error: null, busy: false } });
+  assert.equal(mainStore.getState().machine.status, "idle");
+});
+
 test("close_application failure restores running so Stop stays available", async () => {
   cleanups.push(mainStore.getState().mount());
   await setImmediate();
   await mainStore.getState().start(false);
-  callback("audio-phase")({ payload: { phase: "running", error: null } });
+  callback("audio-phase")({ payload: { phase: "running", error: null, busy: true } });
   commands.close_application.mock.mockImplementationOnce(async () => {
     throw new Error("settings save failed");
   });

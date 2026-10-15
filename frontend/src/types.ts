@@ -60,6 +60,7 @@ export type MainView = {
 export type AudioPhase = {
   phase: string;
   error: string | null;
+  busy: boolean;
 };
 export type AudioInfo = {
   phase: string;

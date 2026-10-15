@@ -41,6 +41,10 @@ function withView(machine: MainMachine, view: MainView): MainMachine {
   }
 }
 
+function isSettledPhase(phase: string): boolean {
+  return phase === "ready" || phase === "stopped" || phase === "inspected";
+}
+
 function applyPhase(machine: MainMachine, phase: AudioPhase): MainMachine {
   if (
     machine.status === "closing" ||
@@ -63,12 +67,13 @@ function applyPhase(machine: MainMachine, phase: AudioPhase): MainMachine {
     if (phase.phase === "opening") {
       return machine;
     }
-    if (phase.phase === "ready" || phase.phase === "stopped" || phase.phase === "inspected") {
-      return { status: "idle", view: machine.view };
+    if (isSettledPhase(phase.phase)) {
+      // Worker may still be joining after stopped/inspected; wait for busy=false.
+      return phase.busy ? machine : { status: "idle", view: machine.view };
     }
   }
   if (machine.status === "stopping") {
-    if (phase.phase === "ready" || phase.phase === "stopped" || phase.phase === "inspected") {
+    if (isSettledPhase(phase.phase) && !phase.busy) {
       return { status: "idle", view: machine.view };
     }
     return machine;
@@ -76,7 +81,10 @@ function applyPhase(machine: MainMachine, phase: AudioPhase): MainMachine {
   if (phase.phase === "running" || phase.phase === "opening") {
     return { status: "running", view: machine.view };
   }
-  if (phase.phase === "ready" || phase.phase === "stopped" || phase.phase === "inspected") {
+  if (isSettledPhase(phase.phase)) {
+    if (phase.busy) {
+      return { status: "stopping", view: machine.view };
+    }
     return { status: "idle", view: machine.view };
   }
   return {

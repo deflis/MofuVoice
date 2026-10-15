@@ -363,6 +363,7 @@ struct MainView {
 struct AudioPhase {
     phase: String,
     error: Option<String>,
+    busy: bool,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -769,12 +770,13 @@ pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
                             if desktop.closing {
                                 break;
                             }
-                            let _ = desktop.session.poll();
+                            let busy = desktop.session.poll();
                             let info = desktop.session.info();
                             (
                                 AudioPhase {
                                     phase: info.phase.to_string(),
                                     error: info.error.clone(),
+                                    busy,
                                 },
                                 info,
                                 desktop.session.log_info(),

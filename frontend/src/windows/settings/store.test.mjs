@@ -71,7 +71,7 @@ test("settings_view does not overwrite a newer audio-phase busy flag", async () 
   const loading = deferred();
   commands.settings_view.mock.mockImplementationOnce(() => loading.promise);
   cleanups.push(settingsStore.getState().mount());
-  callback("audio-phase")({ payload: { phase: "running", error: null } });
+  callback("audio-phase")({ payload: { phase: "running", error: null, busy: true } });
   assert.equal(settingsStore.getState().audioBusy, true);
   loading.resolve({ ...settingsView, audioBusy: false });
   await setImmediate();
@@ -90,9 +90,9 @@ test("application close acknowledgment delegates shutdown after save", async () 
 test("audio-phase updates audioBusy lock", async () => {
   cleanups.push(settingsStore.getState().mount());
   await setImmediate();
-  callback("audio-phase")({ payload: { phase: "running", error: null } });
+  callback("audio-phase")({ payload: { phase: "running", error: null, busy: true } });
   assert.equal(settingsStore.getState().audioBusy, true);
-  callback("audio-phase")({ payload: { phase: "ready", error: null } });
+  callback("audio-phase")({ payload: { phase: "ready", error: null, busy: false } });
   assert.equal(settingsStore.getState().audioBusy, false);
 });
 
