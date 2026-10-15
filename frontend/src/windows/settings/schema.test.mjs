@@ -71,3 +71,13 @@ test("invalid backend snapshots fail visibly instead of populating the settings 
   await assert.rejects(settingsApi.getView());
   assert.equal(settingsStore.getState().voice.pitch, settings.voice.pitch);
 });
+
+test("automatic gate mode ignores invalid manual threshold after mode switch", async () => {
+  settingsStore.getState().noise.setThresholdMode("manual");
+  settingsStore.getState().noise.setThresholdDb(Number.NaN);
+  await assert.rejects(settingsStore.getState().save());
+  settingsStore.getState().noise.setThresholdMode("auto");
+  assert.equal(settingsStore.getState().noise.thresholdDb, -50);
+  await settingsStore.getState().save();
+  assert.equal(calls("save_settings").at(-1).arguments[1].settings.noise.thresholdMode, "auto");
+});

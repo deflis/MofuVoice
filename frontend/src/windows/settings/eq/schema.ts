@@ -8,10 +8,16 @@ export const eqBandSchema = v.object({
 });
 export type EqBand = v.InferOutput<typeof eqBandSchema>;
 
+export const MAX_EQ_BANDS = 16;
+
 export const eqSchema = v.object({
   enabled: v.boolean(),
   mode: v.picklist(["simple", "pro"]),
-  bands: v.pipe(v.array(eqBandSchema), v.minLength(1, "EQには1つ以上のバンドが必要です。")),
+  bands: v.pipe(
+    v.array(eqBandSchema),
+    v.minLength(1, "EQには1つ以上のバンドが必要です。"),
+    v.maxLength(MAX_EQ_BANDS, `EQバンドは${MAX_EQ_BANDS}個までです。`),
+  ),
   outputDb: numberRange(-18, 0, "EQ出力"),
 });
 export type EqValues = v.InferOutput<typeof eqSchema>;

@@ -875,33 +875,42 @@ pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                let state = window.app_handle().state::<DesktopState>();
-                let result = (|| -> Result<(), String> {
+                let app = window.app_handle().clone();
+                let state = app.state::<DesktopState>();
+                let label = window.label().to_string();
+                let settings_open = app.get_webview_window("settings").is_some();
+                enum ClosePlan {
+                    None,
+                    ShutdownWithPersisted,
+                }
+                let result = (|| -> Result<ClosePlan, String> {
                     let mut desktop = state.lock().map_err(|error| error.to_string())?;
                     if desktop.closing {
-                        return Ok(());
+                        return Ok(ClosePlan::None);
                     }
-                    if window.label() == "main" && window.app_handle().get_webview_window("settings").is_some() {
-                        if !desktop.streams.contains("settings") {
-                            return Err("設定画面との接続がありません。設定画面の接続を確認してから終了してください。".into());
-                        }
-                        if desktop.close_requests.request() {
-                            if let Some(settings) =
-                                window.app_handle().get_webview_window("settings")
-                            {
-                                settings.show().map_err(|error| error.to_string())?;
+                    if label == "main" && settings_open {
+                        if desktop.streams.contains("settings") {
+                            if desktop.close_requests.request() {
+                                if let Some(settings) = app.get_webview_window("settings") {
+                                    settings.show().map_err(|error| error.to_string())?;
+                                }
+                                if let Err(error) = desktop
+                                    .streams
+                                    .send("settings", WindowMessage::ApplicationClose)
+                                {
+                                    desktop.close_requests.cancel();
+                                    return Err(error);
+                                }
                             }
-                            if let Err(error) = desktop
-                                .streams
-                                .send("settings", WindowMessage::ApplicationClose)
-                            {
-                                desktop.close_requests.cancel();
-                                return Err(error);
-                            }
+                            Ok(ClosePlan::None)
+                        } else {
+                            // Settings WebView exists but its channel is gone; do not block
+                            // shutdown on a draft save that can never complete.
+                            Ok(ClosePlan::ShutdownWithPersisted)
                         }
-                        Ok(())
-                    } else if desktop.streams.contains(window.label()) {
-                        desktop.streams.send(window.label(), WindowMessage::Close)
+                    } else if desktop.streams.contains(&label) {
+                        desktop.streams.send(&label, WindowMessage::Close)?;
+                        Ok(ClosePlan::None)
                     } else {
                         Err(
                             "画面との接続がありません。画面を再読み込みしてから終了してください。"
@@ -909,8 +918,19 @@ pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
                         )
                     }
                 })();
-                if let Err(error) = result {
-                    show_message(&error, true);
+                match result {
+                    Ok(ClosePlan::ShutdownWithPersisted) => {
+                        if let Some(settings) = app.get_webview_window("settings") {
+                            let _ = settings.destroy();
+                        }
+                        tauri::async_runtime::spawn(async move {
+                            if let Err(error) = close_application(app).await {
+                                show_message(&error, true);
+                            }
+                        });
+                    }
+                    Ok(ClosePlan::None) => {}
+                    Err(error) => show_message(&error, true),
                 }
             }
             if let tauri::WindowEvent::Destroyed = event {
@@ -923,9 +943,14 @@ pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
                     }
                     if window.label() == "settings" && desktop.close_requests.pending {
                         desktop.close_requests.cancel();
-                        if let Err(error) = desktop.streams.send("main", WindowMessage::Error {
-                            error: "設定画面が閉じられたため、終了を中止しました。".into(),
-                        }) { eprintln!("Cannot report interrupted shutdown: {error}"); }
+                        if let Err(error) = desktop.streams.send(
+                            "main",
+                            WindowMessage::Error {
+                                error: "設定画面が閉じられたため、終了を中止しました。".into(),
+                            },
+                        ) {
+                            eprintln!("Cannot report interrupted shutdown: {error}");
+                        }
                     }
                 };
             }

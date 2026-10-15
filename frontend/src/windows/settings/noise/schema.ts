@@ -1,12 +1,24 @@
 import * as v from "valibot";
 import { numberRange } from "../validation";
 
-export const noiseSchema = v.object({
-  rumbleFilter: v.boolean(),
-  enabled: v.boolean(),
-  thresholdMode: v.picklist(["auto", "manual"]),
-  thresholdDb: numberRange(-90, 0, "ゲートしきい値"),
-  attackMs: numberRange(0.1, 2000, "ゲートアタック"),
-  releaseMs: numberRange(0.1, 2000, "ゲートリリース"),
-});
+const thresholdDbMessage = "ゲートしきい値は-90〜0の数値を入力してください。";
+
+export const noiseSchema = v.pipe(
+  v.object({
+    rumbleFilter: v.boolean(),
+    enabled: v.boolean(),
+    thresholdMode: v.picklist(["auto", "manual"]),
+    // Manual range is enforced below; automatic mode ignores this value in Rust.
+    thresholdDb: v.number(thresholdDbMessage),
+    attackMs: numberRange(0.1, 2000, "ゲートアタック"),
+    releaseMs: numberRange(0.1, 2000, "ゲートリリース"),
+  }),
+  v.check((noise) => {
+    if (!Number.isFinite(noise.thresholdDb)) {
+      return false;
+    }
+    // Automatic mode ignores thresholdDb in Rust; only manual mode needs the range.
+    return noise.thresholdMode === "auto" || (noise.thresholdDb >= -90 && noise.thresholdDb <= 0);
+  }, thresholdDbMessage),
+);
 export type NoiseValues = v.InferOutput<typeof noiseSchema>;

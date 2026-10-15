@@ -23,7 +23,18 @@ export const createNoiseSlice: StateCreator<SettingsStore, [], [], NoiseSlice> =
       set((state) => ({ noise: { ...state.noise, rumbleFilter: value } })),
     setEnabled: (value) => set((state) => ({ noise: { ...state.noise, enabled: value } })),
     setThresholdMode: (value) =>
-      set((state) => ({ noise: { ...state.noise, thresholdMode: value } })),
+      set((state) => {
+        const thresholdDb =
+          value === "auto" &&
+          !(
+            Number.isFinite(state.noise.thresholdDb) &&
+            state.noise.thresholdDb >= -90 &&
+            state.noise.thresholdDb <= 0
+          )
+            ? -50
+            : state.noise.thresholdDb;
+        return { noise: { ...state.noise, thresholdMode: value, thresholdDb } };
+      }),
     setThresholdDb: (value) => set((state) => ({ noise: { ...state.noise, thresholdDb: value } })),
     setAttackMs: (value) => set((state) => ({ noise: { ...state.noise, attackMs: value } })),
     setReleaseMs: (value) => set((state) => ({ noise: { ...state.noise, releaseMs: value } })),

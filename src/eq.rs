@@ -7,6 +7,8 @@ use std::error::Error;
 
 pub const FLAGS: [&str; 3] = ["--eq", "--eq-mode", "--eq-output"];
 pub const KEYS: [&str; 3] = ["eq", "eq_mode", "eq_output"];
+/// Upper bound for real-time biquad cost per sample in the audio callback.
+pub const MAX_BANDS: usize = 16;
 
 pub fn band_index(flag: &str) -> Option<usize> {
     let number = flag.strip_prefix("--eq-band")?;
@@ -98,6 +100,9 @@ impl EqSettings {
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
         if self.bands.is_empty() {
             return Err("EQ requires at least one band".into());
+        }
+        if self.bands.len() > MAX_BANDS {
+            return Err(format!("EQ supports at most {MAX_BANDS} bands").into());
         }
         for band in &self.bands {
             band.validate()?;
@@ -238,6 +243,19 @@ mod tests {
         }
         assert!(EqSettings {
             bands: Vec::new(),
+            ..Default::default()
+        }
+        .build()
+        .is_err());
+        assert!(EqSettings {
+            bands: vec![
+                Band {
+                    frequency: 1000.0,
+                    gain_db: 0.0,
+                    q: 1.0
+                };
+                MAX_BANDS + 1
+            ],
             ..Default::default()
         }
         .build()

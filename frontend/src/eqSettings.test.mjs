@@ -40,4 +40,13 @@ test("variable EQ band counts survive editing, saving and neutral reset", async 
   }
   settingsStore.getState().eq.setBands([]);
   await assert.rejects(settingsStore.getState().save());
+  const { MAX_EQ_BANDS } = await import("./windows/settings/eq/schema.ts");
+  settingsStore.getState().eq.setBands(
+    Array.from({ length: MAX_EQ_BANDS + 1 }, (_, index) => ({
+      frequency: 500 + index * 100,
+      gainDb: 0,
+      q: 1,
+    })),
+  );
+  await assert.rejects(settingsStore.getState().save());
 });
