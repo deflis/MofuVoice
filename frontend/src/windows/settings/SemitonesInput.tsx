@@ -41,11 +41,11 @@ export function SemitonesInput({
           value={value}
           onChange={(event) => onChange(event.target.value)}
         />
-      </div>
-      <div className="eq-scale">
-        <span>{lowerLabel}</span>
-        <span>元の声</span>
-        <span>{upperLabel}</span>
+        <div className="eq-scale">
+          <span>{lowerLabel}</span>
+          <span>元の声</span>
+          <span>{upperLabel}</span>
+        </div>
       </div>
     </div>
   );
