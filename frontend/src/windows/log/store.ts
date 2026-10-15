@@ -87,23 +87,12 @@ export const useLogStore = create<LogStore>()((set, get) => {
     error: "",
     mount: () => {
       let disposed = false;
+      let infoSeen = false;
       set({ info: null, error: "" });
-      void invoke<AudioInfo>("log_view")
-        .then((info) => {
-          if (!disposed) {
-            set({ info });
-          }
-          return undefined;
-        })
-        .catch((failure: unknown) => {
-          if (!disposed) {
-            set({ error: String(failure) });
-          }
-          return undefined;
-        });
 
       const unlistenInfo = listen<AudioInfo>("log-info", ({ payload }) => {
         if (!disposed) {
+          infoSeen = true;
           set({ info: payload });
         }
       });
@@ -124,8 +113,23 @@ export const useLogStore = create<LogStore>()((set, get) => {
         }
       });
 
+      void invoke<AudioInfo>("log_view")
+        .then((info) => {
+          if (!disposed && !infoSeen) {
+            set({ info });
+          }
+          return undefined;
+        })
+        .catch((failure: unknown) => {
+          if (!disposed) {
+            set({ error: String(failure) });
+          }
+          return undefined;
+        });
+
       return () => {
         disposed = true;
+        infoSeen = false;
         if (get().logging) {
           stopLogging();
           set({ logging: false });

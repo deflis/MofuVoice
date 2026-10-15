@@ -118,25 +118,12 @@ export const useMainStore = create<MainStore>()((set, get) => {
 
   const beginClose = () => {
     closeRequested = false;
-    set({ machine: { status: "closing" }, notice: "" });
+    const previous = get().machine;
+    set({ machine: { status: "closing" }, notice: "", error: "" });
     void invoke<void>("close_application").catch((failure: unknown) => {
-      set({
-        machine: {
-          status: "faulted",
-          view: {
-            canStart: false,
-            spectrumAvailable: false,
-            setup: {
-              audioAvailable: false,
-              resolvedBackend: "",
-              inputConfigured: false,
-              outputConfigured: false,
-              rememberedDeviceMissing: false,
-            },
-          },
-          error: String(failure),
-        },
-      });
+      // Preserve the prior audio machine so Stop remains available if the
+      // backend session is still running (e.g. settings save failed first).
+      set({ machine: previous, error: String(failure) });
     });
   };
 

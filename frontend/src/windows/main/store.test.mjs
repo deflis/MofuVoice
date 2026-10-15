@@ -79,6 +79,20 @@ test("faulted audio can be retried when canStart is true", async () => {
   assert.equal(mainStore.getState().machine.status, "starting");
 });
 
+test("close_application failure restores running so Stop stays available", async () => {
+  cleanups.push(mainStore.getState().mount());
+  await setImmediate();
+  await mainStore.getState().start(false);
+  callback("audio-phase")({ payload: { phase: "running", error: null } });
+  commands.close_application.mock.mockImplementationOnce(async () => {
+    throw new Error("settings save failed");
+  });
+  mainStore.getState().requestClose();
+  await setImmediate();
+  assert.equal(mainStore.getState().machine.status, "running");
+  assert.match(mainStore.getState().error, /settings save failed/);
+});
+
 test("unmount ignores late main_view and removes listeners", async () => {
   const loading = deferred();
   const remove = { phase: 0, view: 0, close: 0 };
