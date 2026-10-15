@@ -1,14 +1,6 @@
+import { settingsApi, type SettingsApi } from "./api";
 import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
-import type {
-  AudioPhase,
-  DeviceChoices,
-  EqBand,
-  LevelSettings,
-  Settings,
-  SettingsView,
-} from "../../types";
+import type { EqBand, LevelSettings, Settings, SettingsView } from "../../types";
 
 type SettingsStatus =
   | "loading"
@@ -44,6 +36,10 @@ type SettingsStore = {
   requestClose: () => void;
 };
 
+export function canEditSettings(state: Pick<SettingsStore, "status" | "audioBusy">): boolean {
+  return state.status === "ready" && !state.audioBusy;
+}
+
 export function requireSettings(settings: Settings | undefined): Settings {
   if (!settings) {
     throw new Error("設定が読み込まれていません。");
@@ -66,147 +62,181 @@ function applyView(view: SettingsView) {
   };
 }
 
-export const useSettingsStore = create<SettingsStore>()((set, get) => {
-  let closeRequested = false;
-  let applicationClosing = false;
-  let delegatedRequestId: number | undefined;
-  let loadGeneration = 0;
-  let phaseSeen = false;
+export function createSettingsStore(api: SettingsApi = settingsApi) {
+  return create<SettingsStore>()((set, get) => {
+    let lifetime = 0;
+    let disconnectCurrent: (() => void) | undefined;
+    let closeRequested = false;
+    let applicationClosing = false;
+    let delegatedRequestId: number | undefined;
+    let loadGeneration = 0;
+    let phaseSeen = false;
 
-  const load = () => {
-    const generation = ++loadGeneration;
-    set({ status: "loading", error: "", notice: "", settings: undefined });
-    void invoke<SettingsView>("settings_view")
-      .then((view) => {
-        if (generation !== loadGeneration) {
+    const load = () => {
+      const generation = ++loadGeneration;
+      set({ status: "loading", error: "", notice: "", settings: undefined });
+      void api
+        .getView()
+        .then((view) => {
+          if (generation !== loadGeneration) {
+            return undefined;
+          }
+          set((state) => ({
+            ...applyView(view),
+            audioBusy: phaseSeen ? state.audioBusy : view.audioBusy,
+            error: "",
+            notice: "",
+          }));
+          flushClose();
           return undefined;
-        }
-        set((state) => ({
-          ...applyView(view),
-          audioBusy: phaseSeen ? state.audioBusy : view.audioBusy,
-          error: "",
-          notice: "",
-        }));
-        flushClose();
-        return undefined;
-      })
-      .catch((failure: unknown) => {
-        if (generation !== loadGeneration) {
+        })
+        .catch((failure: unknown) => {
+          if (generation !== loadGeneration) {
+            return undefined;
+          }
+          set({ status: "loadFailed", error: String(failure) });
+          flushClose();
           return undefined;
+        });
+    };
+
+    const hideSettings = () => {
+      const generation = lifetime;
+      return api.hide().catch((error: unknown) => {
+        if (generation === lifetime) {
+          set({ error: String(error) });
         }
-        set({ status: "loadFailed", error: String(failure) });
-        flushClose();
-        return undefined;
       });
-  };
+    };
 
-  const hideSettings = () =>
-    invoke("close_settings").catch((error: unknown) => set({ error: String(error) }));
-
-  const flushClose = () => {
-    if (!closeRequested) {
-      return;
-    }
-    const state = get();
-    if (
-      state.status === "loading" ||
-      state.status === "saving" ||
-      state.status === "switchingBackend"
-    ) {
-      return;
-    }
-    if (state.status === "loadFailed") {
-      closeRequested = false;
-      if (!applicationClosing) {
-        void hideSettings();
+    const flushClose = () => {
+      if (!closeRequested) {
+        return;
       }
-      return;
-    }
-    if (state.status === "closing" || !state.settings) {
-      return;
-    }
-    closeRequested = false;
-    const draft = requireSettings(state.settings);
-    set({ status: applicationClosing ? "closing" : "saving", error: "", notice: "" });
-    void (async () => {
-      await invoke<void>("save_settings", { settings: draft });
-      if (applicationClosing) {
-        await invoke<void>("close_application");
+      const state = get();
+      if (
+        state.status === "loading" ||
+        state.status === "saving" ||
+        state.status === "switchingBackend"
+      ) {
+        return;
+      }
+      if (state.status === "loadFailed") {
+        closeRequested = false;
+        if (!applicationClosing) {
+          void hideSettings();
+        }
+        return;
+      }
+      if (state.status === "closing" || !state.settings) {
+        return;
+      }
+      closeRequested = false;
+      const draft = requireSettings(state.settings);
+      const generation = lifetime;
+      set({ status: applicationClosing ? "closing" : "saving", error: "", notice: "" });
+      void (async () => {
+        await api.save(draft);
+        if (generation !== lifetime) {
+          return;
+        }
+        if (applicationClosing) {
+          await api.closeApplication();
+          if (generation !== lifetime) {
+            return;
+          }
+          applicationClosing = false;
+          delegatedRequestId = undefined;
+          closeRequested = false;
+          return;
+        }
+        // Drop close requests queued while this automatic save was in flight so a
+        // remounted settings window is not immediately saved/hidden again.
+        closeRequested = false;
+        set({ status: "ready", notice: "設定を保存しました。" });
+        await api.hide();
+      })().catch((error: unknown) => {
+        if (generation !== lifetime) {
+          return;
+        }
         applicationClosing = false;
         delegatedRequestId = undefined;
         closeRequested = false;
-        return;
-      }
-      // Drop close requests queued while this automatic save was in flight so a
-      // remounted settings window is not immediately saved/hidden again.
-      closeRequested = false;
-      set({ status: "ready", notice: "設定を保存しました。" });
-      await invoke("close_settings");
-    })().catch((error: unknown) => {
-      applicationClosing = false;
-      set({ status: "ready", error: String(error) });
-      flushClose();
-    });
-  };
-
-  return {
-    status: "loading",
-    settings: undefined,
-    levelDefaults: undefined,
-    devices: [],
-    outputDevices: [],
-    backends: [],
-    deviceError: "",
-    resolvedBackend: "",
-    audioAvailable: false,
-    audioBusy: false,
-    error: "",
-    notice: "",
-    mount: () => {
-      let disposed = false;
-      closeRequested = false;
-      applicationClosing = false;
-      delegatedRequestId = undefined;
-      phaseSeen = false;
-
-      const unlistenClose = listen("request-close", () => {
-        if (!disposed) {
-          get().requestClose();
-        }
+        set({ status: "ready", error: String(error) });
       });
-      void unlistenClose.catch((error: unknown) => {
-        if (!disposed) {
-          set({ error: String(error) });
-        }
-      });
+    };
 
-      const unlistenPhase = listen<AudioPhase>("audio-phase", ({ payload }) => {
-        if (disposed) {
-          return;
-        }
-        phaseSeen = true;
-        set({ audioBusy: payload.busy });
-      });
-      void unlistenPhase.catch((error: unknown) => {
-        if (!disposed) {
-          set({ error: String(error) });
-        }
-      });
+    return {
+      status: "loading",
+      settings: undefined,
+      levelDefaults: undefined,
+      devices: [],
+      outputDevices: [],
+      backends: [],
+      deviceError: "",
+      resolvedBackend: "",
+      audioAvailable: false,
+      audioBusy: false,
+      error: "",
+      notice: "",
+      mount: () => {
+        disconnectCurrent?.();
+        const mounted = ++lifetime;
+        let disposed = false;
+        let acknowledging = false;
+        closeRequested = false;
+        applicationClosing = false;
+        delegatedRequestId = undefined;
+        phaseSeen = false;
 
-      const unlistenApplicationClose = listen<number>(
-        "request-application-close",
-        ({ payload: requestId }) => {
-          const { settings, status } = get();
-          if (disposed || !settings || status === "loadFailed") {
+        const unlistenClose = api.onClose(() => {
+          if (!disposed) {
+            get().requestClose();
+          }
+        });
+        void unlistenClose.catch((error: unknown) => {
+          if (!disposed) {
+            set({ error: String(error) });
+          }
+        });
+
+        const unlistenPhase = api.onPhase((payload) => {
+          if (disposed) {
             return;
           }
-          void invoke<boolean>("acknowledge_application_close", { requestId })
+          phaseSeen = true;
+          set({ audioBusy: payload.busy });
+        });
+        void unlistenPhase.catch((error: unknown) => {
+          if (!disposed) {
+            set({ error: String(error) });
+          }
+        });
+
+        const unlistenApplicationClose = api.onApplicationClose((requestId) => {
+          const { settings, status } = get();
+          if (
+            disposed ||
+            acknowledging ||
+            applicationClosing ||
+            !settings ||
+            status === "loadFailed" ||
+            status === "closing"
+          ) {
+            return;
+          }
+          acknowledging = true;
+          void api
+            .acknowledgeClose(requestId)
             .then(async (accepted) => {
+              if (!disposed) {
+                acknowledging = false;
+              }
               if (!accepted) {
                 return undefined;
               }
               if (disposed) {
-                await invoke("fallback_application_close", { requestId });
+                await api.fallbackClose(requestId);
                 return undefined;
               }
               delegatedRequestId = requestId;
@@ -216,155 +246,202 @@ export const useSettingsStore = create<SettingsStore>()((set, get) => {
             })
             .catch((error: unknown) => {
               if (!disposed) {
+                acknowledging = false;
                 set({ error: String(error) });
               }
             });
-        },
-      );
-      void unlistenApplicationClose.catch((error: unknown) => {
-        if (!disposed) {
-          set({ error: String(error) });
-        }
-      });
+        });
+        void unlistenApplicationClose.catch((error: unknown) => {
+          if (!disposed) {
+            set({ error: String(error) });
+          }
+        });
 
-      load();
+        load();
 
-      return () => {
-        disposed = true;
-        loadGeneration += 1;
-        closeRequested = false;
-        phaseSeen = false;
-        if (delegatedRequestId !== undefined) {
-          void invoke("fallback_application_close", { requestId: delegatedRequestId }).catch(
+        disconnectCurrent = () => {
+          if (disposed) {
+            return;
+          }
+          disposed = true;
+          if (lifetime === mounted) {
+            lifetime += 1;
+          }
+          loadGeneration += 1;
+          closeRequested = false;
+          phaseSeen = false;
+          if (delegatedRequestId !== undefined) {
+            void api.fallbackClose(delegatedRequestId).catch(() => {});
+            delegatedRequestId = undefined;
+          }
+          void unlistenApplicationClose.then(
+            (remove) => remove(),
             () => {},
           );
-          delegatedRequestId = undefined;
-        }
-        void unlistenApplicationClose.then(
-          (remove) => remove(),
-          () => {},
-        );
-        void unlistenClose.then(
-          (remove) => remove(),
-          () => {},
-        );
-        void unlistenPhase.then(
-          (remove) => remove(),
-          () => {},
-        );
-      };
-    },
-    retry: () => {
-      if (get().status === "loadFailed") {
-        load();
-      }
-    },
-    save: async () => {
-      const state = get();
-      if (state.status !== "ready") {
-        return;
-      }
-      set({ status: "saving", error: "", notice: "" });
-      try {
-        await invoke<void>("save_settings", { settings: requireSettings(get().settings) });
-        set({ status: "ready", notice: "設定を保存しました。" });
-      } catch (failure) {
-        set({ status: "ready", error: String(failure) });
-      }
-      flushClose();
-    },
-    updateBackend: async (backend) => {
-      const state = get();
-      if (state.status !== "ready") {
-        return;
-      }
-      set({
-        status: "switchingBackend",
-        error: "",
-        notice: "",
-        settings: { ...requireSettings(state.settings), backend, device: "", outputDevice: "" },
-        devices: [],
-        outputDevices: [],
-        audioAvailable: false,
-        resolvedBackend: "",
-        deviceError: "",
-      });
-      try {
-        const choices = await invoke<DeviceChoices>("device_choices", { backend });
-        set({ status: "ready", ...choices });
-      } catch (failure) {
-        set({ status: "ready", error: String(failure) });
-      }
-      flushClose();
-    },
-    updateRouting: (inputChannel, outputChannels) =>
-      set((state) => ({
-        settings: {
-          ...requireSettings(state.settings),
-          inputChannel,
-          outputChannels: [...outputChannels],
-        },
-        notice: "",
-      })),
-    update: (key, value) =>
-      set((state) => ({
-        settings: { ...requireSettings(state.settings), [key]: value },
-        notice: "",
-      })),
-    updateLevel: (key, value) =>
-      set((state) => {
-        const settings = requireSettings(state.settings);
-        return {
-          settings: { ...settings, level: { ...settings.level, [key]: value } },
-          notice: "",
+          void unlistenClose.then(
+            (remove) => remove(),
+            () => {},
+          );
+          void unlistenPhase.then(
+            (remove) => remove(),
+            () => {},
+          );
         };
-      }),
-    updateEqBand: (index, key, value) =>
-      set((state) => {
-        const settings = requireSettings(state.settings);
-        const bands: Settings["eq"]["bands"] = [...settings.eq.bands];
-        bands[index] = { ...bands[index], [key]: value };
-        return { settings: { ...settings, eq: { ...settings.eq, bands } }, notice: "" };
-      }),
-    resetEq: () =>
-      set((state) => {
-        const settings = requireSettings(state.settings);
-        return {
-          settings: {
-            ...settings,
-            eq: {
-              ...settings.eq,
-              bands: [
-                { frequency: "250", gainDb: "0", q: "0.7" },
-                { frequency: "3000", gainDb: "0", q: "0.8" },
-                { frequency: "8000", gainDb: "0", q: "0.7" },
-              ],
-              outputDb: "0",
+        return disconnectCurrent;
+      },
+      retry: () => {
+        if (get().status === "loadFailed") {
+          load();
+        }
+      },
+      save: async () => {
+        const generation = lifetime;
+        const state = get();
+        if (!canEditSettings(state)) {
+          return;
+        }
+        set({ status: "saving", error: "", notice: "" });
+        try {
+          await api.save(requireSettings(state.settings));
+          if (generation !== lifetime) {
+            return;
+          }
+          set({ status: "ready", notice: "設定を保存しました。" });
+        } catch (failure) {
+          if (generation !== lifetime) {
+            return;
+          }
+          set({ status: "ready", error: String(failure) });
+        }
+        flushClose();
+      },
+      updateBackend: async (backend) => {
+        const generation = lifetime;
+        const state = get();
+        if (!canEditSettings(state)) {
+          return;
+        }
+        set({
+          status: "switchingBackend",
+          error: "",
+          notice: "",
+          settings: { ...requireSettings(state.settings), backend, device: "", outputDevice: "" },
+          devices: [],
+          outputDevices: [],
+          audioAvailable: false,
+          resolvedBackend: "",
+          deviceError: "",
+        });
+        try {
+          const choices = await api.deviceChoices(backend);
+          if (generation !== lifetime) {
+            return;
+          }
+          set({ status: "ready", ...choices });
+        } catch (failure) {
+          if (generation !== lifetime) {
+            return;
+          }
+          set({ status: "ready", error: String(failure) });
+        }
+        flushClose();
+      },
+      updateRouting: (inputChannel, outputChannels) =>
+        set((state) =>
+          !canEditSettings(state)
+            ? state
+            : {
+                settings: {
+                  ...requireSettings(state.settings),
+                  inputChannel,
+                  outputChannels: [...outputChannels],
+                },
+                notice: "",
+              },
+        ),
+      update: (key, value) => {
+        if (key === "backend" && typeof value === "string") {
+          void get().updateBackend(value);
+          return;
+        }
+        set((state) =>
+          !canEditSettings(state)
+            ? state
+            : {
+                settings: { ...requireSettings(state.settings), [key]: value },
+                notice: "",
+              },
+        );
+      },
+      updateLevel: (key, value) =>
+        set((state) => {
+          if (!canEditSettings(state)) {
+            return state;
+          }
+          const settings = requireSettings(state.settings);
+          return {
+            settings: { ...settings, level: { ...settings.level, [key]: value } },
+            notice: "",
+          };
+        }),
+      updateEqBand: (index, key, value) =>
+        set((state) => {
+          if (!canEditSettings(state)) {
+            return state;
+          }
+          const settings = requireSettings(state.settings);
+          const bands: Settings["eq"]["bands"] = [...settings.eq.bands];
+          bands[index] = { ...bands[index], [key]: value };
+          return { settings: { ...settings, eq: { ...settings.eq, bands } }, notice: "" };
+        }),
+      resetEq: () =>
+        set((state) => {
+          if (!canEditSettings(state)) {
+            return state;
+          }
+          const settings = requireSettings(state.settings);
+          return {
+            settings: {
+              ...settings,
+              eq: {
+                ...settings.eq,
+                bands: [
+                  { frequency: "250", gainDb: "0", q: "0.7" },
+                  { frequency: "3000", gainDb: "0", q: "0.8" },
+                  { frequency: "8000", gainDb: "0", q: "0.7" },
+                ],
+                outputDb: "0",
+              },
             },
-          },
-          notice: "",
-        };
-      }),
-    resetLevel: () =>
-      set((state) => {
-        const settings = requireSettings(state.settings);
-        if (!state.levelDefaults) {
-          throw new Error("既定値が読み込まれていません。");
+            notice: "",
+          };
+        }),
+      resetLevel: () =>
+        set((state) => {
+          if (!canEditSettings(state)) {
+            return state;
+          }
+          const settings = requireSettings(state.settings);
+          if (!state.levelDefaults) {
+            throw new Error("既定値が読み込まれていません。");
+          }
+          return {
+            notice: "",
+            settings: {
+              ...settings,
+              level: { ...state.levelDefaults, enabled: settings.level.enabled },
+            },
+          };
+        }),
+      requestClose: () => {
+        if (get().status === "closing") {
+          return;
         }
-        return {
-          notice: "",
-          settings: {
-            ...settings,
-            level: { ...state.levelDefaults, enabled: settings.level.enabled },
-          },
-        };
-      }),
-    requestClose: () => {
-      if (get().status === "closing") {
-        return;
-      }
-      closeRequested = true;
-      flushClose();
-    },
-  };
-});
+        closeRequested = true;
+        flushClose();
+      },
+    };
+  });
+}
+
+export const useSettingsStore = createSettingsStore();

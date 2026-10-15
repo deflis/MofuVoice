@@ -1,14 +1,8 @@
 import { useShallow } from "zustand/react/shallow";
-import { requireSettings, useSettingsStore } from "./store";
+import { canEditSettings, requireSettings, useSettingsStore } from "./store";
 
 export function useSettingsLocked() {
-  return useSettingsStore(
-    (state) =>
-      state.audioBusy ||
-      state.status === "saving" ||
-      state.status === "switchingBackend" ||
-      state.status === "closing",
-  );
+  return useSettingsStore((state) => !canEditSettings(state));
 }
 
 export function useDeviceSettings() {
@@ -82,7 +76,7 @@ export function useAutoLevelSettings() {
 export function useSaveSettings() {
   return useSettingsStore(
     useShallow((state) => ({
-      disabled: state.status !== "ready" || state.audioBusy,
+      disabled: !canEditSettings(state),
       save: state.save,
     })),
   );
