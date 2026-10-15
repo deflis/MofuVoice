@@ -183,7 +183,9 @@ export function createSettingsStore(api: SettingsApi = settingsApi) {
         disconnectCurrent?.();
         const mounted = ++lifetime;
         let disposed = false;
-        let acknowledging = false;
+        const acknowledgedRequests = new Set<number>();
+        let acknowledgmentSequence = 0;
+        let delegatedSequence = 0;
         closeRequested = false;
         applicationClosing = false;
         delegatedRequestId = undefined;
@@ -217,36 +219,41 @@ export function createSettingsStore(api: SettingsApi = settingsApi) {
           const { settings, status } = get();
           if (
             disposed ||
-            acknowledging ||
-            applicationClosing ||
+            acknowledgedRequests.has(requestId) ||
             !settings ||
-            status === "loadFailed" ||
-            status === "closing"
+            status === "loadFailed"
           ) {
             return;
           }
-          acknowledging = true;
+          acknowledgedRequests.add(requestId);
+          const sequence = ++acknowledgmentSequence;
           void api
             .acknowledgeClose(requestId)
             .then(async (accepted) => {
-              if (!disposed) {
-                acknowledging = false;
-              }
               if (!accepted) {
+                acknowledgedRequests.delete(requestId);
                 return undefined;
               }
               if (disposed) {
                 await api.fallbackClose(requestId);
                 return undefined;
               }
-              delegatedRequestId = requestId;
-              applicationClosing = true;
-              get().requestClose();
+              // A repeated native close creates a new ID even while this save is
+              // pending. Acknowledge it to suppress the native timeout, but keep
+              // one save/shutdown pipeline. Responses may arrive out of order.
+              if (sequence > delegatedSequence) {
+                delegatedSequence = sequence;
+                delegatedRequestId = requestId;
+              }
+              if (!applicationClosing && get().status !== "closing") {
+                applicationClosing = true;
+                get().requestClose();
+              }
               return undefined;
             })
             .catch((error: unknown) => {
               if (!disposed) {
-                acknowledging = false;
+                acknowledgedRequests.delete(requestId);
                 set({ error: String(error) });
               }
             });

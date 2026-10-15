@@ -274,3 +274,83 @@ test("close acknowledgements are exclusive and late acceptance returns to native
   assert.deepEqual(settingsApi.fallbackClose.mock.calls[0].arguments, [17]);
   assert.equal(settingsApi.closeApplication.mock.callCount(), 0);
 });
+
+test("repeated shutdown IDs are acknowledged while sharing the pending delegated save", async () => {
+  cleanups.push(settingsStore.getState().mount());
+  await setImmediate();
+  const saving = deferred();
+  settingsApi.save.mock.mockImplementationOnce(() => saving.promise);
+  const onClose = callback("request-application-close");
+  onClose({ payload: 21 });
+  await setImmediate();
+  assert.equal(settingsStore.getState().status, "closing");
+  onClose({ payload: 22 });
+  onClose({ payload: 22 });
+  await setImmediate();
+  assert.deepEqual(
+    settingsApi.acknowledgeClose.mock.calls.map((call) => call.arguments),
+    [[21], [22]],
+  );
+  assert.equal(settingsApi.save.mock.callCount(), 1);
+  assert.equal(settingsApi.closeApplication.mock.callCount(), 0);
+  saving.resolve();
+  await setImmediate();
+  assert.equal(settingsApi.closeApplication.mock.callCount(), 1);
+  assert.equal(settingsApi.hide.mock.callCount(), 0);
+});
+
+test("out-of-order acknowledgements return the newest shutdown ID on unmount", async () => {
+  const disconnect = settingsStore.getState().mount();
+  await setImmediate();
+  const saving = deferred();
+  const earlier = deferred();
+  const later = deferred();
+  settingsApi.save.mock.mockImplementationOnce(() => saving.promise);
+  const onClose = callback("request-application-close");
+  onClose({ payload: 31 });
+  await setImmediate();
+  settingsApi.acknowledgeClose.mock.mockImplementationOnce(() => earlier.promise);
+  settingsApi.acknowledgeClose.mock.mockImplementationOnce(() => later.promise);
+  onClose({ payload: 32 });
+  onClose({ payload: 33 });
+  later.resolve(true);
+  await setImmediate();
+  earlier.resolve(true);
+  await setImmediate();
+  assert.equal(settingsApi.save.mock.callCount(), 1);
+  disconnect();
+  assert.deepEqual(
+    settingsApi.fallbackClose.mock.calls.map((call) => call.arguments),
+    [[33]],
+  );
+  saving.resolve();
+  await setImmediate();
+  assert.equal(settingsApi.closeApplication.mock.callCount(), 0);
+});
+
+test("repeated shutdown during a failed save preserves the draft and allows retry", async () => {
+  cleanups.push(settingsStore.getState().mount());
+  await setImmediate();
+  settingsStore.getState().update("pitch", "4");
+  const saving = deferred();
+  settingsApi.save.mock.mockImplementationOnce(() => saving.promise);
+  const onClose = callback("request-application-close");
+  onClose({ payload: 41 });
+  await setImmediate();
+  onClose({ payload: 42 });
+  await setImmediate();
+  assert.deepEqual(
+    settingsApi.acknowledgeClose.mock.calls.map((call) => call.arguments),
+    [[41], [42]],
+  );
+  saving.reject(new Error("save failed"));
+  await setImmediate();
+  assert.equal(settingsApi.closeApplication.mock.callCount(), 0);
+  assert.equal(settingsStore.getState().status, "ready");
+  assert.equal(settingsStore.getState().settings.pitch, "4");
+  onClose({ payload: 43 });
+  await setImmediate();
+  assert.equal(settingsApi.save.mock.callCount(), 2);
+  assert.equal(settingsApi.closeApplication.mock.callCount(), 1);
+  assert.equal(settingsApi.save.mock.calls[1].arguments[0].pitch, "4");
+});
