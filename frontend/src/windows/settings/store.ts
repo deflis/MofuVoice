@@ -134,13 +134,18 @@ export const useSettingsStore = create<SettingsStore>()((set, get) => {
         await invoke<void>("close_application");
         applicationClosing = false;
         delegatedRequestId = undefined;
+        closeRequested = false;
         return;
       }
+      // Drop close requests queued while this automatic save was in flight so a
+      // remounted settings window is not immediately saved/hidden again.
+      closeRequested = false;
       set({ status: "ready", notice: "設定を保存しました。" });
       await invoke("close_settings");
     })().catch((error: unknown) => {
       applicationClosing = false;
       set({ status: "ready", error: String(error) });
+      flushClose();
     });
   };
 

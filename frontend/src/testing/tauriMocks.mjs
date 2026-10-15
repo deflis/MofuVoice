@@ -75,6 +75,7 @@ export const mainView = {
     outputConfigured: true,
     rememberedDeviceMissing: false,
   },
+  phase: { phase: "ready", error: null, busy: false },
 };
 
 export const settingsView = {

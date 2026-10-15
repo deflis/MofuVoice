@@ -357,6 +357,7 @@ struct MainView {
     can_start: bool,
     spectrum_available: bool,
     setup: MainSetup,
+    phase: AudioPhase,
 }
 #[derive(Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -418,7 +419,8 @@ fn available_backends() -> Vec<String> {
     .map(|kind| kind.name().into())
     .collect()
 }
-fn build_main_view(settings: &Settings) -> Result<MainView, String> {
+fn build_main_view(desktop: &mut Desktop) -> Result<MainView, String> {
+    let settings = &desktop.settings;
     let kind = backend::BackendKind::parse(&settings.backend).map_err(|error| error.to_string())?;
     let device_choices = choices(kind);
     let resolved = device_choices.resolved_backend.as_str();
@@ -439,6 +441,8 @@ fn build_main_view(settings: &Settings) -> Result<MainView, String> {
                 .output_devices
                 .iter()
                 .any(|device| device == &settings.output_device));
+    let busy = desktop.session.poll();
+    let info = desktop.session.info();
     Ok(MainView {
         can_start: device_choices.audio_available && input_configured,
         spectrum_available: cfg!(windows),
@@ -448,6 +452,11 @@ fn build_main_view(settings: &Settings) -> Result<MainView, String> {
             input_configured,
             output_configured,
             remembered_device_missing,
+        },
+        phase: AudioPhase {
+            phase: info.phase.to_string(),
+            error: info.error.clone(),
+            busy,
         },
     })
 }
@@ -464,8 +473,8 @@ fn build_settings_view(desktop: &mut Desktop) -> Result<SettingsView, String> {
 }
 #[tauri::command]
 fn main_view(state: State<'_, DesktopState>) -> Result<MainView, String> {
-    let desktop = state.lock().map_err(|error| error.to_string())?;
-    build_main_view(&desktop.settings)
+    let mut desktop = state.lock().map_err(|error| error.to_string())?;
+    build_main_view(&mut desktop)
 }
 #[tauri::command]
 fn settings_view(state: State<'_, DesktopState>) -> Result<SettingsView, String> {
@@ -659,7 +668,7 @@ fn save_settings(
     }
     gui_settings::save(&desktop.path, &options).map_err(|error| error.to_string())?;
     desktop.settings = settings;
-    let view = build_main_view(&desktop.settings)?;
+    let view = build_main_view(&mut desktop)?;
     drop(desktop);
     if let Some(main) = app.get_webview_window("main") {
         app.emit_to(main.label(), "main-view", &view)

@@ -29,6 +29,7 @@ const view = {
     outputConfigured: true,
     rememberedDeviceMissing: false,
   },
+  phase: { phase: "ready", error: null, busy: false },
 };
 
 test("selectors derive controls from machine status", () => {

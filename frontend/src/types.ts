@@ -52,15 +52,16 @@ export type MainSetup = {
   outputConfigured: boolean;
   rememberedDeviceMissing: boolean;
 };
-export type MainView = {
-  canStart: boolean;
-  spectrumAvailable: boolean;
-  setup: MainSetup;
-};
 export type AudioPhase = {
   phase: string;
   error: string | null;
   busy: boolean;
+};
+export type MainView = {
+  canStart: boolean;
+  spectrumAvailable: boolean;
+  setup: MainSetup;
+  phase: AudioPhase;
 };
 export type AudioInfo = {
   phase: string;

@@ -23,6 +23,25 @@ test("close saves draft then hides settings", async () => {
   assert.equal(commands.close_settings.mock.callCount(), 1);
 });
 
+test("close queued during automatic save does not hide after reopen", async () => {
+  const saving = deferred();
+  cleanups.push(settingsStore.getState().mount());
+  await setImmediate();
+  commands.save_settings.mock.mockImplementationOnce(() => saving.promise);
+  settingsStore.getState().requestClose();
+  assert.equal(settingsStore.getState().status, "saving");
+  settingsStore.getState().requestClose();
+  saving.resolve(undefined);
+  await setImmediate();
+  assert.equal(commands.close_settings.mock.callCount(), 1);
+  assert.equal(commands.save_settings.mock.callCount(), 1);
+  settingsStore.getState().update("pitch", "4");
+  await settingsStore.getState().save();
+  assert.equal(commands.save_settings.mock.callCount(), 2);
+  assert.equal(commands.close_settings.mock.callCount(), 1);
+  assert.equal(settingsStore.getState().status, "ready");
+});
+
 test("load failure allows hide without save", async () => {
   commands.settings_view.mock.mockImplementationOnce(async () => {
     throw new Error("settings failed");

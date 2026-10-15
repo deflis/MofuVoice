@@ -91,6 +91,29 @@ test("stopped phase keeps stopping until worker busy clears", async () => {
   assert.equal(mainStore.getState().machine.status, "idle");
 });
 
+test("main_view phase snapshot restores running after remount", async () => {
+  commands.main_view.mock.mockImplementationOnce(async () => ({
+    ...mainView,
+    phase: { phase: "running", error: null, busy: true },
+  }));
+  cleanups.push(mainStore.getState().mount());
+  await setImmediate();
+  assert.equal(mainStore.getState().machine.status, "running");
+});
+
+test("audio-phase during bootstrap wins over stale main_view phase", async () => {
+  const loading = deferred();
+  commands.main_view.mock.mockImplementationOnce(() => loading.promise);
+  cleanups.push(mainStore.getState().mount());
+  callback("audio-phase")({ payload: { phase: "running", error: null, busy: true } });
+  loading.resolve({
+    ...mainView,
+    phase: { phase: "ready", error: null, busy: false },
+  });
+  await setImmediate();
+  assert.equal(mainStore.getState().machine.status, "running");
+});
+
 test("close_application failure restores running so Stop stays available", async () => {
   cleanups.push(mainStore.getState().mount());
   await setImmediate();

@@ -101,16 +101,20 @@ function reportActionError(set: (partial: Partial<MainStore>) => void, failure: 
 export const useMainStore = create<MainStore>()((set, get) => {
   let closeRequested = false;
   let loadGeneration = 0;
+  let pendingPhase: AudioPhase | undefined;
 
   const loadView = () => {
     const generation = ++loadGeneration;
+    pendingPhase = undefined;
     set({ machine: { status: "bootstrapping" }, error: "", notice: "" });
     void invoke<MainView>("main_view")
       .then((view) => {
         if (generation !== loadGeneration) {
           return undefined;
         }
-        set({ machine: { status: "idle", view } });
+        const phase = pendingPhase ?? view.phase;
+        pendingPhase = undefined;
+        set({ machine: applyPhase({ status: "idle", view }, phase) });
         flushClose();
         return undefined;
       })
@@ -118,6 +122,7 @@ export const useMainStore = create<MainStore>()((set, get) => {
         if (generation !== loadGeneration) {
           return undefined;
         }
+        pendingPhase = undefined;
         set({ machine: { status: "bootstrapFailed", error: String(failure) } });
         closeRequested = false;
         return undefined;
@@ -164,7 +169,7 @@ export const useMainStore = create<MainStore>()((set, get) => {
     mount: () => {
       let disposed = false;
       closeRequested = false;
-      loadView();
+      pendingPhase = undefined;
 
       const reportListenError = (failure: unknown) => {
         if (!disposed) {
@@ -174,6 +179,10 @@ export const useMainStore = create<MainStore>()((set, get) => {
 
       const unlistenPhase = listen<AudioPhase>("audio-phase", ({ payload }) => {
         if (disposed) {
+          return;
+        }
+        if (get().machine.status === "bootstrapping") {
+          pendingPhase = payload;
           return;
         }
         set((state) => ({ machine: applyPhase(state.machine, payload) }));
@@ -196,10 +205,13 @@ export const useMainStore = create<MainStore>()((set, get) => {
       });
       void unlistenClose.catch(reportListenError);
 
+      loadView();
+
       return () => {
         disposed = true;
         loadGeneration += 1;
         closeRequested = false;
+        pendingPhase = undefined;
         void unlistenPhase.then(
           (remove) => remove(),
           () => {},
