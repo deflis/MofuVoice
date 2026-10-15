@@ -2,6 +2,7 @@
 //! All FFT tables, windows, and overlap storage are allocated before streaming.
 //! Wet audio uses a long analysis window and a short right-aligned synthesis window,
 //! so the fixed delay is SYNTHESIS samples; the neutral setting bypasses exactly.
+use crate::dsp::{complex::Complex, fft_kernel::FftKernel, window::hann, Sample};
 use std::{error::Error, fmt};
 #[path = "pitch_math.rs"]
 mod math;
@@ -65,37 +66,6 @@ impl PitchSettings {
     }
 }
 
-/// Integer conversion is normalized in f64 so every i32 input bit is representable.
-/// Wet integer output rounds and saturates. Dry output bypasses conversion entirely.
-pub trait Sample: Copy + Default + PartialEq {
-    fn normalized(self) -> f64;
-    fn from_normalized(value: f64) -> Self;
-}
-impl Sample for f32 {
-    fn normalized(self) -> f64 {
-        self as f64
-    }
-    fn from_normalized(value: f64) -> Self {
-        value as f32
-    }
-}
-impl Sample for i32 {
-    fn normalized(self) -> f64 {
-        self as f64 / 2_147_483_648.0
-    }
-    fn from_normalized(value: f64) -> Self {
-        (value * 2_147_483_648.0).round() as Self
-    }
-}
-impl Sample for i16 {
-    fn normalized(self) -> f64 {
-        self as f64 / 32_768.0
-    }
-    fn from_normalized(value: f64) -> Self {
-        (value * 32_768.0).round() as Self
-    }
-}
-
 pub const WINDOW: usize = 2048;
 pub const HOP: usize = 128;
 /// Right-aligned synthesis / COLA length (`2M`); wet delay equals this many samples.
@@ -105,10 +75,6 @@ pub const LATENCY: usize = SYNTHESIS;
 const BINS: usize = WINDOW / 2 + 1;
 const QUEUE: usize = WINDOW * 2;
 const CEPSTRUM: usize = 80;
-
-fn hann(index: usize, length: usize) -> f64 {
-    0.5 - 0.5 * (std::f64::consts::TAU * index as f64 / length as f64).cos()
-}
 
 fn asymmetric_windows() -> (Box<[f64; WINDOW]>, Box<[f64; WINDOW]>, f64) {
     let mut analysis = Box::new([0.0; WINDOW]);
@@ -134,39 +100,6 @@ fn asymmetric_windows() -> (Box<[f64; WINDOW]>, Box<[f64; WINDOW]>, f64) {
         energy += power;
     }
     (analysis, synthesis, moment / energy)
-}
-
-#[derive(Clone, Copy, Default)]
-#[repr(C)]
-struct Complex {
-    re: f64,
-    im: f64,
-}
-impl Complex {
-    #[inline(always)]
-    fn polar(magnitude: f64, phase: f64) -> Self {
-        let (sin, cos) = phase.sin_cos();
-        Self {
-            re: magnitude * cos,
-            im: magnitude * sin,
-        }
-    }
-
-    #[inline(always)]
-    fn mul(self, other: Self) -> Self {
-        Self {
-            re: self.re * other.re - self.im * other.im,
-            im: self.re * other.im + self.im * other.re,
-        }
-    }
-
-    #[inline(always)]
-    fn scale(self, weight: f64) -> Self {
-        Self {
-            re: self.re * weight,
-            im: self.im * weight,
-        }
-    }
 }
 
 const HALF: usize = WINDOW / 2;
@@ -245,12 +178,12 @@ impl Fft {
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         if self.avx2 {
             // SAFETY: detected once before streaming; slices are checked by each stage.
-            unsafe { Self::stages_avx2(roots, data) };
+            unsafe { FftKernel::stages_avx2(roots, data) };
         } else {
-            Self::stages(roots, data);
+            FftKernel::stages(roots, data);
         }
         #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
-        Self::stages(roots, data);
+        FftKernel::stages(roots, data);
         if let Some(scale) = scale {
             for value in data {
                 value.re *= scale;
@@ -259,116 +192,15 @@ impl Fft {
         }
     }
 
-    fn stages<const N: usize>(roots: &[Complex], data: &mut [Complex; N]) {
-        // Fixed stage sizes let the compiler specialize strides and butterfly
-        // loops for our power-of-two transforms instead of dividing at runtime.
-        Self::stage::<N, 2>(roots, data);
-        Self::stage::<N, 4>(roots, data);
-        Self::stage::<N, 8>(roots, data);
-        Self::stage::<N, 16>(roots, data);
-        Self::stage::<N, 32>(roots, data);
-        Self::stage::<N, 64>(roots, data);
-        Self::stage::<N, 128>(roots, data);
-        Self::stage::<N, 256>(roots, data);
-        Self::stage::<N, 512>(roots, data);
-        Self::stage::<N, 1024>(roots, data);
-        Self::stage::<N, 2048>(roots, data);
-    }
-
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    #[target_feature(enable = "avx2")]
-    unsafe fn stages_avx2<const N: usize>(roots: &[Complex], data: &mut [Complex; N]) {
-        Self::stage::<N, 2>(roots, data);
-        // SAFETY: this function requires AVX2 and each stage checks its bounds.
-        unsafe {
-            Self::stage_avx2::<N, 4>(roots, data);
-            Self::stage_avx2::<N, 8>(roots, data);
-            Self::stage_avx2::<N, 16>(roots, data);
-            Self::stage_avx2::<N, 32>(roots, data);
-            Self::stage_avx2::<N, 64>(roots, data);
-            Self::stage_avx2::<N, 128>(roots, data);
-            Self::stage_avx2::<N, 256>(roots, data);
-            Self::stage_avx2::<N, 512>(roots, data);
-            Self::stage_avx2::<N, 1024>(roots, data);
-            Self::stage_avx2::<N, 2048>(roots, data);
-        }
-    }
-
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    #[target_feature(enable = "avx2")]
-    unsafe fn stage_avx2<const N: usize, const SIZE: usize>(
-        roots: &[Complex],
-        data: &mut [Complex; N],
-    ) {
-        #[cfg(target_arch = "x86")]
-        use std::arch::x86::*;
-        #[cfg(target_arch = "x86_64")]
-        use std::arch::x86_64::*;
-        if SIZE > N {
-            return;
-        }
-        let half = SIZE / 2;
-        let roots = &roots[half - 1..SIZE - 1];
-        for block in data.as_chunks_mut::<SIZE>().0 {
-            let (left, right) = block.split_at_mut(half);
-            for ((left, right), root) in left
-                .as_chunks_mut::<2>()
-                .0
-                .iter_mut()
-                .zip(right.as_chunks_mut::<2>().0)
-                .zip(roots.as_chunks::<2>().0)
-            {
-                // SAFETY: repr(C) Complex is two f64 values. Each checked chunk
-                // contains two complexes (four f64s); unaligned loads/stores stay
-                // inside disjoint left/right slices. No FMA changes rounding.
-                unsafe {
-                    let a = _mm256_loadu_pd(left.as_ptr().cast());
-                    let b = _mm256_loadu_pd(right.as_ptr().cast());
-                    let w = _mm256_loadu_pd(root.as_ptr().cast());
-                    let re = _mm256_mul_pd(_mm256_permute_pd::<0>(b), w);
-                    let im = _mm256_mul_pd(_mm256_permute_pd::<15>(b), _mm256_permute_pd::<5>(w));
-                    let product = _mm256_addsub_pd(re, im);
-                    _mm256_storeu_pd(left.as_mut_ptr().cast(), _mm256_add_pd(a, product));
-                    _mm256_storeu_pd(right.as_mut_ptr().cast(), _mm256_sub_pd(a, product));
-                }
-            }
-        }
-    }
-
-    #[inline(always)]
-    fn stage<const N: usize, const SIZE: usize>(roots: &[Complex], data: &mut [Complex; N]) {
-        if SIZE <= N {
-            let half = SIZE / 2;
-            let roots = &roots[half - 1..SIZE - 1];
-            for block in data.as_chunks_mut::<SIZE>().0 {
-                let (left, right) = block.split_at_mut(half);
-                for ((left, right), root) in left.iter_mut().zip(right).zip(roots) {
-                    let a = *left;
-                    let b = *right;
-                    let re = b.re * root.re - b.im * root.im;
-                    let im = b.re * root.im + b.im * root.re;
-                    *left = Complex {
-                        re: a.re + re,
-                        im: a.im + im,
-                    };
-                    *right = Complex {
-                        re: a.re - re,
-                        im: a.im - im,
-                    };
-                }
-            }
-        }
-    }
-
     fn synthesis_stages(roots: &[Complex], data: &mut [Complex; HALF]) {
-        Self::stage::<HALF, 2>(roots, data);
-        Self::stage::<HALF, 4>(roots, data);
-        Self::stage::<HALF, 8>(roots, data);
-        Self::stage::<HALF, 16>(roots, data);
-        Self::stage::<HALF, 32>(roots, data);
-        Self::stage::<HALF, 64>(roots, data);
-        Self::stage::<HALF, 128>(roots, data);
-        Self::stage::<HALF, 256>(roots, data);
+        FftKernel::stage::<HALF, 2>(roots, data);
+        FftKernel::stage::<HALF, 4>(roots, data);
+        FftKernel::stage::<HALF, 8>(roots, data);
+        FftKernel::stage::<HALF, 16>(roots, data);
+        FftKernel::stage::<HALF, 32>(roots, data);
+        FftKernel::stage::<HALF, 64>(roots, data);
+        FftKernel::stage::<HALF, 128>(roots, data);
+        FftKernel::stage::<HALF, 256>(roots, data);
         Self::right_stage::<512, 0>(roots, data);
         Self::right_stage::<1024, 256>(roots, data);
     }
@@ -394,16 +226,16 @@ impl Fft {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     #[target_feature(enable = "avx2")]
     unsafe fn synthesis_stages_avx2(roots: &[Complex], data: &mut [Complex; HALF]) {
-        Self::stage::<HALF, 2>(roots, data);
+        FftKernel::stage::<HALF, 2>(roots, data);
         // SAFETY: inherited feature contract; each stage checks its slices.
         unsafe {
-            Self::stage_avx2::<HALF, 4>(roots, data);
-            Self::stage_avx2::<HALF, 8>(roots, data);
-            Self::stage_avx2::<HALF, 16>(roots, data);
-            Self::stage_avx2::<HALF, 32>(roots, data);
-            Self::stage_avx2::<HALF, 64>(roots, data);
-            Self::stage_avx2::<HALF, 128>(roots, data);
-            Self::stage_avx2::<HALF, 256>(roots, data);
+            FftKernel::stage_avx2::<HALF, 4>(roots, data);
+            FftKernel::stage_avx2::<HALF, 8>(roots, data);
+            FftKernel::stage_avx2::<HALF, 16>(roots, data);
+            FftKernel::stage_avx2::<HALF, 32>(roots, data);
+            FftKernel::stage_avx2::<HALF, 64>(roots, data);
+            FftKernel::stage_avx2::<HALF, 128>(roots, data);
+            FftKernel::stage_avx2::<HALF, 256>(roots, data);
             Self::right_stage_avx2::<512, 0>(roots, data);
             Self::right_stage_avx2::<1024, 256>(roots, data);
         }
@@ -447,12 +279,12 @@ impl Fft {
     }
 
     fn envelope_stages(roots: &[Complex], data: &mut [Complex; HALF]) {
-        Self::stage::<HALF, 2>(roots, data);
-        Self::stage::<HALF, 4>(roots, data);
-        Self::stage::<HALF, 8>(roots, data);
-        Self::stage::<HALF, 16>(roots, data);
-        Self::stage::<HALF, 32>(roots, data);
-        Self::stage::<HALF, 64>(roots, data);
+        FftKernel::stage::<HALF, 2>(roots, data);
+        FftKernel::stage::<HALF, 4>(roots, data);
+        FftKernel::stage::<HALF, 8>(roots, data);
+        FftKernel::stage::<HALF, 16>(roots, data);
+        FftKernel::stage::<HALF, 32>(roots, data);
+        FftKernel::stage::<HALF, 64>(roots, data);
         Self::envelope_stage::<128>(roots, data);
         Self::envelope_stage::<256>(roots, data);
         Self::envelope_stage::<512>(roots, data);
@@ -487,14 +319,14 @@ impl Fft {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     #[target_feature(enable = "avx2")]
     unsafe fn envelope_stages_avx2(roots: &[Complex], data: &mut [Complex; HALF]) {
-        Self::stage::<HALF, 2>(roots, data);
+        FftKernel::stage::<HALF, 2>(roots, data);
         // SAFETY: inherited AVX2 contract and checked stage slices.
         unsafe {
-            Self::stage_avx2::<HALF, 4>(roots, data);
-            Self::stage_avx2::<HALF, 8>(roots, data);
-            Self::stage_avx2::<HALF, 16>(roots, data);
-            Self::stage_avx2::<HALF, 32>(roots, data);
-            Self::stage_avx2::<HALF, 64>(roots, data);
+            FftKernel::stage_avx2::<HALF, 4>(roots, data);
+            FftKernel::stage_avx2::<HALF, 8>(roots, data);
+            FftKernel::stage_avx2::<HALF, 16>(roots, data);
+            FftKernel::stage_avx2::<HALF, 32>(roots, data);
+            FftKernel::stage_avx2::<HALF, 64>(roots, data);
             Self::envelope_stage_avx2::<128>(roots, data);
             Self::envelope_stage_avx2::<256>(roots, data);
             Self::envelope_stage_avx2::<512>(roots, data);

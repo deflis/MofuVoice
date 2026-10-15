@@ -1,5 +1,8 @@
 //! Three causal peaking biquads. No lookahead, buffering, or callback allocation.
-use crate::{pitch::Sample, RATE};
+use crate::{
+    dsp::{biquad::Biquad, gain::amplitude, Sample},
+    RATE,
+};
 use std::error::Error;
 
 pub const FLAGS: [&str; 6] = [
@@ -123,22 +126,16 @@ impl EqSettings {
         Ok(Equalizer {
             active: self.enabled
                 && (self.output_db != 0.0 || self.bands.iter().any(|b| b.gain_db != 0.0)),
-            filters: self.bands.map(|band| Biquad::new(band, rate)),
-            gain: 10.0_f64.powf((self.output_db - self.headroom_db()) / 20.0),
+            filters: self.bands.map(|band| PeakingFilter::new(band, rate)),
+            gain: amplitude(self.output_db - self.headroom_db()),
         })
     }
 }
-struct Biquad {
-    b0: f64,
-    b1: f64,
-    b2: f64,
-    a1: f64,
-    a2: f64,
-    z1: f64,
-    z2: f64,
+struct PeakingFilter {
+    filter: Biquad,
     active: bool,
 }
-impl Biquad {
+impl PeakingFilter {
     fn new(band: Band, rate: u32) -> Self {
         // Peaking EQ coefficients: https://www.w3.org/TR/audio-eq-cookbook/
         let a = 10.0_f64.powf(band.gain_db / 40.0);
@@ -146,13 +143,14 @@ impl Biquad {
         let alpha = omega.sin() / (2.0 * band.q);
         let norm = 1.0 / (1.0 + alpha / a);
         Self {
-            b0: (1.0 + alpha * a) * norm,
-            b1: -2.0 * omega.cos() * norm,
-            b2: (1.0 - alpha * a) * norm,
-            a1: -2.0 * omega.cos() * norm,
-            a2: (1.0 - alpha / a) * norm,
-            z1: 0.0,
-            z2: 0.0,
+            filter: Biquad::new(
+                [
+                    (1.0 + alpha * a) * norm,
+                    -2.0 * omega.cos() * norm,
+                    (1.0 - alpha * a) * norm,
+                ],
+                [-2.0 * omega.cos() * norm, (1.0 - alpha / a) * norm],
+            ),
             active: band.gain_db != 0.0,
         }
     }
@@ -160,21 +158,12 @@ impl Biquad {
         if !self.active {
             return input;
         }
-        let output = self.b0 * input + self.z1;
-        self.z1 = self.b1 * input - self.a1 * output + self.z2;
-        self.z2 = self.b2 * input - self.a2 * output;
-        if self.z1.abs() < 1e-30 {
-            self.z1 = 0.0;
-        }
-        if self.z2.abs() < 1e-30 {
-            self.z2 = 0.0;
-        }
-        output
+        self.filter.process(input)
     }
 }
 pub struct Equalizer {
     active: bool,
-    filters: [Biquad; 3],
+    filters: [PeakingFilter; 3],
     gain: f64,
 }
 impl Equalizer {
@@ -186,8 +175,7 @@ impl Equalizer {
             let mut value = sample.normalized();
             if !value.is_finite() {
                 for filter in &mut self.filters {
-                    filter.z1 = 0.0;
-                    filter.z2 = 0.0;
+                    filter.filter.reset();
                 }
                 *sample = T::default();
                 continue;

@@ -1,8 +1,8 @@
 use rust_low_latency_voice_changer::{
     audio::{AudioProcessor, DspSettings},
     cli::Options,
+    dsp::Sample,
     gate::NoiseGate,
-    pitch::Sample,
     RATE,
 };
 

@@ -1,6 +1,9 @@
 //! Formant-style scrolling spectrogram. Audio callbacks only push samples to a wait-free
 //! ring; FFT and image assembly run on a dedicated analyzer thread while the window is open.
-use crate::RATE;
+use crate::{
+    dsp::{complex::Complex, fft::Fft, window},
+    RATE,
+};
 use std::{
     cell::UnsafeCell,
     ptr,
@@ -47,71 +50,6 @@ struct ProducerGuard<'a>(&'a AtomicBool);
 impl Drop for ProducerGuard<'_> {
     fn drop(&mut self) {
         self.0.store(false, Ordering::Release);
-    }
-}
-
-#[derive(Clone, Copy, Default)]
-struct Complex {
-    re: f64,
-    im: f64,
-}
-impl Complex {
-    fn polar(magnitude: f64, phase: f64) -> Self {
-        Self {
-            re: magnitude * phase.cos(),
-            im: magnitude * phase.sin(),
-        }
-    }
-}
-
-struct Fft {
-    size: usize,
-    reverse: Vec<usize>,
-    roots: Vec<Complex>,
-}
-impl Fft {
-    fn new(size: usize) -> Self {
-        assert!(size.is_power_of_two() && size >= 4);
-        let bits = size.ilog2();
-        Self {
-            size,
-            reverse: (0..size)
-                .map(|i| i.reverse_bits() >> (usize::BITS - bits))
-                .collect(),
-            roots: (0..size / 2)
-                .map(|i| Complex::polar(1.0, -std::f64::consts::TAU * i as f64 / size as f64))
-                .collect(),
-        }
-    }
-    fn forward(&self, data: &mut [Complex]) {
-        debug_assert_eq!(data.len(), self.size);
-        for i in 0..self.size {
-            if i < self.reverse[i] {
-                data.swap(i, self.reverse[i]);
-            }
-        }
-        let mut size = 2;
-        while size <= self.size {
-            let half = size / 2;
-            for start in (0..self.size).step_by(size) {
-                for j in 0..half {
-                    let root = self.roots[j * self.size / size];
-                    let a = data[start + j];
-                    let b = data[start + j + half];
-                    let re = b.re * root.re - b.im * root.im;
-                    let im = b.re * root.im + b.im * root.re;
-                    data[start + j] = Complex {
-                        re: a.re + re,
-                        im: a.im + im,
-                    };
-                    data[start + j + half] = Complex {
-                        re: a.re - re,
-                        im: a.im - im,
-                    };
-                }
-            }
-            size *= 2;
-        }
     }
 }
 
@@ -245,7 +183,7 @@ impl Shared {
         self.open.load(Ordering::Acquire) && !self.frozen.load(Ordering::Acquire)
     }
 
-    fn push<T: crate::pitch::Sample>(&self, samples: &[T]) {
+    fn push<T: crate::dsp::Sample>(&self, samples: &[T]) {
         if self
             .producing
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
@@ -367,7 +305,7 @@ impl Drop for SpectrumController {
 
 /// Realtime-safe output tap. No-op when the spectrum window is closed or frozen.
 /// Converts in place without heap allocation.
-pub fn push_output_samples<T: crate::pitch::Sample>(samples: &[T]) {
+pub fn push_output_samples<T: crate::dsp::Sample>(samples: &[T]) {
     IN_USE.fetch_add(1, Ordering::SeqCst);
     let _lease = TapLease;
     let shared = ACTIVE.load(Ordering::SeqCst);
@@ -380,9 +318,7 @@ pub fn push_output_samples<T: crate::pitch::Sample>(samples: &[T]) {
 }
 
 fn hann(size: usize) -> Vec<f64> {
-    (0..size)
-        .map(|i| 0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / size as f64).cos())
-        .collect()
+    (0..size).map(|i| window::hann(i, size)).collect()
 }
 
 fn db_to_bgra(db: f64) -> [u8; 4] {
@@ -716,7 +652,7 @@ mod tests {
 
     #[derive(Clone, Copy, Default, PartialEq)]
     struct PanickingSample;
-    impl crate::pitch::Sample for PanickingSample {
+    impl crate::dsp::Sample for PanickingSample {
         fn normalized(self) -> f64 {
             panic!("test conversion failure");
         }

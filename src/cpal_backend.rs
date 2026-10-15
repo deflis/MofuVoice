@@ -5,7 +5,8 @@ use crate::{
     audio::{AudioProcessor, DspSettings},
     audio_queue::{self, Consumer, Producer},
     backend::{AudioBackend, AudioStream, ChannelRouting, Result},
-    pitch::{Sample, LATENCY},
+    dsp::Sample,
+    pitch::LATENCY,
 };
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},

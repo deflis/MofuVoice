@@ -1,14 +1,13 @@
 //! 80 Hz, second-order Butterworth high-pass for mic stand and room rumble.
 //! Causal IIR: no lookahead or sample buffering; frequency-dependent phase remains.
-use crate::{pitch::Sample, RATE};
+use crate::{
+    dsp::{biquad::Biquad, Sample},
+    RATE,
+};
 
 pub struct RumbleFilter {
     enabled: bool,
-    b0: f64,
-    a1: f64,
-    a2: f64,
-    z1: f64,
-    z2: f64,
+    filter: Biquad,
 }
 
 impl RumbleFilter {
@@ -22,11 +21,13 @@ impl RumbleFilter {
         let norm = 1.0 / (1.0 + std::f64::consts::SQRT_2 * k + k * k);
         Self {
             enabled,
-            b0: norm,
-            a1: 2.0 * (k * k - 1.0) * norm,
-            a2: (1.0 - std::f64::consts::SQRT_2 * k + k * k) * norm,
-            z1: 0.0,
-            z2: 0.0,
+            filter: Biquad::new(
+                [norm, -2.0 * norm, norm],
+                [
+                    2.0 * (k * k - 1.0) * norm,
+                    (1.0 - std::f64::consts::SQRT_2 * k + k * k) * norm,
+                ],
+            ),
         }
     }
 
@@ -41,22 +42,12 @@ impl RumbleFilter {
         for sample in samples {
             let input = sample.normalized();
             if !input.is_finite() {
-                self.z1 = 0.0;
-                self.z2 = 0.0;
+                self.filter.reset();
                 *sample = T::default();
                 continue;
             }
             let input = input.clamp(-16.0, 16.0);
-            let output = self.b0 * input + self.z1;
-            self.z1 = -2.0 * self.b0 * input - self.a1 * output + self.z2;
-            self.z2 = self.b0 * input - self.a2 * output;
-            // Prevent subnormal tails from increasing callback cost after silence.
-            if self.z1.abs() < 1e-30 {
-                self.z1 = 0.0;
-            }
-            if self.z2.abs() < 1e-30 {
-                self.z2 = 0.0;
-            }
+            let output = self.filter.process(input);
             *sample = T::from_normalized(output);
         }
     }
