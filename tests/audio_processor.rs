@@ -128,7 +128,7 @@ fn pipeline_matches_rumble_gate_pitch_eq_level_deesser_order_across_variable_blo
 
 #[test]
 fn invalid_configuration_and_buffers_fail_without_advancing_state() {
-    for (rate, frames) in [(44100, 512), (RATE, 0), (RATE, 8193)] {
+    for (rate, frames) in [(32000, 512), (0, 512), (RATE, 0), (RATE, 8193)] {
         assert!(AudioProcessor::<f32>::new(rate, frames, settings(&[])).is_err());
     }
     let mut processor = AudioProcessor::<f32>::new(RATE, 64, settings(&["--pitch", "3"])).unwrap();
@@ -245,5 +245,137 @@ fn deesser_mode_only_changes_presentation_and_custom_parameters_reach_audio() {
             processor.process_block(source, dest).unwrap();
         }
         assert_eq!(output, reference);
+    }
+}
+
+#[test]
+fn selected_rates_preserve_neutral_bits_and_wet_block_continuity() {
+    for rate in rust_low_latency_voice_changer::SAMPLE_RATES {
+        let input = [f32::from_bits(0x7fc01234), -0.0, f32::from_bits(1), 0.25];
+        let mut output = [0.0; 4];
+        let mut processor = AudioProcessor::new(rate, 4, settings(&[])).unwrap();
+        processor.process_block(&input, &mut output).unwrap();
+        assert_eq!(input.map(f32::to_bits), output.map(f32::to_bits));
+        let mut integers = AudioProcessor::<i32>::new(rate, 4, settings(&[])).unwrap();
+        let input = [i32::MIN, -1, 0, i32::MAX];
+        let mut output = [0; 4];
+        integers.process_block(&input, &mut output).unwrap();
+        assert_eq!(input, output);
+        let mut shorts = AudioProcessor::<i16>::new(rate, 4, settings(&[])).unwrap();
+        let input = [i16::MIN, -1, 0, i16::MAX];
+        let mut output = [0; 4];
+        shorts.process_block(&input, &mut output).unwrap();
+        assert_eq!(input, output);
+
+        let args = [
+            "--pitch",
+            "3",
+            "--formant-shift",
+            "2",
+            "--rumble-filter",
+            "on",
+            "--gate",
+            "on",
+            "--eq",
+            "on",
+            "--eq-band2",
+            "3000,3,0.8",
+            "--auto-level",
+            "on",
+            "--deesser",
+            "on",
+        ];
+        let input: Vec<f32> = (0..8192)
+            .map(|i| (0.2 * (std::f64::consts::TAU * 300.0 * i as f64 / rate as f64).sin()) as f32)
+            .collect();
+        let mut whole = AudioProcessor::new(rate, input.len(), settings(&args)).unwrap();
+        let mut split = AudioProcessor::new(rate, 63, settings(&args)).unwrap();
+        let mut expected = vec![0.0; input.len()];
+        let mut actual = expected.clone();
+        whole.process_block(&input, &mut expected).unwrap();
+        for (input, output) in input.chunks(63).zip(actual.chunks_mut(63)) {
+            split.process_block(input, output).unwrap();
+        }
+        assert_eq!(expected, actual, "rate={rate}");
+        assert!(actual.iter().all(|s| s.is_finite()));
+        assert!(actual[4096..].iter().any(|s| s.abs() > 0.001));
+    }
+}
+
+#[test]
+fn selected_rates_keep_filter_frequencies_and_envelope_times() {
+    fn render(rate: u32, input: &[f32], args: &[&str]) -> Vec<f32> {
+        let mut processor = AudioProcessor::new(rate, 512, settings(args)).unwrap();
+        let mut output = vec![0.0; input.len()];
+        for (input, output) in input.chunks(512).zip(output.chunks_mut(512)) {
+            processor.process_block(input, output).unwrap();
+        }
+        output
+    }
+    fn gain_db(input: &[f32], output: &[f32]) -> f64 {
+        let power = |values: &[f32]| {
+            values[values.len() / 2..]
+                .iter()
+                .map(|s| (*s as f64).powi(2))
+                .sum::<f64>()
+        };
+        10.0 * (power(output) / power(input)).log10()
+    }
+    let mut gate_levels = Vec::new();
+    let mut auto_levels = Vec::new();
+    for rate in rust_low_latency_voice_changer::SAMPLE_RATES {
+        let tone = |hz: f64| -> Vec<f32> {
+            (0..rate)
+                .map(|i| (0.1 * (std::f64::consts::TAU * hz * i as f64 / rate as f64).sin()) as f32)
+                .collect()
+        };
+        let input = tone(80.0);
+        let output = render(rate, &input, &["--rumble-filter", "on"]);
+        assert!(
+            (gain_db(&input, &output) + 3.0103).abs() < 0.02,
+            "rumble at {rate}"
+        );
+        let input = tone(3000.0);
+        let output = render(rate, &input, &["--eq", "on", "--eq-band2", "3000,-6,1"]);
+        assert!(
+            (gain_db(&input, &output) + 6.0).abs() < 0.02,
+            "EQ at {rate}"
+        );
+        let input = tone(8000.0);
+        let output = render(
+            rate,
+            &input,
+            &["--deesser", "on", "--deesser-threshold", "-36"],
+        );
+        assert!(gain_db(&input, &output) < -2.0, "de-esser at {rate}");
+        // Compare at equal elapsed time, not at equal sample indices.
+        let input = vec![0.01; (rate / 10) as usize];
+        let output = render(
+            rate,
+            &input,
+            &[
+                "--gate",
+                "on",
+                "--gate-threshold",
+                "-20",
+                "--gate-release",
+                "80",
+            ],
+        );
+        gate_levels.push(*output.last().unwrap());
+        let output = render(
+            rate,
+            &input,
+            &["--auto-level", "on", "--level-response", "100"],
+        );
+        auto_levels.push(*output.last().unwrap());
+    }
+    for values in [gate_levels, auto_levels] {
+        let min = values.iter().copied().fold(f32::INFINITY, f32::min);
+        let max = values.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        assert!(
+            max - min < 0.0001,
+            "envelope changes across rates: {values:?}"
+        );
     }
 }

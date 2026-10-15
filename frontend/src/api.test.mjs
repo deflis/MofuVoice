@@ -60,6 +60,11 @@ test("settings API preserves settings, backend, and close delegation payloads", 
   await settingsApi.getView();
   await settingsApi.save(settings);
   await settingsApi.deviceChoices("cpal");
+  await settingsApi.deviceSampleRates({
+    backend: "cpal",
+    device: "Mic",
+    outputDevice: "Headphones",
+  });
   await settingsApi.hide();
   await settingsApi.acknowledgeClose(7);
   await settingsApi.fallbackClose(7);
@@ -70,6 +75,7 @@ test("settings API preserves settings, backend, and close delegation payloads", 
       ["settings_view"],
       ["save_settings", { settings }],
       ["device_choices", { backend: "cpal" }],
+      ["device_sample_rates", { backend: "cpal", device: "Mic", outputDevice: "Headphones" }],
       ["close_settings"],
       ["acknowledge_application_close", { requestId: 7 }],
       ["fallback_application_close", { requestId: 7 }],

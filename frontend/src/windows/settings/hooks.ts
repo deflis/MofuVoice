@@ -5,26 +5,67 @@ export function useSettingsLocked() {
   return useSettingsStore((state) => !canEditSettings(state));
 }
 
-export function useDeviceSettings() {
+export function useDeviceSelection() {
   return useSettingsStore(
     useShallow((state) => {
       const settings = requireSettings(state.settings);
       return {
         device: settings.device,
         outputDevice: settings.outputDevice,
-        inputChannel: settings.inputChannel,
-        outputChannels: settings.outputChannels,
-        backend: settings.backend,
         resolvedBackend: state.resolvedBackend,
-        backends: state.backends,
-        outputDevices: state.outputDevices,
-        updateBackend: state.updateBackend,
-        updateRouting: state.updateRouting,
-        frames: settings.frames,
         devices: state.devices,
+        outputDevices: state.outputDevices,
         update: state.update,
       };
     }),
+  );
+}
+
+export function useSampleRateSettings() {
+  return useSettingsStore(
+    useShallow((state) => {
+      const settings = requireSettings(state.settings);
+      return {
+        device: settings.device,
+        outputDevice: settings.outputDevice,
+        resolvedBackend: state.resolvedBackend,
+        sampleRate: settings.sampleRate,
+        update: state.update,
+      };
+    }),
+  );
+}
+
+export function useChannelRouting() {
+  return useSettingsStore(
+    useShallow((state) => {
+      const settings = requireSettings(state.settings);
+      return {
+        inputChannel: settings.inputChannel,
+        outputChannels: settings.outputChannels,
+        update: state.update,
+        updateRouting: state.updateRouting,
+      };
+    }),
+  );
+}
+
+export function useBackendSettings() {
+  return useSettingsStore(
+    useShallow((state) => ({
+      backend: requireSettings(state.settings).backend,
+      backends: state.backends,
+      updateBackend: state.updateBackend,
+    })),
+  );
+}
+
+export function useBufferSettings() {
+  return useSettingsStore(
+    useShallow((state) => ({
+      frames: requireSettings(state.settings).frames,
+      update: state.update,
+    })),
   );
 }
 

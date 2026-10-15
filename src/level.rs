@@ -111,6 +111,10 @@ impl LevelSettings {
         Ok(())
     }
     pub fn build(self) -> Result<AutoLevel, InvalidLevel> {
+        self.build_with_sample_rate(RATE)
+    }
+    pub fn build_with_sample_rate(self, sample_rate: u32) -> Result<AutoLevel, InvalidLevel> {
+        crate::validate_sample_rate(sample_rate).map_err(|e| InvalidLevel(e.into()))?;
         self.validate()?;
         Ok(AutoLevel {
             settings: self,
@@ -120,15 +124,15 @@ impl LevelSettings {
             level_gain_db: 0.0,
             compression_db: 0.0,
             guard_gain: 1.0,
-            rms_rate: rate(30.0),
-            level_rate: rate(self.response_ms),
-            attack_rate: rate(self.attack_ms),
-            release_rate: rate(self.release_ms),
+            rms_rate: rate(30.0, sample_rate),
+            level_rate: rate(self.response_ms, sample_rate),
+            attack_rate: rate(self.attack_ms, sample_rate),
+            release_rate: rate(self.release_ms, sample_rate),
         })
     }
 }
-fn rate(ms: f64) -> f64 {
-    -(-1.0 / (ms * 0.001 * RATE as f64)).exp_m1()
+fn rate(ms: f64, sample_rate: u32) -> f64 {
+    -(-1.0 / (ms * 0.001 * sample_rate as f64)).exp_m1()
 }
 fn amplitude(db: f64) -> f64 {
     10.0_f64.powf(db / 20.0)

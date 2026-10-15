@@ -100,8 +100,16 @@ impl DeEsser {
         enabled: bool,
         parameters: DeEsserParameters,
     ) -> Result<Self, &'static str> {
+        Self::with_sample_rate(enabled, parameters, RATE)
+    }
+    pub fn with_sample_rate(
+        enabled: bool,
+        parameters: DeEsserParameters,
+        rate: u32,
+    ) -> Result<Self, &'static str> {
+        crate::validate_sample_rate(rate)?;
         parameters.validate()?;
-        let k = (std::f64::consts::PI * parameters.frequency_hz / RATE as f64).tan();
+        let k = (std::f64::consts::PI * parameters.frequency_hz / rate as f64).tan();
         Ok(Self {
             enabled,
             parameters,
@@ -114,9 +122,9 @@ impl DeEsser {
             low: 0.0,
             high_power: 0.0,
             full_power: 0.0,
-            detector: (-1.0 / (0.002 * RATE as f64)).exp(),
-            attack: (-1.0 / (parameters.attack_ms * 0.001 * RATE as f64)).exp(),
-            release: (-1.0 / (parameters.release_ms * 0.001 * RATE as f64)).exp(),
+            detector: (-1.0 / (0.002 * rate as f64)).exp(),
+            attack: (-1.0 / (parameters.attack_ms * 0.001 * rate as f64)).exp(),
+            release: (-1.0 / (parameters.release_ms * 0.001 * rate as f64)).exp(),
             gain: 1.0,
         })
     }

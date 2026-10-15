@@ -69,7 +69,11 @@ pub struct GateSettings {
 
 impl GateSettings {
     pub fn build(self) -> Result<NoiseGate, InvalidGate> {
-        NoiseGate::new(
+        self.build_with_sample_rate(RATE)
+    }
+    pub fn build_with_sample_rate(self, rate: u32) -> Result<NoiseGate, InvalidGate> {
+        NoiseGate::with_sample_rate(
+            rate,
             self.enabled,
             self.threshold,
             self.attack_ms,
@@ -78,8 +82,8 @@ impl GateSettings {
     }
 }
 
-fn coef(ms: f64) -> f64 {
-    (-1.0 / (ms * 0.001 * RATE as f64)).exp()
+fn coef(ms: f64, rate: u32) -> f64 {
+    (-1.0 / (ms * 0.001 * rate as f64)).exp()
 }
 
 fn to_db(level: f64) -> f64 {
@@ -128,6 +132,16 @@ impl NoiseGate {
         attack_ms: f64,
         release_ms: f64,
     ) -> Result<Self, InvalidGate> {
+        Self::with_sample_rate(RATE, enabled, threshold, attack_ms, release_ms)
+    }
+    pub fn with_sample_rate(
+        rate: u32,
+        enabled: bool,
+        threshold: GateThreshold,
+        attack_ms: f64,
+        release_ms: f64,
+    ) -> Result<Self, InvalidGate> {
+        crate::validate_sample_rate(rate).map_err(|_| InvalidGate)?;
         let attack_ms = validate_time_ms(attack_ms)?;
         let release_ms = validate_time_ms(release_ms)?;
         match threshold {
@@ -142,13 +156,13 @@ impl NoiseGate {
         Ok(Self {
             enabled,
             threshold,
-            attack: 1.0 - coef(attack_ms),
-            release: 1.0 - coef(release_ms),
-            hold_samples: (HOLD_MS * 0.001 * RATE as f64).round() as u64,
-            detect_attack: 1.0 - coef(DETECT_ATTACK_MS),
-            detect_release: 1.0 - coef(DETECT_RELEASE_MS),
-            floor_fall: 1.0 - coef(FLOOR_FALL_MS),
-            floor_rise: 1.0 - coef(FLOOR_RISE_MS),
+            attack: 1.0 - coef(attack_ms, rate),
+            release: 1.0 - coef(release_ms, rate),
+            hold_samples: (HOLD_MS * 0.001 * rate as f64).round() as u64,
+            detect_attack: 1.0 - coef(DETECT_ATTACK_MS, rate),
+            detect_release: 1.0 - coef(DETECT_RELEASE_MS, rate),
+            floor_fall: 1.0 - coef(FLOOR_FALL_MS, rate),
+            floor_rise: 1.0 - coef(FLOOR_RISE_MS, rate),
             envelope: 0.0,
             gain: 1.0,
             hold_remaining: 0,

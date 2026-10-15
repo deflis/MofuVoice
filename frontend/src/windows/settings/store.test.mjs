@@ -354,3 +354,13 @@ test("repeated shutdown during a failed save preserves the draft and allows retr
   assert.equal(settingsApi.closeApplication.mock.callCount(), 1);
   assert.equal(settingsApi.save.mock.calls[1].arguments[0].pitch, "4");
 });
+
+test("sample rate survives settings save and backend switching", async () => {
+  cleanups.push(settingsStore.getState().mount());
+  await setImmediate();
+  settingsStore.getState().update("sampleRate", "44100");
+  await settingsStore.getState().save();
+  assert.equal(settingsApi.save.mock.calls[0].arguments[0].sampleRate, "44100");
+  await settingsStore.getState().updateBackend("cpal");
+  assert.equal(settingsStore.getState().settings.sampleRate, "44100");
+});

@@ -1,11 +1,19 @@
 import { invoke } from "@tauri-apps/api/core";
 import { subscribe } from "../../api";
-import type { AudioPhase, DeviceChoices, Settings, SettingsView } from "../../types";
+import type {
+  AudioPhase,
+  DeviceChoices,
+  DeviceSampleRates,
+  Settings,
+  SettingsView,
+} from "../../types";
 
 export const settingsApi = {
   getView: () => invoke<SettingsView>("settings_view"),
   save: (settings: Settings) => invoke<void>("save_settings", { settings }),
   deviceChoices: (backend: string) => invoke<DeviceChoices>("device_choices", { backend }),
+  deviceSampleRates: (query: Pick<Settings, "backend" | "device" | "outputDevice">) =>
+    invoke<DeviceSampleRates>("device_sample_rates", query),
   hide: () => invoke<void>("close_settings"),
   closeApplication: () => invoke<void>("close_application"),
   acknowledgeClose: (requestId: number) =>
