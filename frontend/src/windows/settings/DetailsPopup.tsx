@@ -7,12 +7,12 @@ export function DetailsPopup({
   title,
   children,
   onOpen,
-  buttonLabel = "詳細設定",
+  buttonLabel,
 }: {
   title: string;
   children: ReactNode;
   onOpen?: () => void;
-  buttonLabel?: string;
+  buttonLabel: string;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const titleId = useId();

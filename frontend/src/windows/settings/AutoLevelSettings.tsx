@@ -31,7 +31,7 @@ export function AutoLevelSettings() {
         有効
       </label>
       <fieldset className="settings" disabled={!level.enabled} hidden={!level.enabled}>
-        <DetailsPopup title="音量の自動調整">
+        <DetailsPopup title="音量の自動調整" buttonLabel="詳細設定">
           <div className="level-fields">
             {levelFields.map((field) => (
               <label key={field.key}>

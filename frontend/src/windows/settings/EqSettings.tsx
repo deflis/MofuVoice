@@ -93,7 +93,11 @@ export function EqSettings() {
           )}
         </>
 
-        <DetailsPopup title="音色の調整（EQ）" onOpen={() => update("eq", { ...eq, mode: "pro" })}>
+        <DetailsPopup
+          title="音色の調整（EQ）"
+          buttonLabel="詳細設定"
+          onOpen={() => update("eq", { ...eq, mode: "pro" })}
+        >
           <>
             {custom && (
               <p className="notice">
