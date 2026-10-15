@@ -437,7 +437,15 @@ async fn device_sample_rates(
         if desktop.closing || desktop.session.poll() {
             return Err("対応レートの確認は音声を停止してから行ってください。".into());
         }
-        let kind = backend::BackendKind::parse(&backend).map_err(|error| error.to_string())?;
+        let kind = backend::resolve(
+            backend::BackendKind::parse(&backend).map_err(|error| error.to_string())?,
+        );
+        #[cfg(all(windows, feature = "asio"))]
+        let _apartment = if kind == backend::BackendKind::Asio {
+            Some(crate::session::ComApartment::initialize().map_err(|error| error.to_string())?)
+        } else {
+            None
+        };
         backend::select(kind, &output_device)
             .and_then(|selected| selected.supported_sample_rates(&device))
             .map_err(|error| error.to_string())
@@ -857,8 +865,8 @@ mod tests {
         let mut settings = Settings::from_options(&options);
         assert_eq!(settings.sample_rate, "44100");
         assert_eq!(settings.options().unwrap(), options);
-        settings.sample_rate = "96000".into();
-        assert_eq!(settings.options().unwrap().sample_rate, 96000);
+        settings.sample_rate = "48000".into();
+        assert_eq!(settings.options().unwrap().sample_rate, 48000);
         for value in ["", "0", "32000", "NaN", "48000.5"] {
             settings.sample_rate = value.into();
             assert!(settings.options().is_err(), "{value}");

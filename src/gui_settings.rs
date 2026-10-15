@@ -382,11 +382,11 @@ mod tests {
         assert_eq!(
             merge(
                 &options,
-                ["--sample-rate", "96000"].map(String::from).to_vec()
+                ["--sample-rate", "48000"].map(String::from).to_vec()
             )
             .unwrap()
             .sample_rate,
-            96000
+            48000
         );
         assert!(decode(&text.replace("sample_rate=44100", "sample_rate=0")).is_err());
         assert!(decode(&format!("{text}sample_rate=48000\n")).is_err());

@@ -4,8 +4,11 @@ use rust_low_latency_voice_changer::{
 };
 
 fn tone(frequency: f64, count: usize) -> Vec<f32> {
+    tone_at_rate(frequency, count, RATE)
+}
+fn tone_at_rate(frequency: f64, count: usize, rate: u32) -> Vec<f32> {
     (0..count)
-        .map(|i| (0.2 * (std::f64::consts::TAU * frequency * i as f64 / RATE as f64).sin()) as f32)
+        .map(|i| (0.2 * (std::f64::consts::TAU * frequency * i as f64 / rate as f64).sin()) as f32)
         .collect()
 }
 
@@ -90,7 +93,10 @@ fn moving_pitch_keeps_amplitude_and_phase_continuous() {
 }
 
 fn power(signal: &[f32], frequency: f64) -> f64 {
-    let angle = std::f64::consts::TAU * frequency / RATE as f64;
+    power_at_rate(signal, frequency, RATE)
+}
+fn power_at_rate(signal: &[f32], frequency: f64, rate: u32) -> f64 {
+    let angle = std::f64::consts::TAU * frequency / rate as f64;
     let coefficient = 2.0 * angle.cos();
     let (mut a, mut b) = (0.0, 0.0);
     for (i, &sample) in signal.iter().enumerate() {
@@ -104,9 +110,14 @@ fn power(signal: &[f32], frequency: f64) -> f64 {
 
 #[test]
 fn low_voice_tones_have_accurate_pitch_without_subharmonic_energy() {
+    for rate in rust_low_latency_voice_changer::SAMPLE_RATES {
+        low_voice_quality_at_rate(rate);
+    }
+}
+fn low_voice_quality_at_rate(rate: u32) {
     for frequency in [80.0, 100.0, 120.0, 160.0, 203.0] {
         for pitch in [3.0, 7.0, 12.0, -3.0, -12.0] {
-            let input = tone(frequency, 48_000);
+            let input = tone_at_rate(frequency, rate as usize, rate);
             let mut output = vec![0.0; input.len()];
             PitchShifter::new(pitch, false, 0.0)
                 .unwrap()
@@ -114,16 +125,19 @@ fn low_voice_tones_have_accurate_pitch_without_subharmonic_energy() {
             let expected = frequency * pitch_ratio(pitch).unwrap();
             let signal = &output[8192..];
             let peak = ((expected - 15.0).ceil() as usize..=(expected + 15.0).floor() as usize)
-                .max_by(|&a, &b| power(signal, a as f64).total_cmp(&power(signal, b as f64)))
+                .max_by(|&a, &b| {
+                    power_at_rate(signal, a as f64, rate)
+                        .total_cmp(&power_at_rate(signal, b as f64, rate))
+                })
                 .unwrap() as f64;
             assert!(
                 (peak - expected).abs() < 1.5,
                 "f={frequency}, pitch={pitch}, peak={peak}, expected={expected}"
             );
-            let target = power(signal, expected);
+            let target = power_at_rate(signal, expected, rate);
             let low: f64 = (20..(expected * 0.7) as usize)
                 .step_by(2)
-                .map(|f| power(signal, f as f64))
+                .map(|f| power_at_rate(signal, f as f64, rate))
                 .sum();
             assert!(
                 low < target * 0.001,
@@ -135,9 +149,14 @@ fn low_voice_tones_have_accurate_pitch_without_subharmonic_energy() {
 
 #[test]
 fn preservation_and_shift_move_a_broadband_resonance_independently_of_pitch() {
+    for rate in rust_low_latency_voice_changer::SAMPLE_RATES {
+        formant_quality_at_rate(rate);
+    }
+}
+fn formant_quality_at_rate(rate: u32) {
     let mut seed = 1_u32;
     let radius = 0.98_f64;
-    let coefficient = 2.0 * radius * (std::f64::consts::TAU * 1500.0 / RATE as f64).cos();
+    let coefficient = 2.0 * radius * (std::f64::consts::TAU * 1500.0 / rate as f64).cos();
     let (mut a, mut b) = (0.0, 0.0);
     let input: Vec<f32> = (0..65_536)
         .map(|_| {
@@ -156,9 +175,24 @@ fn preservation_and_shift_move_a_broadband_resonance_independently_of_pitch() {
         (7.0, true, 3.0),
     ] {
         let mut output = vec![0.0; input.len()];
-        PitchShifter::new(pitch, preserve, shift)
-            .unwrap()
-            .process_block(&input, &mut output);
+        let options = rust_low_latency_voice_changer::cli::Options::parse([
+            "--pitch".into(),
+            pitch.to_string(),
+            "--formant-shift".into(),
+            shift.to_string(),
+            "--formant".into(),
+            if preserve { "preserve" } else { "off" }.into(),
+        ])
+        .unwrap();
+        let mut dsp = rust_low_latency_voice_changer::audio::AudioProcessor::new(
+            rate,
+            512,
+            rust_low_latency_voice_changer::audio::DspSettings::from(&options),
+        )
+        .unwrap();
+        for (a, b) in input.chunks(512).zip(output.chunks_mut(512)) {
+            dsp.process_block(a, b).unwrap();
+        }
         let peak = (1000..=2600)
             .step_by(25)
             .max_by(|&a, &b| {
@@ -167,7 +201,7 @@ fn preservation_and_shift_move_a_broadband_resonance_independently_of_pitch() {
                         .as_chunks::<2048>()
                         .0
                         .iter()
-                        .map(|block| power(block, frequency as f64))
+                        .map(|block| power_at_rate(block, frequency as f64, rate))
                         .sum::<f64>()
                 };
                 energy(a).total_cmp(&energy(b))

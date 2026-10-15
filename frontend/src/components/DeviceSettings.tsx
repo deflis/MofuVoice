@@ -139,7 +139,7 @@ export function DeviceSettings() {
       <label>
         サンプリングレート
         <select value={sampleRate} onChange={(event) => update("sampleRate", event.target.value)}>
-          {[44100, 48000, 88200, 96000, 176400, 192000].map((rate) => (
+          {[44100, 48000].map((rate) => (
             <option key={rate} value={String(rate)}>
               {rate.toLocaleString()} Hz
             </option>

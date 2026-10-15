@@ -925,19 +925,19 @@ mod tests {
         let buffer = SupportedBufferSize::Unknown;
         let input = [
             SupportedStreamConfigRange::new(1, 44100, 96000, buffer, SampleFormat::F32),
-            range(SampleFormat::I16, 1, 192000, buffer),
+            range(SampleFormat::I16, 1, 44100, buffer),
             range(SampleFormat::U16, 1, 176400, buffer),
         ];
         let output = [
             range(SampleFormat::F32, 2, 48000, buffer),
-            range(SampleFormat::I16, 2, 96000, buffer),
+            range(SampleFormat::I32, 2, 44100, buffer),
             range(SampleFormat::I16, 2, 192000, buffer),
         ];
         let rates = supported_rates(&input, &output);
-        assert_eq!(rates.input, [44100, 48000, 88200, 96000, 192000]);
-        assert_eq!(rates.output, [48000, 96000, 192000]);
-        assert_eq!(rates.common, [48000, 192000]);
-        // Rate overlap alone is insufficient: 96 kHz uses different sample formats.
+        assert_eq!(rates.input, [44100, 48000]);
+        assert_eq!(rates.output, [44100, 48000]);
+        assert_eq!(rates.common, [48000]);
+        // Rate overlap alone is insufficient: 44.1 kHz uses different sample formats.
         let empty = supported_rates(&[], &output);
         assert!(empty.input.is_empty() && empty.common.is_empty());
         assert_eq!(empty.output, rates.output);
@@ -976,11 +976,11 @@ mod tests {
             SampleFormat::F32,
         )];
         assert_eq!(
-            negotiate_at_rate(&broad, &broad, 64, 96000)
+            negotiate_at_rate(&broad, &broad, 64, 44100)
                 .unwrap()
                 .1
                 .sample_rate,
-            96000
+            44100
         );
         assert!(negotiate_at_rate(&broad, &broad, 64, 0).is_err());
     }

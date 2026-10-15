@@ -417,6 +417,23 @@ fn append_column(image: &mut [u8], column: &[[u8; 4]]) {
     }
 }
 
+const DISPLAY_COLUMNS_PER_SECOND: u64 = 60;
+#[derive(Default)]
+struct DisplayCadence {
+    phase: u64,
+}
+impl DisplayCadence {
+    fn advance(&mut self, frames: usize, rate: u32) -> bool {
+        self.phase += frames as u64 * DISPLAY_COLUMNS_PER_SECOND;
+        if self.phase >= rate as u64 {
+            self.phase %= rate as u64;
+            true
+        } else {
+            false
+        }
+    }
+}
+
 fn analyzer_loop(shared: Arc<Shared>) {
     let wide_fft = Fft::new(WIDE_FFT);
     let narrow_fft = Fft::new(NARROW_FFT);
@@ -430,6 +447,7 @@ fn analyzer_loop(shared: Arc<Shared>) {
     let mut time_domain = Vec::with_capacity(NARROW_FFT * 2);
     let mut column = vec![[0_u8; 4]; IMAGE_HEIGHT];
     let mut using_wide = true;
+    let mut cadence = DisplayCadence::default();
     let mut meter = LevelMeter::new();
     let mut last_meter = Instant::now();
     let mut last_signal = last_meter;
@@ -445,6 +463,7 @@ fn analyzer_loop(shared: Arc<Shared>) {
         let selected_rate = SAMPLE_RATE.load(Ordering::Acquire) as u32;
         if rate != selected_rate {
             rate = selected_rate;
+            cadence = DisplayCadence::default();
             time_domain.clear();
             meter = LevelMeter::new();
             let mut image = shared.image.lock().expect("spectrum image lock");
@@ -473,6 +492,7 @@ fn analyzer_loop(shared: Arc<Shared>) {
         let wideband = shared.wideband.load(Ordering::Acquire);
         if wideband != using_wide {
             using_wide = wideband;
+            cadence = DisplayCadence::default();
             time_domain.clear();
         }
         let (fft_size, hop, window, spectrum, bins, fft) = if using_wide {
@@ -506,6 +526,12 @@ fn analyzer_loop(shared: Arc<Shared>) {
             for i in 0..bins.len() {
                 bins[i] = spectrum[i].re.hypot(spectrum[i].im);
             }
+            // Analyze every overlapping FFT frame, but only shift/copy the image
+            // at a fixed rate. The visible time span is independent of sample rate.
+            if !cadence.advance(hop, rate) {
+                time_domain.drain(..hop);
+                continue;
+            }
             for (y, pixel) in column.iter_mut().enumerate() {
                 let t = 1.0 - y as f64 / (IMAGE_HEIGHT - 1) as f64;
                 let hz = FREQ_MIN + (FREQ_MAX - FREQ_MIN) * t;
@@ -532,6 +558,25 @@ fn analyzer_loop(shared: Arc<Shared>) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn display_cadence_keeps_the_same_time_span_for_both_fft_modes() {
+        // Include future high rates to prevent restoring the original 4x copy load.
+        for rate in [44100, 48000, 88200, 96000, 192000] {
+            for hop in [WIDE_HOP, NARROW_HOP] {
+                let mut cadence = DisplayCadence::default();
+                let frames = rate as usize * 10 / hop;
+                let columns = (0..frames).filter(|_| cadence.advance(hop, rate)).count();
+                assert_eq!(
+                    columns,
+                    frames * hop * DISPLAY_COLUMNS_PER_SECOND as usize / rate as usize
+                );
+                assert!(
+                    (599..=600).contains(&columns),
+                    "rate={rate}, hop={hop}, columns={columns}"
+                );
+            }
+        }
+    }
     #[test]
     fn frequency_mapping_and_meter_timing_follow_selected_rate() {
         for rate in crate::SAMPLE_RATES {
