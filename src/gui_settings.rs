@@ -82,11 +82,13 @@ fn arguments(options: &Options) -> Vec<String> {
     if !options.output_device.is_empty() {
         args.extend(["--output-device".into(), options.output_device.clone()]);
     }
-    for (flag, value) in crate::eq::FLAGS
+    for (flag, value) in options
+        .eq
+        .flags()
         .iter()
         .zip(options.eq.arguments(&options.eq_mode))
     {
-        args.extend([(*flag).into(), value]);
+        args.extend([flag.clone(), value]);
     }
     args
 }
@@ -128,7 +130,7 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
             "gate_release_ms",
         ]
         .contains(&key)
-            && !crate::eq::KEYS.contains(&key)
+            && !crate::eq::is_key(key)
             && key != "auto_level"
             && !crate::level::KEYS.contains(&key)
             && !crate::deesser::KEYS.contains(&key)
@@ -229,7 +231,21 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
     for (flag, key) in crate::eq::FLAGS.iter().zip(crate::eq::KEYS) {
         args.extend([*flag, value(key)?]);
     }
-    Options::parse_gui(args.into_iter().map(String::from))
+    let band_count = values
+        .keys()
+        .filter(|key| key.starts_with("eq_band"))
+        .count();
+    if band_count == 0 {
+        return Err("EQ requires at least one band".into());
+    }
+    let band_flags: Vec<_> = (1..=band_count).map(|i| format!("--eq-band{i}")).collect();
+    let band_keys: Vec<_> = (1..=band_count).map(|i| format!("eq_band{i}")).collect();
+    for (flag, key) in band_flags.iter().zip(&band_keys) {
+        args.extend([flag.as_str(), value(key.as_str())?]);
+    }
+    let mut options = Options::parse_gui(args.into_iter().map(String::from))?;
+    options.eq.bands.truncate(band_count);
+    Ok(options)
 }
 
 pub(crate) fn load(path: &Path) -> Result<Options, Box<dyn Error>> {
@@ -269,7 +285,7 @@ pub(crate) fn merge(saved: &Options, args: Vec<String>) -> Result<Options, Box<d
             "--gate-release",
         ]
         .contains(&flag.as_str())
-            && !crate::eq::FLAGS.contains(&flag.as_str())
+            && !crate::eq::is_flag(&flag)
             && flag != "--auto-level"
             && !crate::level::FLAGS.contains(&flag.as_str())
             && !crate::deesser::FLAGS.contains(&flag.as_str())
@@ -286,10 +302,21 @@ pub(crate) fn merge(saved: &Options, args: Vec<String>) -> Result<Options, Box<d
             base.extend([flag, value]);
         }
     }
-    Options::parse_gui(base)
+    let indices: std::collections::BTreeSet<_> = base
+        .iter()
+        .filter_map(|flag| crate::eq::band_index(flag))
+        .collect();
+    let band_count = indices.last().map(|i| i + 1).unwrap_or(0);
+    if indices.len() != band_count {
+        return Err("EQ bands must be contiguous".into());
+    }
+    let mut options = Options::parse_gui(base)?;
+    options.eq.bands.truncate(band_count);
+    Ok(options)
 }
 
 pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>> {
+    options.validate()?;
     Options::parse_gui(arguments(options))?;
     if options.device.contains(['\r', '\n', '\0'])
         || options.output_device.contains(['\r', '\n', '\0'])
@@ -340,7 +367,9 @@ pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>>
     for (key, value) in crate::level::KEYS.iter().zip(options.level.values()) {
         text.push_str(&format!("{key}={value}\n"));
     }
-    for (key, value) in crate::eq::KEYS
+    for (key, value) in options
+        .eq
+        .keys()
         .iter()
         .zip(options.eq.arguments(&options.eq_mode))
     {
@@ -365,6 +394,38 @@ pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>>
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn variable_eq_bands_round_trip_and_merge_without_truncation() {
+        let directory =
+            std::env::temp_dir().join(format!("variable-eq-settings-{}", std::process::id()));
+        let path = directory.join("settings.ini");
+        for count in [1, 4, 8] {
+            let mut options = Options::default();
+            options.eq.bands = vec![
+                crate::eq::Band {
+                    frequency: 1000.0,
+                    gain_db: 2.0,
+                    q: 1.0
+                };
+                count
+            ];
+            save(&path, &options).unwrap();
+            let loaded = load(&path).unwrap();
+            assert_eq!(loaded, options);
+            let merged = merge(&loaded, vec!["--pitch".into(), "2".into()]).unwrap();
+            assert_eq!(merged.eq, options.eq);
+        }
+        let mut single = Options::default();
+        single.eq.bands.truncate(1);
+        assert!(merge(&single, vec!["--eq-band3".into(), "2000,1,1".into()]).is_err());
+        single.eq.bands.clear();
+        assert!(save(&path, &single).is_err());
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(decode(&format!("{text}eq-band9=1000,0,1\n")).is_err());
+        assert!(decode(&text.replace("eq_band4=1000,2,1\n", "")).is_err());
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(&directory).unwrap();
+    }
     #[test]
     fn sample_rate_persists_overrides_and_defaults_for_legacy_ini() {
         let path =

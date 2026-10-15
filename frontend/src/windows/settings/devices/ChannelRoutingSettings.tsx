@@ -1,8 +1,9 @@
+import { NumberInput } from "../NumberInput";
 import { useState } from "react";
 import { useChannelRouting } from "./hooks";
 
 export function ChannelRoutingPresets() {
-  const { inputChannel, outputChannels, updateRouting } = useChannelRouting();
+  const { inputChannel, outputChannels, setRouting } = useChannelRouting();
   const singleOutput = inputChannel === 1 && outputChannels.length === 1 && outputChannels[0] === 1;
   const dualOutput =
     inputChannel === 1 &&
@@ -13,10 +14,10 @@ export function ChannelRoutingPresets() {
     <fieldset className="routing-presets">
       <legend>チャンネル</legend>
       <div className="routing-choices">
-        <button type="button" aria-pressed={singleOutput} onClick={() => updateRouting(1, [1])}>
+        <button type="button" aria-pressed={singleOutput} onClick={() => setRouting(1, [1])}>
           モノラル（1 → 1）
         </button>
-        <button type="button" aria-pressed={dualOutput} onClick={() => updateRouting(1, [1, 2])}>
+        <button type="button" aria-pressed={dualOutput} onClick={() => setRouting(1, [1, 2])}>
           ステレオ（1 → 1, 2）
         </button>
       </div>
@@ -28,7 +29,7 @@ export function ChannelRoutingPresets() {
 }
 
 export function ChannelRoutingDetails() {
-  const { inputChannel, outputChannels, update } = useChannelRouting();
+  const { inputChannel, outputChannels, setInputChannel, setOutputChannels } = useChannelRouting();
   const [extraChannel, setExtraChannel] = useState("");
   const additionalChannel = Number(extraChannel);
 
@@ -47,14 +48,13 @@ export function ChannelRoutingDetails() {
 
       <label>
         入力チャンネル
-        <input
-          type="number"
+        <NumberInput
           min="1"
           max="512"
           step="1"
           required
           value={inputChannel}
-          onChange={(event) => update("inputChannel", Number(event.target.value))}
+          onChange={(event) => setInputChannel(event.currentTarget.valueAsNumber)}
         />
       </label>
       <fieldset>
@@ -66,8 +66,7 @@ export function ChannelRoutingDetails() {
                 type="checkbox"
                 checked={outputChannels.includes(channel)}
                 onChange={(event) =>
-                  update(
-                    "outputChannels",
+                  setOutputChannels(
                     event.target.checked
                       ? [...outputChannels, channel]
                       : outputChannels.filter((selected) => selected !== channel),
@@ -94,7 +93,7 @@ export function ChannelRoutingDetails() {
           type="button"
           disabled={!canAddChannel}
           onClick={() => {
-            update("outputChannels", [...outputChannels, additionalChannel]);
+            setOutputChannels([...outputChannels, additionalChannel]);
             setExtraChannel("");
           }}
         >

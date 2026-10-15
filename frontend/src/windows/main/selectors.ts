@@ -1,7 +1,7 @@
-import type { MainMachine } from "./store";
-import type { MainView } from "../../types";
+import type { MainState } from "./store";
+import type { MainSetup } from "../../types";
 
-export function headerLabel(machine: MainMachine): string {
+export function headerLabel(machine: MainState): string {
   switch (machine.status) {
     case "bootstrapping":
       return "読み込み中";
@@ -20,33 +20,31 @@ export function headerLabel(machine: MainMachine): string {
     case "closing":
       return "終了中";
     default: {
-      const unexpected: never = machine;
-      throw new Error(`未知のメイン状態です: ${JSON.stringify(unexpected)}`);
+      throw new Error(`未知のメイン状態です: ${JSON.stringify(machine.status)}`);
     }
   }
 }
 
-export function canStart(machine: MainMachine): boolean {
-  return (machine.status === "idle" || machine.status === "faulted") && machine.view.canStart;
+export function canStart(machine: MainState): boolean {
+  return (machine.status === "idle" || machine.status === "faulted") && machine.canStart;
 }
 
-export function canStop(machine: MainMachine): boolean {
+export function canStop(machine: MainState): boolean {
   return machine.status === "running";
 }
 
-export function canOpenSpectrum(machine: MainMachine): boolean {
+export function canOpenSpectrum(machine: MainState): boolean {
   return (
     (machine.status === "idle" || machine.status === "running" || machine.status === "faulted") &&
-    machine.view.spectrumAvailable
+    machine.spectrumAvailable
   );
 }
 
-export function togglePending(machine: MainMachine): boolean {
+export function togglePending(machine: MainState): boolean {
   return machine.status === "starting" || machine.status === "stopping";
 }
 
-export function setupGuidance(view: MainView): string {
-  const { setup } = view;
+export function setupGuidance(setup: MainSetup): string {
   if (!setup.audioAvailable) {
     return "使える音声機器が見つかりません。接続と設定を確認してください。";
   }
@@ -55,13 +53,6 @@ export function setupGuidance(view: MainView): string {
   }
   if (setup.rememberedDeviceMissing) {
     return "前回使った音声機器が見つかりません。入力・出力デバイスを確認してください。";
-  }
-  return "";
-}
-
-export function machineError(machine: MainMachine): string {
-  if (machine.status === "bootstrapFailed" || machine.status === "faulted") {
-    return machine.error;
   }
   return "";
 }

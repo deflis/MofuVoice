@@ -1,3 +1,4 @@
+import { setLogging } from "./listener";
 import { useLogStore } from "./store";
 import { AudioLogPanel } from "./AudioLogPanel";
 
@@ -7,7 +8,6 @@ const ms = (value: number | null | undefined) =>
 export function StatusDetails() {
   const info = useLogStore((state) => state.info);
   const logging = useLogStore((state) => state.logging);
-  const setLogging = useLogStore((state) => state.setLogging);
   if (!info) {
     return (
       <section className="status-panel">
@@ -88,7 +88,7 @@ export function StatusDetails() {
         <input
           type="checkbox"
           checked={logging}
-          onChange={(event) => setLogging(event.target.checked)}
+          onChange={(event) => void setLogging(event.target.checked)}
         />
         処理ログを表示
       </label>

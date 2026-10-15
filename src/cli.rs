@@ -28,9 +28,9 @@ pub struct Options {
     pub help: bool,
 }
 
-impl Options {
-    pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Self, Box<dyn Error>> {
-        let mut options = Self {
+impl Default for Options {
+    fn default() -> Self {
+        Self {
             eq: crate::eq::EqSettings::default(),
             eq_mode: "simple".into(),
             device: String::new(),
@@ -54,7 +54,13 @@ impl Options {
             list: false,
             inspect: false,
             help: false,
-        };
+        }
+    }
+}
+
+impl Options {
+    pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Self, Box<dyn Error>> {
+        let mut options = Self::default();
         let mut args = args.into_iter();
         let mut device_given = false;
         let mut output_given = false;
@@ -66,7 +72,8 @@ impl Options {
         let mut pitch_given = false;
         let mut formant_given = false;
         let mut shift_given = false;
-        let mut eq_given = [false; 6];
+        let mut eq_given = std::collections::HashSet::new();
+        let mut eq_bands = std::collections::BTreeMap::new();
         let mut level_given = false;
         let mut level_fields = [false; 8];
         let mut rumble_given = false;
@@ -79,33 +86,35 @@ impl Options {
         let mut gate_release_given = false;
         while let Some(arg) = args.next() {
             match arg.as_str() {
-                flag if crate::eq::FLAGS.contains(&flag) => {
-                    let index = crate::eq::FLAGS.iter().position(|f| *f == flag).unwrap();
-                    if eq_given[index] {
+                flag if crate::eq::is_flag(flag) => {
+                    if !eq_given.insert(flag.to_string()) {
                         return Err(format!("Repeated argument {flag}").into());
                     }
                     let value = args
                         .next()
                         .ok_or_else(|| format!("{flag} requires a value"))?;
-                    match index {
-                        0 => {
+                    match flag {
+                        "--eq" => {
                             options.eq.enabled = match value.as_str() {
                                 "on" => true,
                                 "off" => false,
                                 _ => return Err("--eq requires on or off".into()),
                             }
                         }
-                        1 => {
+                        "--eq-mode" => {
                             if !["simple", "pro"].contains(&value.as_str()) {
                                 return Err("--eq-mode requires simple or pro".into());
                             }
                             options.eq_mode = value;
                         }
-                        2..=4 => options.eq.bands[index - 2] = crate::eq::Band::parse(&value)?,
-                        5 => options.eq.output_db = value.parse()?,
-                        _ => unreachable!(),
+                        "--eq-output" => options.eq.output_db = value.parse()?,
+                        _ => {
+                            eq_bands.insert(
+                                crate::eq::band_index(flag).unwrap(),
+                                crate::eq::Band::parse(&value)?,
+                            );
+                        }
                     }
-                    eq_given[index] = true;
                 }
                 "--formant-shift" if !shift_given => {
                     options.pitch.formant_shift = args
@@ -147,7 +156,17 @@ impl Options {
                         .next()
                         .ok_or_else(|| format!("{flag} requires a value"))?
                         .parse()?;
-                    options.level.set(index, value);
+                    match flag {
+                        "--level-target" => options.level.target_db = value,
+                        "--level-max-gain" => options.level.max_gain_db = value,
+                        "--level-floor" => options.level.floor_db = value,
+                        "--level-response" => options.level.response_ms = value,
+                        "--compress-threshold" => options.level.threshold_db = value,
+                        "--compress-ratio" => options.level.ratio = value,
+                        "--compress-attack" => options.level.attack_ms = value,
+                        "--compress-release" => options.level.release_ms = value,
+                        _ => unreachable!(),
+                    }
                     level_fields[index] = true;
                 }
                 "--deesser-mode" if !deesser_mode_given => {
@@ -170,7 +189,14 @@ impl Options {
                         .next()
                         .ok_or_else(|| format!("{flag} requires a value"))?
                         .parse()?;
-                    options.deesser_parameters.set(index, value);
+                    match flag {
+                        "--deesser-frequency" => options.deesser_parameters.frequency_hz = value,
+                        "--deesser-threshold" => options.deesser_parameters.threshold_db = value,
+                        "--deesser-range" => options.deesser_parameters.range_db = value,
+                        "--deesser-attack" => options.deesser_parameters.attack_ms = value,
+                        "--deesser-release" => options.deesser_parameters.release_ms = value,
+                        _ => unreachable!(),
+                    }
                     deesser_fields[index] = true;
                 }
                 "--deesser" if !deesser_given => {
@@ -293,38 +319,17 @@ impl Options {
                 _ => return Err(format!("Unknown or repeated argument {arg}; use --help").into()),
             }
         }
-        if !options.pitch.preserve_formants && options.pitch.formant_shift != 0.0 {
-            return Err(crate::pitch::InvalidFormant.to_string().into());
+        for (index, band) in eq_bands {
+            if index < options.eq.bands.len() {
+                options.eq.bands[index] = band;
+            } else if index == options.eq.bands.len() {
+                options.eq.bands.push(band);
+            } else {
+                return Err("EQ bands must be contiguous".into());
+            }
         }
-        options.eq.validate()?;
-        options.level.validate()?;
-        options.deesser_parameters.validate()?;
-        if !(1..=512).contains(&options.input_channel)
-            || options.output_channels.is_empty()
-            || options
-                .output_channels
-                .iter()
-                .any(|channel| !(1..=512).contains(channel))
-            || options
-                .output_channels
-                .iter()
-                .collect::<std::collections::HashSet<_>>()
-                .len()
-                != options.output_channels.len()
-        {
-            return Err(
-                "Select one input and at least one distinct output channel (1..512)".into(),
-            );
-        }
+        options.validate()?;
         options.output_channels.sort_unstable();
-        if options.backend == crate::backend::BackendKind::Asio && output_given {
-            return Err("ASIO uses one duplex device; --output-device is for CPAL".into());
-        }
-        if options.device.contains(['\r', '\n', '\0'])
-            || options.output_device.contains(['\r', '\n', '\0'])
-        {
-            return Err("Device names cannot contain line breaks or NUL".into());
-        }
         let gate_tuned = gate_threshold_given || gate_attack_given || gate_release_given;
         let modes =
             usize::from(options.list) + usize::from(options.inspect) + usize::from(options.help);
@@ -334,7 +339,7 @@ impl Options {
                     || pitch_given
                     || formant_given
                     || shift_given
-                    || eq_given.iter().any(|given| *given)
+                    || !eq_given.is_empty()
                     || level_given
                     || level_fields.iter().any(|given| *given)
                     || rumble_given
@@ -355,6 +360,57 @@ impl Options {
             return Err("Choose one CLI mode: --help, --list-devices, --inspect [--device NAME] [--frames N] [--sample-rate HZ], or [--device NAME] [--frames N] [--sample-rate HZ] [--seconds N] [--pitch SEMITONES] [--formant preserve|off] [--formant-shift SEMITONES] [--eq on|off] [--eq-mode simple|pro] [--eq-band1 HZ,DB,Q] [--eq-band2 HZ,DB,Q] [--eq-band3 HZ,DB,Q] [--eq-output DB] [--auto-level on|off] [--level-target DB] [--level-max-gain DB] [--level-floor DB] [--level-response MS] [--compress-threshold DB] [--compress-ratio N] [--compress-attack MS] [--compress-release MS] [--deesser on|off] [--deesser-mode simple|pro] [--deesser-frequency HZ] [--deesser-threshold DBFS] [--deesser-range DB] [--deesser-attack MS] [--deesser-release MS] [--rumble-filter on|off] [--gate on|off] [--gate-threshold auto|DB] [--gate-attack MS] [--gate-release MS]".into());
         }
         Ok(options)
+    }
+    /// Validate typed settings independently of CLI argument parsing.
+    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+        crate::validate_sample_rate(self.sample_rate)?;
+        if !(1..=8192).contains(&self.frames) {
+            return Err("--frames must be between 1 and 8192".into());
+        }
+        crate::pitch::pitch_ratio(self.pitch.semitones)?;
+        crate::pitch::formant_ratio(self.pitch.formant_shift)?;
+        if !self.pitch.preserve_formants && self.pitch.formant_shift != 0.0 {
+            return Err(crate::pitch::InvalidFormant.into());
+        }
+        self.eq.validate()?;
+        if !["simple", "pro"].contains(&self.eq_mode.as_str()) {
+            return Err("EQ mode requires simple or pro".into());
+        }
+        self.level.validate()?;
+        self.deesser_parameters.validate()?;
+        if let GateThreshold::Db(db) = self.gate_threshold {
+            if !db.is_finite() || !(-90.0..=0.0).contains(&db) {
+                return Err(crate::gate::InvalidGate.into());
+            }
+        }
+        validate_time_ms(self.gate_attack_ms)?;
+        validate_time_ms(self.gate_release_ms)?;
+        if !(1..=512).contains(&self.input_channel)
+            || self.output_channels.is_empty()
+            || self
+                .output_channels
+                .iter()
+                .any(|channel| !(1..=512).contains(channel))
+            || self
+                .output_channels
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                != self.output_channels.len()
+        {
+            return Err(
+                "Select one input and at least one distinct output channel (1..512)".into(),
+            );
+        }
+        if self.backend == crate::backend::BackendKind::Asio && !self.output_device.is_empty() {
+            return Err("ASIO uses one duplex device; --output-device is for CPAL".into());
+        }
+        if self.device.contains(['\r', '\n', '\0'])
+            || self.output_device.contains(['\r', '\n', '\0'])
+        {
+            return Err("Device names cannot contain line breaks or NUL".into());
+        }
+        Ok(())
     }
     pub fn parse_gui(args: impl IntoIterator<Item = String>) -> Result<Self, Box<dyn Error>> {
         let options = Self::parse(args)?;

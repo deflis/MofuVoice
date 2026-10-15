@@ -1,240 +1,137 @@
 import assert from "node:assert/strict";
-import { setImmediate } from "node:timers/promises";
 import { test } from "node:test";
 import {
-  mainView,
-  mainApi,
-  listen,
   mainStore,
-  cleanups,
+  main,
+  mainView,
+  calls,
+  handlers,
+  push,
+  connect,
+  tick,
   deferred,
-  callback,
+  channels,
 } from "../../testing/storeMocks.mjs";
+const phase = (name, busy) => ({ type: "phase", phase: { phase: name, busy, error: null } });
 
-test("start and stop use server settings and drive the state machine", async () => {
-  cleanups.push(mainStore.getState().mount());
-  await setImmediate();
-  assert.equal(mainStore.getState().machine.status, "idle");
-  await mainStore.getState().start(false);
-  assert.deepEqual(mainApi.start.mock.calls[0].arguments, [false]);
-  assert.equal(mainStore.getState().machine.status, "starting");
-  callback("audio-phase")({ payload: { phase: "running", error: null, busy: true } });
-  assert.equal(mainStore.getState().machine.status, "running");
-  await mainStore.getState().stop();
-  assert.equal(mainStore.getState().machine.status, "stopping");
-  callback("audio-phase")({ payload: { phase: "ready", error: null, busy: false } });
-  assert.equal(mainStore.getState().machine.status, "idle");
+test("main state is flat and start/stop transitions follow backend notifications", async () => {
+  await connect("main").ready;
+  assert.equal(mainStore.getState().status, "idle");
+  assert.equal("machine" in mainStore.getState(), false);
+  assert.equal("view" in mainStore.getState(), false);
+  await main.startAudio(false);
+  assert.equal(mainStore.getState().status, "starting");
+  assert.deepEqual(calls("start_audio")[0].arguments[1], { inspect: false });
+  push(phase("opening", true));
+  assert.equal(mainStore.getState().status, "starting");
+  push(phase("running", true));
+  await main.stopAudio();
+  push(phase("stopped", true));
+  assert.equal(mainStore.getState().status, "stopping");
+  push(phase("stopped", false));
+  assert.equal(mainStore.getState().status, "idle");
 });
-
-test("main-view updates replace setup facts without holding settings", async () => {
-  cleanups.push(mainStore.getState().mount());
-  await setImmediate();
-  const next = {
-    ...mainView,
-    canStart: false,
-    setup: { ...mainView.setup, rememberedDeviceMissing: true },
-  };
-  callback("main-view")({ payload: next });
-  assert.deepEqual(mainStore.getState().machine.view, next);
-});
-
-test("close waits while starting then shuts down once running", async () => {
-  cleanups.push(mainStore.getState().mount());
-  await setImmediate();
-  await mainStore.getState().start(false);
-  mainStore.getState().requestClose();
-  assert.equal(mainApi.close.mock.callCount(), 0);
-  callback("audio-phase")({ payload: { phase: "running", error: null, busy: true } });
-  assert.equal(mainApi.close.mock.callCount(), 1);
-  assert.equal(mainStore.getState().machine.status, "closing");
-});
-
-test("bootstrap failure exposes retry without closing", async () => {
-  const loading = deferred();
-  mainApi.getView.mock.mockImplementationOnce(() => loading.promise);
-  cleanups.push(mainStore.getState().mount());
-  mainStore.getState().requestClose();
-  loading.reject(new Error("main view failed"));
-  await setImmediate();
-  assert.equal(mainStore.getState().machine.status, "bootstrapFailed");
-  assert.equal(mainApi.close.mock.callCount(), 0);
-});
-
-test("open_log failure keeps running audio and reports action error", async () => {
-  cleanups.push(mainStore.getState().mount());
-  await setImmediate();
-  await mainStore.getState().start(false);
-  callback("audio-phase")({ payload: { phase: "running", error: null, busy: true } });
-  mainApi.openLog.mock.mockImplementationOnce(async () => {
-    throw new Error("log window failed");
+test("invalid actions are ignored and command failures allow retry", async () => {
+  await connect("main").ready;
+  await main.stopAudio();
+  assert.equal(calls("stop_audio").length, 0);
+  handlers.set("start_audio", async () => {
+    throw new Error("cannot start");
   });
-  await mainStore.getState().openLog();
-  assert.equal(mainStore.getState().machine.status, "running");
-  assert.match(mainStore.getState().error, /log window failed/);
+  await main.startAudio(false);
+  assert.equal(mainStore.getState().status, "faulted");
+  assert.match(mainStore.getState().error, /cannot start/);
+  handlers.delete("start_audio");
+  await main.startAudio(false);
+  assert.equal(mainStore.getState().status, "starting");
 });
-
-test("faulted audio can be retried when canStart is true", async () => {
-  cleanups.push(mainStore.getState().mount());
-  await setImmediate();
-  mainApi.start.mock.mockImplementationOnce(async () => {
-    throw new Error("device missing");
-  });
-  await mainStore.getState().start(false);
-  assert.equal(mainStore.getState().machine.status, "faulted");
-  mainApi.start.mock.mockImplementation(async () => {});
-  await mainStore.getState().start(false);
-  assert.equal(mainStore.getState().machine.status, "starting");
+test("close during startup waits for the worker and runs shutdown once", async () => {
+  await connect("main").ready;
+  await main.startAudio(false);
+  push({ type: "close" });
+  assert.equal(calls("close_application").length, 0);
+  push(phase("running", true));
+  push({ type: "close" });
+  await tick();
+  assert.equal(calls("close_application").length, 1);
+  assert.equal(mainStore.getState().status, "closing");
+  push(phase("running", true));
+  push({ type: "close" });
+  await tick();
+  assert.equal(calls("close_application").length, 1);
 });
-
-test("stopped phase keeps stopping until worker busy clears", async () => {
-  cleanups.push(mainStore.getState().mount());
-  await setImmediate();
-  await mainStore.getState().start(false);
-  callback("audio-phase")({ payload: { phase: "running", error: null, busy: true } });
-  await mainStore.getState().stop();
-  callback("audio-phase")({ payload: { phase: "stopped", error: null, busy: true } });
-  assert.equal(mainStore.getState().machine.status, "stopping");
-  callback("audio-phase")({ payload: { phase: "stopped", error: null, busy: false } });
-  assert.equal(mainStore.getState().machine.status, "idle");
+test("failed shutdown keeps the latest received phase and device facts", async () => {
+  await connect("main").ready;
+  push(phase("running", true));
+  const closing = deferred();
+  handlers.set("close_application", () => closing.promise);
+  push({ type: "close" });
+  push(phase("stopped", false));
+  push({ type: "main", view: { ...mainView, canStart: false } });
+  closing.reject(new Error("save failed"));
+  await tick();
+  assert.equal(mainStore.getState().status, "idle");
+  assert.equal(mainStore.getState().canStart, false);
+  assert.match(mainStore.getState().error, /save failed/);
 });
-
-test("main_view phase snapshot restores running after remount", async () => {
-  mainApi.getView.mock.mockImplementationOnce(async () => ({
-    ...mainView,
-    phase: { phase: "running", error: null, busy: true },
-  }));
-  cleanups.push(mainStore.getState().mount());
-  await setImmediate();
-  assert.equal(mainStore.getState().machine.status, "running");
-});
-
-test("audio-phase during bootstrap wins over stale main_view phase", async () => {
-  const loading = deferred();
-  mainApi.getView.mock.mockImplementationOnce(() => loading.promise);
-  cleanups.push(mainStore.getState().mount());
-  callback("audio-phase")({ payload: { phase: "running", error: null, busy: true } });
-  loading.resolve({
-    ...mainView,
-    phase: { phase: "ready", error: null, busy: false },
-  });
-  await setImmediate();
-  assert.equal(mainStore.getState().machine.status, "running");
-});
-
-test("close_application failure restores running so Stop stays available", async () => {
-  cleanups.push(mainStore.getState().mount());
-  await setImmediate();
-  await mainStore.getState().start(false);
-  callback("audio-phase")({ payload: { phase: "running", error: null, busy: true } });
-  mainApi.close.mock.mockImplementationOnce(async () => {
-    throw new Error("settings save failed");
-  });
-  mainStore.getState().requestClose();
-  await setImmediate();
-  assert.equal(mainStore.getState().machine.status, "running");
-  assert.match(mainStore.getState().error, /settings save failed/);
-});
-
-test("unmount ignores late main_view and removes listeners", async () => {
-  const loading = deferred();
-  const remove = { phase: 0, view: 0, close: 0 };
-  mainApi.getView.mock.mockImplementationOnce(() => loading.promise);
-  listen.mock.mockImplementation(async (event) => {
-    if (event === "audio-phase") {
-      return () => {
-        remove.phase += 1;
-      };
-    }
-    if (event === "main-view") {
-      return () => {
-        remove.view += 1;
-      };
-    }
-    return () => {
-      remove.close += 1;
-    };
-  });
-  const disconnect = mainStore.getState().mount();
-  disconnect();
-  loading.resolve(mainView);
-  await setImmediate();
-  assert.equal(mainStore.getState().machine.status, "bootstrapping");
-  assert.deepEqual(remove, { phase: 1, view: 1, close: 1 });
-});
-
-test("main-view received during bootstrap wins over the older snapshot", async () => {
-  const loading = deferred();
-  mainApi.getView.mock.mockImplementationOnce(() => loading.promise);
-  cleanups.push(mainStore.getState().mount());
-  const next = { ...mainView, canStart: false };
-  callback("main-view")({ payload: next });
-  loading.resolve(mainView);
-  await setImmediate();
-  assert.equal(mainStore.getState().machine.view, next);
-});
-
-test("late start and stop failures cannot fault a remounted main window", async () => {
-  for (const action of ["start", "stop"]) {
-    const disconnect = mainStore.getState().mount();
-    await setImmediate();
-    if (action === "stop") {
-      callback("audio-phase")({ payload: { phase: "running", error: null, busy: true } });
-    }
-    const old = deferred();
-    mainApi[action].mock.mockImplementationOnce(() => old.promise);
-    const operation = mainStore.getState()[action](false);
-    disconnect();
-    cleanups.push(mainStore.getState().mount());
-    await setImmediate();
-    const current = mainStore.getState();
-    old.reject(new Error("old command failed"));
-    await operation;
-    assert.equal(mainStore.getState(), current);
-  }
-});
-
-test("new phase events take precedence over a late start command failure", async () => {
-  cleanups.push(mainStore.getState().mount());
-  await setImmediate();
+test("notifications and old commands cannot modify a replacement connection", async () => {
+  await connect("main").ready;
+  const old = channels.get("main");
   const starting = deferred();
-  mainApi.start.mock.mockImplementationOnce(() => starting.promise);
-  const operation = mainStore.getState().start(false);
-  callback("audio-phase")({ payload: { phase: "running", error: null, busy: true } });
-  starting.reject(new Error("late start response"));
-  await operation;
-  assert.equal(mainStore.getState().machine.status, "running");
+  handlers.set("start_audio", () => starting.promise);
+  const action = main.startAudio(false);
+  await connect("main").ready;
+  starting.reject(new Error("old command"));
+  await action;
+  old.onmessage(phase("running", true));
+  assert.equal(mainStore.getState().status, "idle");
   assert.equal(mainStore.getState().error, "");
 });
-
-test("failed close restores the phase received while closing", async () => {
-  cleanups.push(mainStore.getState().mount());
-  await setImmediate();
-  callback("audio-phase")({ payload: { phase: "running", error: null, busy: true } });
-  const closing = deferred();
-  mainApi.close.mock.mockImplementationOnce(() => closing.promise);
-  mainStore.getState().requestClose();
-  callback("audio-phase")({ payload: { phase: "stopped", error: null, busy: false } });
-  closing.reject(new Error("close failed"));
-  await setImmediate();
-  assert.equal(mainStore.getState().machine.status, "idle");
-  assert.match(mainStore.getState().error, /close failed/);
+test("backend events take priority over late command errors", async () => {
+  await connect("main").ready;
+  const starting = deferred();
+  handlers.set("start_audio", () => starting.promise);
+  const action = main.startAudio(false);
+  push(phase("running", true));
+  starting.reject(new Error("late error"));
+  await action;
+  assert.equal(mainStore.getState().status, "running");
+  assert.equal(mainStore.getState().error, "");
+});
+test("connection failures expose retry and action failures preserve audio state", async () => {
+  handlers.set("connect_window", async () => {
+    throw new Error("connection failed");
+  });
+  await assert.rejects(connect("main").ready);
+  assert.equal(mainStore.getState().status, "bootstrapFailed");
+  handlers.delete("connect_window");
+  await connect("main").ready;
+  push(phase("running", true));
+  handlers.set("open_log", async () => {
+    throw new Error("cannot open log");
+  });
+  await main.openLog();
+  assert.equal(mainStore.getState().status, "running");
+  assert.match(mainStore.getState().error, /cannot open log/);
 });
 
-test("old cleanup and close failures cannot affect a remounted main window", async () => {
-  const disconnect = mainStore.getState().mount();
-  await setImmediate();
-  const closing = deferred();
-  mainApi.close.mock.mockImplementationOnce(() => closing.promise);
-  mainStore.getState().requestClose();
-  disconnect();
-  const nextLoad = deferred();
-  mainApi.getView.mock.mockImplementationOnce(() => nextLoad.promise);
-  cleanups.push(mainStore.getState().mount());
-  disconnect();
-  nextLoad.resolve(mainView);
-  await setImmediate();
-  closing.reject(new Error("old close failed"));
-  await setImmediate();
-  assert.equal(mainStore.getState().machine.status, "idle");
+test("a start failure after opening still faults the matching command", async () => {
+  await connect("main").ready;
+  const starting = deferred();
+  handlers.set("start_audio", () => starting.promise);
+  const action = main.startAudio(false);
+  push(phase("opening", true));
+  starting.reject(new Error("driver open failed"));
+  await action;
+  assert.equal(mainStore.getState().status, "faulted");
+  assert.match(mainStore.getState().error, /driver open failed/);
+});
+test("unknown phases fault visibly and a recovered phase clears the audio error", async () => {
+  await connect("main").ready;
+  push(phase("unknown", false));
+  assert.equal(mainStore.getState().status, "faulted");
+  assert.match(mainStore.getState().error, /unknown/);
+  push(phase("running", true));
+  assert.equal(mainStore.getState().status, "running");
   assert.equal(mainStore.getState().error, "");
 });

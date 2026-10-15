@@ -1,10 +1,14 @@
 import { SettingsPanel } from "./SettingsPanel";
 import { SaveSettingsButton } from "./SaveSettingsButton";
-import { useSettingsStore } from "./store";
+import { useSettingsConnection } from "./listener";
 
 export function SettingsWindow() {
-  const busy = useSettingsStore(
-    (state) => state.audioBusy || state.status === "saving" || state.status === "switchingBackend",
+  const busy = useSettingsConnection(
+    (state) =>
+      state.audioBusy ||
+      state.status === "saving" ||
+      state.status === "switchingBackend" ||
+      state.status === "closing",
   );
   return (
     <div className="settings-window">

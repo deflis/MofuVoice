@@ -1,3 +1,4 @@
+import { NumberInput } from "../NumberInput";
 import { useId } from "react";
 
 export function SemitonesInput({
@@ -10,10 +11,10 @@ export function SemitonesInput({
   lowerLabel: string;
   upperLabel: string;
   label: string;
-  value: string;
-  onChange: (value: string) => void;
+  value: number;
+  onChange: (value: number) => void;
 }) {
-  const number = Number(value);
+  const number = value;
   const sliderId = useId();
   return (
     <div className="semitones">
@@ -29,17 +30,17 @@ export function SemitonesInput({
           max="12"
           step="0.01"
           value={Number.isFinite(number) ? number : 0}
-          onChange={(event) => onChange(event.target.value)}
+          onChange={(event) => onChange(event.currentTarget.valueAsNumber)}
         />
-        <input
+        <NumberInput
           aria-label={`${label}の値`}
-          type="number"
+
           min="-12"
           max="12"
           step="0.01"
           required
           value={value}
-          onChange={(event) => onChange(event.target.value)}
+          onChange={(event) => onChange(event.currentTarget.valueAsNumber)}
         />
         <div className="eq-scale">
           <span>{lowerLabel}</span>

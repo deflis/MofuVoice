@@ -1,5 +1,5 @@
-import { settingsApi } from "./api";
-import type { DeviceSampleRates } from "../../types";
+import { settingsApi } from "../api";
+import type { DeviceSampleRates } from "../../../types";
 
 export type RateQuery = { backend: string; device: string; outputDevice: string };
 export type RateResult = { rates?: DeviceSampleRates; error?: string };

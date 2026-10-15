@@ -1,366 +1,189 @@
 import assert from "node:assert/strict";
-import { setImmediate } from "node:timers/promises";
 import { test } from "node:test";
 import {
+  settingsStore,
+  settingsListener,
   settings,
   settingsView,
-  settingsApi,
-  settingsStore,
-  cleanups,
+  toSettings,
+  calls,
+  handlers,
+  push,
+  connect,
+  tick,
   deferred,
-  callback,
+  channels,
 } from "../../testing/storeMocks.mjs";
+const { useSettingsConnection } = settingsListener;
 
-test("settings mount loads settings_view only", async () => {
-  cleanups.push(settingsStore.getState().mount());
-  await setImmediate();
-  assert.equal(settingsApi.getView.mock.callCount(), 1);
-  assert.equal(settingsStore.getState().status, "ready");
-  assert.deepEqual(settingsStore.getState().settings, settings);
-});
-
-test("close saves draft then hides settings", async () => {
-  cleanups.push(settingsStore.getState().mount());
-  await setImmediate();
-  settingsStore.getState().update("pitch", "3");
-  settingsStore.getState().requestClose();
-  await setImmediate();
-  assert.equal(settingsApi.save.mock.callCount(), 1);
-  assert.equal(settingsApi.save.mock.calls[0].arguments[0].pitch, "3");
-  assert.equal(settingsApi.hide.mock.callCount(), 1);
-});
-
-test("close queued during automatic save does not hide after reopen", async () => {
-  const saving = deferred();
-  cleanups.push(settingsStore.getState().mount());
-  await setImmediate();
-  settingsApi.save.mock.mockImplementationOnce(() => saving.promise);
-  settingsStore.getState().requestClose();
-  assert.equal(settingsStore.getState().status, "saving");
-  settingsStore.getState().requestClose();
-  saving.resolve(undefined);
-  await setImmediate();
-  assert.equal(settingsApi.hide.mock.callCount(), 1);
-  assert.equal(settingsApi.save.mock.callCount(), 1);
-  settingsStore.getState().update("pitch", "4");
-  await settingsStore.getState().save();
-  assert.equal(settingsApi.save.mock.callCount(), 2);
-  assert.equal(settingsApi.hide.mock.callCount(), 1);
-  assert.equal(settingsStore.getState().status, "ready");
-});
-
-test("load failure allows hide without save", async () => {
-  settingsApi.getView.mock.mockImplementationOnce(async () => {
-    throw new Error("settings failed");
-  });
-  cleanups.push(settingsStore.getState().mount());
-  await setImmediate();
-  settingsStore.getState().requestClose();
-  await setImmediate();
-  assert.equal(settingsApi.save.mock.callCount(), 0);
-  assert.equal(settingsApi.hide.mock.callCount(), 1);
-});
-
-test("close queued during failed load hides the window", async () => {
+test("settings load one snapshot into feature slices and preserve new audio busy events", async () => {
   const loading = deferred();
-  settingsApi.getView.mock.mockImplementationOnce(() => loading.promise);
-  cleanups.push(settingsStore.getState().mount());
-  settingsStore.getState().requestClose();
-  loading.reject(new Error("settings failed"));
-  await setImmediate();
-  assert.equal(settingsApi.save.mock.callCount(), 0);
-  assert.equal(settingsApi.hide.mock.callCount(), 1);
-});
-
-test("close queued during backend switch resumes after device_choices", async () => {
-  const switching = deferred();
-  cleanups.push(settingsStore.getState().mount());
-  await setImmediate();
-  settingsApi.deviceChoices.mock.mockImplementationOnce(() => switching.promise);
-  const update = settingsStore.getState().updateBackend("cpal");
-  callback("request-application-close")({ payload: 9 });
-  await setImmediate();
-  assert.equal(settingsApi.closeApplication.mock.callCount(), 0);
-  switching.resolve({
-    devices: ["Mic"],
-    outputDevices: ["Headphones"],
-    audioAvailable: true,
-    deviceError: "",
-    resolvedBackend: "cpal",
-  });
-  await update;
-  await setImmediate();
-  assert.equal(settingsApi.closeApplication.mock.callCount(), 1);
-});
-
-test("settings_view does not overwrite a newer audio-phase busy flag", async () => {
-  const loading = deferred();
-  settingsApi.getView.mock.mockImplementationOnce(() => loading.promise);
-  cleanups.push(settingsStore.getState().mount());
-  callback("audio-phase")({ payload: { phase: "running", error: null, busy: true } });
-  assert.equal(settingsStore.getState().audioBusy, true);
-  loading.resolve({ ...settingsView, audioBusy: false });
-  await setImmediate();
-  assert.equal(settingsStore.getState().audioBusy, true);
-});
-
-test("application close acknowledgment delegates shutdown after save", async () => {
-  cleanups.push(settingsStore.getState().mount());
-  await setImmediate();
-  callback("request-application-close")({ payload: 7 });
-  await setImmediate();
-  assert.equal(settingsApi.acknowledgeClose.mock.callCount(), 1);
-  assert.equal(settingsApi.closeApplication.mock.callCount(), 1);
-});
-
-test("audio-phase updates audioBusy lock", async () => {
-  cleanups.push(settingsStore.getState().mount());
-  await setImmediate();
-  callback("audio-phase")({ payload: { phase: "running", error: null, busy: true } });
-  assert.equal(settingsStore.getState().audioBusy, true);
-  callback("audio-phase")({ payload: { phase: "ready", error: null, busy: false } });
-  assert.equal(settingsStore.getState().audioBusy, false);
-});
-
-test("backend switch uses device_choices without bootstrap", async () => {
-  settingsStore.setState({
-    ...settingsStore.getState(),
-    ...settingsView,
-    status: "ready",
-  });
-  await settingsStore.getState().updateBackend("cpal");
-  assert.equal(settingsApi.deviceChoices.mock.callCount(), 1);
-  assert.equal(settingsStore.getState().resolvedBackend, "cpal");
-});
-
-test("close during loading waits for settings_view", async () => {
-  const loading = deferred();
-  settingsApi.getView.mock.mockImplementationOnce(() => loading.promise);
-  cleanups.push(settingsStore.getState().mount());
-  settingsStore.getState().requestClose();
-  assert.equal(settingsApi.hide.mock.callCount(), 0);
+  handlers.set("settings_view", () => loading.promise);
+  await connect("settings").ready;
+  push({ type: "phase", phase: { phase: "running", busy: true, error: null } });
   loading.resolve(settingsView);
-  await setImmediate();
-  assert.equal(settingsApi.save.mock.callCount(), 1);
-  assert.equal(settingsApi.hide.mock.callCount(), 1);
+  await tick();
+  assert.equal(calls("settings_view").length, 1);
+  assert.equal(settingsStore.getState().voice.pitch, settings.voice.pitch);
+  assert.equal("settings" in settingsStore.getState(), false);
+  assert.equal(useSettingsConnection.getState().audioBusy, true);
+  push({ type: "phase", phase: { phase: "stopped", busy: false, error: null } });
+  assert.equal(useSettingsConnection.getState().audioBusy, false);
 });
-
-test("settings mutations and commands obey the same lock as the controls", async () => {
-  for (const [status, audioBusy] of [
-    ["loading", false],
-    ["loadFailed", false],
-    ["saving", false],
-    ["switchingBackend", false],
-    ["closing", false],
-    ["ready", true],
-  ]) {
-    settingsStore.setState({ ...settingsView, status, audioBusy });
-    const before = settingsStore.getState();
-    before.update("pitch", "12");
-    before.update("backend", "cpal");
-    before.updateRouting(2, [1, 2]);
-    before.updateLevel("targetDb", "-20");
-    before.updateEqBand(0, "gainDb", "3");
-    before.resetLevel();
-    before.resetEq();
-    await before.save();
-    await before.updateBackend("cpal");
-    assert.equal(settingsStore.getState(), before);
-  }
-  assert.equal(settingsApi.save.mock.callCount(), 0);
-  assert.equal(settingsApi.deviceChoices.mock.callCount(), 0);
-});
-
-test("save and device responses cannot modify settings after remount", async () => {
-  for (const action of ["save", "updateBackend"]) {
-    for (const fail of [false, true]) {
-      const disconnect = settingsStore.getState().mount();
-      await setImmediate();
-      const old = deferred();
-      const apiAction = action === "save" ? "save" : "deviceChoices";
-      settingsApi[apiAction].mock.mockImplementationOnce(() => old.promise);
-      const operation = settingsStore.getState()[action]("cpal");
-      disconnect();
-      cleanups.push(settingsStore.getState().mount());
-      await setImmediate();
-      const current = settingsStore.getState();
-      if (fail) {
-        old.reject(new Error("old response failed"));
-      } else {
-        old.resolve({ devices: ["old"], resolvedBackend: "old" });
-      }
-      await operation;
-      assert.equal(settingsStore.getState(), current);
-    }
-  }
-});
-
-test("automatic saves from an old mount cannot hide or shut down a reopened window", async () => {
-  for (const delegated of [false, true]) {
-    for (const fail of [false, true]) {
-      const disconnect = settingsStore.getState().mount();
-      await setImmediate();
-      const saving = deferred();
-      settingsApi.save.mock.mockImplementationOnce(() => saving.promise);
-      if (delegated) {
-        callback("request-application-close")({ payload: 13 });
-      } else {
-        settingsStore.getState().requestClose();
-      }
-      await setImmediate();
-      disconnect();
-      cleanups.push(settingsStore.getState().mount());
-      await setImmediate();
-      const current = settingsStore.getState();
-      if (fail) {
-        saving.reject(new Error("old close save failed"));
-      } else {
-        saving.resolve();
-      }
-      await setImmediate();
-      assert.equal(settingsStore.getState(), current);
-      assert.equal(settingsApi.hide.mock.callCount(), 0);
-      assert.equal(settingsApi.closeApplication.mock.callCount(), 0);
-    }
-  }
-  assert.equal(settingsApi.fallbackClose.mock.callCount(), 2);
-});
-
-test("generic backend update refreshes choices instead of retaining old devices", async () => {
-  cleanups.push(settingsStore.getState().mount());
-  await setImmediate();
-  settingsStore.getState().update("backend", "cpal");
-  assert.equal(settingsStore.getState().status, "switchingBackend");
-  assert.equal(settingsStore.getState().settings.device, "");
-  await setImmediate();
-  assert.equal(settingsApi.deviceChoices.mock.calls[0].arguments[0], "cpal");
-  assert.equal(settingsStore.getState().resolvedBackend, "cpal");
-});
-
-test("save failure permits correction and retry without automatically retrying queued closes", async () => {
-  cleanups.push(settingsStore.getState().mount());
-  await setImmediate();
-  const saving = deferred();
-  settingsApi.save.mock.mockImplementationOnce(() => saving.promise);
-  settingsStore.getState().requestClose();
-  settingsStore.getState().requestClose();
-  saving.reject(new Error("save failed"));
-  await setImmediate();
-  assert.equal(settingsStore.getState().status, "ready");
-  assert.match(settingsStore.getState().error, /save failed/);
-  assert.equal(settingsApi.save.mock.callCount(), 1);
-  assert.equal(settingsApi.hide.mock.callCount(), 0);
-  settingsStore.getState().update("pitch", "4");
-  settingsStore.getState().requestClose();
-  await setImmediate();
-  assert.equal(settingsApi.hide.mock.callCount(), 1);
-  assert.equal(settingsApi.save.mock.calls[1].arguments[0].pitch, "4");
-});
-
-test("close acknowledgements are exclusive and late acceptance returns to native fallback", async () => {
-  const disconnect = settingsStore.getState().mount();
-  await setImmediate();
-  const acknowledgment = deferred();
-  settingsApi.acknowledgeClose.mock.mockImplementationOnce(() => acknowledgment.promise);
-  const onClose = callback("request-application-close");
-  onClose({ payload: 17 });
-  onClose({ payload: 17 });
-  assert.equal(settingsApi.acknowledgeClose.mock.callCount(), 1);
-  disconnect();
-  cleanups.push(settingsStore.getState().mount());
-  await setImmediate();
-  acknowledgment.resolve(true);
-  await setImmediate();
-  assert.deepEqual(settingsApi.fallbackClose.mock.calls[0].arguments, [17]);
-  assert.equal(settingsApi.closeApplication.mock.callCount(), 0);
-});
-
-test("repeated shutdown IDs are acknowledged while sharing the pending delegated save", async () => {
-  cleanups.push(settingsStore.getState().mount());
-  await setImmediate();
-  const saving = deferred();
-  settingsApi.save.mock.mockImplementationOnce(() => saving.promise);
-  const onClose = callback("request-application-close");
-  onClose({ payload: 21 });
-  await setImmediate();
-  assert.equal(settingsStore.getState().status, "closing");
-  onClose({ payload: 22 });
-  onClose({ payload: 22 });
-  await setImmediate();
-  assert.deepEqual(
-    settingsApi.acknowledgeClose.mock.calls.map((call) => call.arguments),
-    [[21], [22]],
-  );
-  assert.equal(settingsApi.save.mock.callCount(), 1);
-  assert.equal(settingsApi.closeApplication.mock.callCount(), 0);
-  saving.resolve();
-  await setImmediate();
-  assert.equal(settingsApi.closeApplication.mock.callCount(), 1);
-  assert.equal(settingsApi.hide.mock.callCount(), 0);
-});
-
-test("out-of-order acknowledgements return the newest shutdown ID on unmount", async () => {
-  const disconnect = settingsStore.getState().mount();
-  await setImmediate();
-  const saving = deferred();
-  const earlier = deferred();
-  const later = deferred();
-  settingsApi.save.mock.mockImplementationOnce(() => saving.promise);
-  const onClose = callback("request-application-close");
-  onClose({ payload: 31 });
-  await setImmediate();
-  settingsApi.acknowledgeClose.mock.mockImplementationOnce(() => earlier.promise);
-  settingsApi.acknowledgeClose.mock.mockImplementationOnce(() => later.promise);
-  onClose({ payload: 32 });
-  onClose({ payload: 33 });
-  later.resolve(true);
-  await setImmediate();
-  earlier.resolve(true);
-  await setImmediate();
-  assert.equal(settingsApi.save.mock.callCount(), 1);
-  disconnect();
-  assert.deepEqual(
-    settingsApi.fallbackClose.mock.calls.map((call) => call.arguments),
-    [[33]],
-  );
-  saving.resolve();
-  await setImmediate();
-  assert.equal(settingsApi.closeApplication.mock.callCount(), 0);
-});
-
-test("repeated shutdown during a failed save preserves the draft and allows retry", async () => {
-  cleanups.push(settingsStore.getState().mount());
-  await setImmediate();
-  settingsStore.getState().update("pitch", "4");
-  const saving = deferred();
-  settingsApi.save.mock.mockImplementationOnce(() => saving.promise);
-  const onClose = callback("request-application-close");
-  onClose({ payload: 41 });
-  await setImmediate();
-  onClose({ payload: 42 });
-  await setImmediate();
-  assert.deepEqual(
-    settingsApi.acknowledgeClose.mock.calls.map((call) => call.arguments),
-    [[41], [42]],
-  );
-  saving.reject(new Error("save failed"));
-  await setImmediate();
-  assert.equal(settingsApi.closeApplication.mock.callCount(), 0);
-  assert.equal(settingsStore.getState().status, "ready");
-  assert.equal(settingsStore.getState().settings.pitch, "4");
-  onClose({ payload: 43 });
-  await setImmediate();
-  assert.equal(settingsApi.save.mock.callCount(), 2);
-  assert.equal(settingsApi.closeApplication.mock.callCount(), 1);
-  assert.equal(settingsApi.save.mock.calls[1].arguments[0].pitch, "4");
-});
-
-test("sample rate survives settings save and backend switching", async () => {
-  cleanups.push(settingsStore.getState().mount());
-  await setImmediate();
-  settingsStore.getState().update("sampleRate", "44100");
+test("numeric slice values round-trip the complete backend payload and saving excludes actions", async () => {
+  assert.deepEqual(toSettings(settingsStore.getState()), settings);
+  settingsStore.getState().voice.setPitch(4);
+  settingsStore.getState().level.setRatio(6);
+  settingsStore.getState().deesser.setFrequencyHz(6500);
+  settingsStore.getState().eq.setBandGainDb(1, 3);
   await settingsStore.getState().save();
-  assert.equal(settingsApi.save.mock.calls[0].arguments[0].sampleRate, "44100");
-  await settingsStore.getState().updateBackend("cpal");
-  assert.equal(settingsStore.getState().settings.sampleRate, "44100");
+  const saved = calls("save_settings")[0].arguments[1].settings;
+  assert.equal(saved.voice.pitch, 4);
+  assert.equal(saved.level.ratio, 6);
+  assert.equal(saved.deesser.frequencyHz, 6500);
+  assert.equal(saved.eq.bands[1].gainDb, 3);
+  assert.equal(
+    Object.values(saved).some((value) => typeof value === "function"),
+    false,
+  );
+  assert.equal(saved.devices.sampleRate, settings.devices.sampleRate);
+});
+test("settings edits are not overwritten by subsequent status notifications", async () => {
+  await connect("settings").ready;
+  await tick();
+  settingsStore.getState().voice.setPitch(5);
+  for (const busy of [true, false]) {
+    push({ type: "phase", phase: { phase: busy ? "running" : "stopped", busy, error: null } });
+  }
+  assert.equal(settingsStore.getState().voice.pitch, 5);
+  assert.equal(calls("settings_view").length, 1);
+});
+test("close saves draft before hiding and duplicate requests share a save", async () => {
+  await connect("settings").ready;
+  await tick();
+  const saving = deferred();
+  handlers.set("save_settings", () => saving.promise);
+  settingsStore.getState().voice.setPitch(3);
+  push({ type: "close" });
+  push({ type: "close" });
+  assert.equal(calls("save_settings").length, 1);
+  assert.equal(calls("close_settings").length, 0);
+  saving.resolve();
+  await tick();
+  assert.equal(calls("close_settings").length, 1);
+  assert.equal(calls("save_settings")[0].arguments[1].settings.voice.pitch, 3);
+});
+test("application close saves before shutdown without acknowledge/fallback handshakes", async () => {
+  await connect("settings").ready;
+  await tick();
+  push({ type: "applicationClose" });
+  push({ type: "applicationClose" });
+  await tick();
+  assert.equal(calls("save_settings").length, 1);
+  assert.equal(calls("close_application").length, 1);
+  assert.equal(calls("close_settings").length, 0);
+  assert.equal(calls("acknowledge_application_close").length, 0);
+});
+test("close during backend discovery waits, preserves sample rate, then saves and shuts down", async () => {
+  await connect("settings").ready;
+  await tick();
+  settingsStore.getState().devices.setSampleRate(44100);
+  const discovery = deferred();
+  handlers.set("device_choices", () => discovery.promise);
+  const switching = settingsListener.changeBackend("cpal");
+  assert.equal(settingsStore.getState().devices.device, "");
+  push({ type: "applicationClose" });
+  assert.equal(calls("save_settings").length, 0);
+  discovery.resolve({
+    devices: ["Mic"],
+    outputDevices: ["Speakers"],
+    audioAvailable: true,
+    resolvedBackend: "cpal",
+    deviceError: "",
+  });
+  await switching;
+  assert.equal(calls("close_application").length, 1);
+  assert.equal(calls("save_settings")[0].arguments[1].settings.devices.sampleRate, 44100);
+});
+test("close during manual saving reuses the completed save", async () => {
+  await connect("settings").ready;
+  await tick();
+  const saving = deferred();
+  handlers.set("save_settings", () => saving.promise);
+  const action = settingsListener.saveSettings();
+  push({ type: "close" });
+  saving.resolve();
+  await action;
+  assert.equal(calls("save_settings").length, 1);
+  assert.equal(calls("close_settings").length, 1);
+});
+test("failed save preserves draft, cancels shutdown and permits an explicit retry", async () => {
+  await connect("settings").ready;
+  await tick();
+  settingsStore.getState().voice.setPitch(Number.NaN);
+  handlers.set("save_settings", async () => {
+    throw new Error("invalid pitch");
+  });
+  push({ type: "applicationClose" });
+  await tick();
+  assert.equal(calls("close_application").length, 0);
+  assert.equal(calls("cancel_application_close").length, 1);
+  assert.equal(Number.isNaN(settingsStore.getState().voice.pitch), true);
+  assert.equal(useSettingsConnection.getState().status, "ready");
+  handlers.delete("save_settings");
+  settingsStore.getState().voice.setPitch(4);
+  await settingsListener.saveSettings();
+  assert.equal(calls("close_application").length, 0);
+});
+test("close queued during loading saves the snapshot and load failures allow hiding without saving", async () => {
+  const loading = deferred();
+  handlers.set("settings_view", () => loading.promise);
+  await connect("settings").ready;
+  push({ type: "close" });
+  loading.resolve(settingsView);
+  await tick();
+  assert.equal(calls("save_settings").length, 1);
+  assert.equal(calls("close_settings").length, 1);
+  handlers.set("settings_view", async () => {
+    throw new Error("load failed");
+  });
+  await connect("settings").ready;
+  await tick();
+  push({ type: "close" });
+  await tick();
+  assert.equal(calls("save_settings").length, 1);
+  assert.equal(calls("close_settings").length, 2);
+});
+test("old snapshot, notifications and saves cannot overwrite or hide a new connection", async () => {
+  const loading = deferred();
+  handlers.set("settings_view", () => loading.promise);
+  await connect("settings").ready;
+  const oldChannel = channels.get("settings");
+  handlers.delete("settings_view");
+  await connect("settings").ready;
+  await tick();
+  settingsStore.getState().voice.setPitch(6);
+  loading.resolve(settingsView);
+  oldChannel.onmessage({ type: "phase", phase: { phase: "running", busy: true, error: null } });
+  await tick();
+  assert.equal(settingsStore.getState().voice.pitch, 6);
+  assert.equal(useSettingsConnection.getState().audioBusy, false);
+  const saving = deferred();
+  handlers.set("save_settings", () => saving.promise);
+  push({ type: "close" });
+  await connect("settings").ready;
+  await tick();
+  saving.resolve();
+  await tick();
+  assert.equal(calls("close_settings").length, 0);
+});
+test("routing and EQ setters do not retain caller-owned mutable arrays", () => {
+  const outputs = [1, 2];
+  settingsStore.getState().devices.setRouting(2, outputs);
+  outputs.push(3);
+  assert.deepEqual(settingsStore.getState().devices.outputChannels, [1, 2]);
+  const bands = settings.eq.bands.map((band) => ({ ...band }));
+  settingsStore.getState().eq.setBands(bands);
+  bands[0].gainDb = 12;
+  assert.equal(settingsStore.getState().eq.bands[0].gainDb, 0);
 });

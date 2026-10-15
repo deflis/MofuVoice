@@ -1,10 +1,21 @@
-import { DetailsPopup } from "./DetailsPopup";
+import { NumberInput } from "../NumberInput";
+import { DetailsPopup } from "../DetailsPopup";
 import { useNoiseGateSettings } from "./hooks";
 
 export function NoiseGateSettings() {
-  const { gate, gateThresholdMode, gateThresholdDb, gateAttackMs, gateReleaseMs, update } =
-    useNoiseGateSettings();
-  const automatic = gateThresholdMode === "auto";
+  const {
+    enabled,
+    thresholdMode,
+    thresholdDb,
+    attackMs,
+    releaseMs,
+    setEnabled,
+    setThresholdMode,
+    setThresholdDb,
+    setAttackMs,
+    setReleaseMs,
+  } = useNoiseGateSettings();
+  const automatic = thresholdMode === "auto";
   return (
     <section>
       <div className="section-heading">
@@ -12,22 +23,22 @@ export function NoiseGateSettings() {
         <label className="check">
           <input
             type="checkbox"
-            checked={gate}
-            onChange={(event) => update("gate", event.target.checked)}
+            checked={enabled}
+            onChange={(event) => setEnabled(event.target.checked)}
           />
           有効
         </label>
       </div>
-      <fieldset className="settings" disabled={!gate} hidden={!gate}>
+      <fieldset className="settings" disabled={!enabled} hidden={!enabled}>
         <DetailsPopup title="ノイズゲート" buttonLabel="詳細設定">
           <div>
             <div>
               <label>
                 しきい値の設定方法
                 <select
-                  value={gateThresholdMode}
+                  value={thresholdMode}
                   onChange={(event) => {
-                    update("gateThresholdMode", event.target.value === "auto" ? "auto" : "manual");
+                    setThresholdMode(event.target.value === "auto" ? "auto" : "manual");
                   }}
                 >
                   <option value="auto">自動</option>
@@ -39,14 +50,13 @@ export function NoiseGateSettings() {
               ) : (
                 <label>
                   しきい値（dBFS）
-                  <input
-                    type="number"
+                  <NumberInput
                     min="-90"
                     max="0"
                     step="any"
                     required
-                    value={gateThresholdDb}
-                    onChange={(event) => update("gateThresholdDb", event.target.value)}
+                    value={thresholdDb}
+                    onChange={(event) => setThresholdDb(event.currentTarget.valueAsNumber)}
                   />
                   <small>0に近づけるほど小さい音を強く抑えます。</small>
                 </label>
@@ -58,24 +68,22 @@ export function NoiseGateSettings() {
           <div className="level-fields">
             <label>
               アタック（ms）
-              <input
-                type="number"
+              <NumberInput
                 min="0"
                 step="any"
                 required
-                value={gateAttackMs}
-                onChange={(event) => update("gateAttackMs", event.target.value)}
+                value={attackMs}
+                onChange={(event) => setAttackMs(event.currentTarget.valueAsNumber)}
               />
             </label>
             <label>
               リリース（ms）
-              <input
-                type="number"
+              <NumberInput
                 min="0"
                 step="any"
                 required
-                value={gateReleaseMs}
-                onChange={(event) => update("gateReleaseMs", event.target.value)}
+                value={releaseMs}
+                onChange={(event) => setReleaseMs(event.currentTarget.valueAsNumber)}
               />
             </label>
           </div>

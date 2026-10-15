@@ -1,6 +1,6 @@
 {
   "identifier": "main",
-  "description": "Main, settings, and log windows can listen for audio, settings and shutdown events.",
+  "description": "Main, settings, and log windows use typed IPC commands and channels.",
   "windows": ["main", "settings", "log"],
-  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
+  "permissions": []
 }

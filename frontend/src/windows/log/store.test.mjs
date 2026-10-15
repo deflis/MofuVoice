@@ -1,126 +1,85 @@
 import assert from "node:assert/strict";
-import { setImmediate } from "node:timers/promises";
 import { test } from "node:test";
-import { logApi, logStore, cleanups, deferred, callback } from "../../testing/storeMocks.mjs";
+import {
+  logStore,
+  log,
+  handlers,
+  calls,
+  push,
+  connect,
+  tick,
+  deferred,
+  channels,
+  info,
+} from "../../testing/storeMocks.mjs";
 
-test("log_view does not overwrite a newer log-info payload", async () => {
-  const loading = deferred();
-  logApi.getView.mock.mockImplementationOnce(() => loading.promise);
-  cleanups.push(logStore.getState().mount());
-  const newer = {
-    phase: "running",
-    error: null,
-    device: "Mic",
-    outputDevice: "Headphones",
-    backend: "cpal",
-    sampleRate: 48000,
-    inputs: 1,
-    outputs: 2,
-    frames: 128,
-    periodMs: 2.67,
-    dspMs: 0,
-    inputLatencyMs: 1,
-    outputLatencyMs: 2,
-  };
-  callback("log-info")({ payload: newer });
-  assert.deepEqual(logStore.getState().info, newer);
-  loading.resolve({
-    ...newer,
-    phase: "ready",
-    device: null,
-  });
-  await setImmediate();
-  assert.deepEqual(logStore.getState().info, newer);
-});
-
-test("rapid logging reopen disables the previous activation before starting again", async () => {
-  cleanups.push(logStore.getState().mount());
-  await setImmediate();
-  const activating = deferred();
-  logApi.setLogging.mock.mockImplementationOnce(() => activating.promise);
-  logStore.getState().setLogging(true);
-  await setImmediate();
-  logStore.getState().setLogging(false);
-  logStore.getState().setLogging(true);
-  activating.resolve({ elapsedSeconds: 99, telemetry: null });
-  await setImmediate();
-  assert.deepEqual(
-    logApi.setLogging.mock.calls.map((call) => call.arguments[0]),
-    [true, false, true],
-  );
-  assert.equal(logStore.getState().log.elapsedSeconds, 0);
-});
-
-test("activation failure removes its listener and permits a fresh retry", async () => {
-  cleanups.push(logStore.getState().mount());
-  await setImmediate();
-  let removed = 0;
-  logApi.onLog = async () => () => {
-    removed += 1;
-  };
-  logApi.setLogging.mock.mockImplementationOnce(async () => {
-    throw new Error("activation failed");
-  });
-  logStore.getState().setLogging(true);
-  await setImmediate();
-  assert.equal(logStore.getState().logging, false);
-  assert.equal(removed, 1);
-  assert.match(logStore.getState().error, /activation failed/);
-  logStore.getState().setLogging(true);
-  await setImmediate();
-  assert.equal(logStore.getState().logging, true);
-  assert.equal(logStore.getState().error, "");
-});
-
-test("late log listeners are removed once and cannot publish after unmount", async () => {
-  const disconnect = logStore.getState().mount();
-  const subscription = deferred();
-  let receive;
-  let removed = 0;
-  logApi.onLog = (onLog) => {
-    receive = onLog;
-    return subscription.promise;
-  };
-  logStore.getState().setLogging(true);
-  await setImmediate();
-  disconnect();
-  disconnect();
-  subscription.resolve(() => {
-    removed += 1;
-  });
-  await setImmediate();
-  receive({ elapsedSeconds: 99, telemetry: null });
+test("window status populates info but logs arrive only on the dedicated channel", async () => {
+  await connect("log").ready;
+  assert.deepEqual(logStore.getState().info, info);
   assert.equal(logStore.getState().log, null);
+  await log.setLogging(true);
+  assert.equal(calls("connect_logs").length, 1);
+  assert.equal(calls("set_logging").length, 0);
+  const payload = { elapsedSeconds: 5, telemetry: null };
+  push(payload, "logs");
+  assert.equal(logStore.getState().log, payload);
+  push({ type: "info", info: { ...info, phase: "running" } }, "log");
+  assert.equal(logStore.getState().log, payload);
+});
+test("turning off unsubscribes, clears logs and ignores late payloads", async () => {
+  await connect("log").ready;
+  await log.setLogging(true);
+  const old = channels.get("logs");
+  const stopping = log.setLogging(false);
+  old.onmessage({ elapsedSeconds: 99, telemetry: null });
+  assert.equal(logStore.getState().log, null);
+  await stopping;
+  assert.equal(calls("disconnect_logs").length, 1);
   assert.equal(logStore.getState().logging, false);
-  assert.equal(removed, 1);
-  assert.deepEqual(
-    logApi.setLogging.mock.calls.map((call) => call.arguments[0]),
-    [false],
-  );
 });
-
-test("pushed logs win over a delayed activation snapshot", async () => {
-  cleanups.push(logStore.getState().mount());
-  const activating = deferred();
-  logApi.setLogging.mock.mockImplementationOnce(() => activating.promise);
-  logStore.getState().setLogging(true);
-  await setImmediate();
-  const pushed = { elapsedSeconds: 8, telemetry: null };
-  callback("audio-log")({ payload: pushed });
-  activating.resolve({ elapsedSeconds: 0, telemetry: null });
-  await setImmediate();
-  assert.equal(logStore.getState().log, pushed);
+test("rapid resubscription closes the prior stream before registering a new one", async () => {
+  await connect("log").ready;
+  const pending = deferred();
+  handlers.set("connect_logs", () => pending.promise);
+  const first = log.setLogging(true);
+  await tick();
+  const second = log.setLogging(false);
+  const third = log.setLogging(true);
+  handlers.delete("connect_logs");
+  pending.resolve();
+  await Promise.all([first, second, third]);
+  assert.equal(calls("connect_logs").length, 2);
+  assert.equal(calls("disconnect_logs").length, 1);
+  const sequence = (await import("../../testing/storeMocks.mjs")).invoke.mock.calls
+    .map((call) => call.arguments[0])
+    .filter((command) => command.includes("logs"));
+  assert.deepEqual(sequence, ["connect_logs", "disconnect_logs", "connect_logs"]);
 });
-
-test("an old hide failure cannot overwrite the remounted log window", async () => {
-  const disconnect = logStore.getState().mount();
-  const hiding = deferred();
-  logApi.hide.mock.mockImplementationOnce(() => hiding.promise);
-  logStore.getState().requestClose();
-  disconnect();
-  cleanups.push(logStore.getState().mount());
-  await setImmediate();
-  hiding.reject(new Error("old hide failed"));
-  await setImmediate();
-  assert.equal(logStore.getState().error, "");
+test("subscription failure is visible and a fresh subscription can retry", async () => {
+  await connect("log").ready;
+  handlers.set("connect_logs", async () => {
+    throw new Error("cannot subscribe");
+  });
+  await log.setLogging(true);
+  assert.equal(logStore.getState().logging, false);
+  assert.match(logStore.getState().error, /cannot subscribe/);
+  handlers.delete("connect_logs");
+  await log.setLogging(true);
+  assert.equal(logStore.getState().logging, true);
+});
+test("native close stops the log stream before hiding the window", async () => {
+  await connect("log").ready;
+  await log.setLogging(true);
+  push({ type: "close" }, "log");
+  await tick();
+  assert.equal(calls("disconnect_logs").length, 1);
+  assert.equal(calls("close_log").length, 1);
+  assert.equal(logStore.getState().log, null);
+});
+test("clear resets the transient cache without issuing system operations", () => {
+  logStore.getState().setLog({ elapsedSeconds: 2, telemetry: null });
+  logStore.getState().clear();
+  assert.equal(logStore.getState().log, null);
+  assert.equal(calls("connect_logs").length, 0);
+  assert.equal(calls("disconnect_logs").length, 0);
 });

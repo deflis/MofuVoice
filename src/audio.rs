@@ -20,7 +20,7 @@ pub struct DspSettings {
 impl From<&crate::cli::Options> for DspSettings {
     fn from(options: &crate::cli::Options) -> Self {
         Self {
-            eq: options.eq,
+            eq: options.eq.clone(),
             rumble_filter: options.rumble_filter,
             deesser: options.deesser,
             deesser_parameters: options.deesser_parameters,

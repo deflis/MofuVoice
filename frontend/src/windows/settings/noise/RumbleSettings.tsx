@@ -1,7 +1,7 @@
-import { useVoiceSettings } from "./hooks";
+import { useNoiseGateSettings } from "./hooks";
 
 export function RumbleSettings() {
-  const { rumbleFilter, update } = useVoiceSettings();
+  const { rumbleFilter, setRumbleFilter } = useNoiseGateSettings();
   return (
     <section>
       <h2>低い唸りを減らす（低域ノイズ除去）</h2>
@@ -9,7 +9,7 @@ export function RumbleSettings() {
         <input
           type="checkbox"
           checked={rumbleFilter}
-          onChange={(event) => update("rumbleFilter", event.target.checked)}
+          onChange={(event) => setRumbleFilter(event.target.checked)}
         />
         有効
       </label>

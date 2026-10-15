@@ -1,51 +1,8 @@
-export type LevelSettings = {
-  enabled: boolean;
-  targetDb: string;
-  maxGainDb: string;
-  floorDb: string;
-  responseMs: string;
-  thresholdDb: string;
-  ratio: string;
-  attackMs: string;
-  releaseMs: string;
-};
-export type DeEsserParameters = {
-  frequencyHz: string;
-  thresholdDb: string;
-  rangeDb: string;
-  attackMs: string;
-  releaseMs: string;
-};
-export type EqBand = { frequency: string; gainDb: string; q: string };
-export type EqSettings = {
-  enabled: boolean;
-  mode: "simple" | "pro";
-  bands: [EqBand, EqBand, EqBand];
-  outputDb: string;
-};
-export type Settings = {
-  eq: EqSettings;
-  level: LevelSettings;
-  device: string;
-  outputDevice: string;
-  inputChannel: number;
-  outputChannels: number[];
-  backend: string;
-  frames: string;
-  sampleRate: string;
-  pitch: string;
-  formantShift: string;
-  preserveFormants: boolean;
-  rumbleFilter: boolean;
-  deesser: boolean;
-  deesserMode: "simple" | "pro";
-  deesserParameters: DeEsserParameters;
-  gate: boolean;
-  gateThresholdMode: "auto" | "manual";
-  gateThresholdDb: string;
-  gateAttackMs: string;
-  gateReleaseMs: string;
-};
+export type { Settings, SettingsView } from "./windows/settings/schema";
+export type { EqBand } from "./windows/settings/eq/schema";
+export type { LevelValues as LevelSettings } from "./windows/settings/level/schema";
+import type { DeesserValues } from "./windows/settings/deesser/schema";
+export type DeEsserParameters = Omit<DeesserValues, "enabled" | "mode">;
 export type MainSetup = {
   audioAvailable: boolean;
   resolvedBackend: string;
@@ -109,11 +66,4 @@ export type DeviceChoices = {
   deviceError: string;
   resolvedBackend: string;
 };
-export type SettingsView = DeviceChoices & {
-  settings: Settings;
-  levelDefaults: LevelSettings;
-  backends: string[];
-  audioBusy: boolean;
-};
-
 export type DeviceSampleRates = { input: number[]; output: number[]; common: number[] };

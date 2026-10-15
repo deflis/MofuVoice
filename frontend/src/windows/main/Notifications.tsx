@@ -1,9 +1,7 @@
 import { useMainStore } from "./store";
-import { machineError } from "./selectors";
 
 export function Notifications() {
-  const error = useMainStore((state) => machineError(state.machine) || state.error);
-  const notice = useMainStore((state) => state.notice);
+  const error = useMainStore((state) => state.error);
   return (
     <>
       {error && (
@@ -11,7 +9,6 @@ export function Notifications() {
           {error}
         </div>
       )}
-      {notice && <output className="notice">{notice}</output>}
     </>
   );
 }

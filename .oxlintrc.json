@@ -28,13 +28,24 @@
     "eslint/no-var": "error",
     "eslint/prefer-const": "error",
     "eslint/no-duplicate-imports": "error",
-    "import/no-unassigned-import": ["error", { "allow": ["**/*.css"] }],
+    "import/no-unassigned-import": [
+      "error",
+      {
+        "allow": ["**/*.css"]
+      }
+    ],
     "typescript/no-explicit-any": "error",
     "typescript/no-non-null-assertion": "error",
     "typescript/consistent-type-imports": "error",
     "typescript/ban-ts-comment": "error",
     "react/button-has-type": "error",
-    "react/jsx-no-target-blank": "error"
+    "react/jsx-no-target-blank": "error",
+    "jsx-a11y/label-has-associated-control": [
+      "error",
+      {
+        "controlComponents": ["NumberInput"]
+      }
+    ]
   },
   "env": {
     "browser": true

@@ -1,13 +1,20 @@
 import { useDeviceSelection } from "./hooks";
 
 export function DeviceSelection() {
-  const { device, outputDevice, resolvedBackend, devices, outputDevices, update } =
-    useDeviceSelection();
+  const {
+    device,
+    outputDevice,
+    resolvedBackend,
+    devices,
+    outputDevices,
+    setDevice,
+    setOutputDevice,
+  } = useDeviceSelection();
   return (
     <>
       <label>
         {resolvedBackend === "asio" ? "入出力デバイス" : "入力デバイス"}
-        <select value={device} onChange={(event) => update("device", event.target.value)}>
+        <select value={device} onChange={(event) => setDevice(event.target.value)}>
           <option value="">
             {resolvedBackend === "asio" ? "デバイスを選択" : "システムの既定"}
           </option>
@@ -22,10 +29,7 @@ export function DeviceSelection() {
       {resolvedBackend === "cpal" && (
         <label>
           出力デバイス
-          <select
-            value={outputDevice}
-            onChange={(event) => update("outputDevice", event.target.value)}
-          >
+          <select value={outputDevice} onChange={(event) => setOutputDevice(event.target.value)}>
             <option value="">システムの既定</option>
             {outputDevice && !outputDevices.includes(outputDevice) && (
               <option value={outputDevice}>{outputDevice}（未検出）</option>

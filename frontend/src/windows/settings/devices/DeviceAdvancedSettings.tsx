@@ -1,9 +1,10 @@
-import { DetailsPopup } from "./DetailsPopup";
+import { NumberInput } from "../NumberInput";
+import { DetailsPopup } from "../DetailsPopup";
 import { ChannelRoutingDetails } from "./ChannelRoutingSettings";
 import { useBackendSettings, useBufferSettings } from "./hooks";
 
 function BackendSettings() {
-  const { backend, backends, updateBackend } = useBackendSettings();
+  const { backend, backends, changeBackend } = useBackendSettings();
   return (
     <fieldset className="settings">
       <legend>音声バックエンド</legend>
@@ -13,7 +14,7 @@ function BackendSettings() {
             key={available}
             type="button"
             aria-pressed={backend === available}
-            onClick={() => void updateBackend(available)}
+            onClick={() => void changeBackend(available)}
           >
             {{ auto: "自動", cpal: "標準", asio: "ASIO" }[available] ?? available}
           </button>
@@ -27,19 +28,18 @@ function BackendSettings() {
 }
 
 function BufferSettings() {
-  const { frames, update } = useBufferSettings();
+  const { frames, setFrames } = useBufferSettings();
   return (
     <>
       <label>
         バッファサイズ（サンプル）
-        <input
-          type="number"
+        <NumberInput
           min="1"
           max="8192"
           step="1"
           required
           value={frames}
-          onChange={(event) => update("frames", event.target.value)}
+          onChange={(event) => setFrames(event.currentTarget.valueAsNumber)}
         />
       </label>
       <p>

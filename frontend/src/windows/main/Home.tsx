@@ -1,16 +1,12 @@
 import type { SettingsSection } from "../settings/navigation";
+import { openSpectrum, openSettings, openLog } from "./listener";
 import { useMainStore } from "./store";
 import { canOpenSpectrum, setupGuidance } from "./selectors";
 import { AudioControls } from "./AudioControls";
 import { AppHeader } from "./AppHeader";
 
 export function Home() {
-  const machine = useMainStore((state) => state.machine);
-  const spectrum = useMainStore((state) => state.spectrum);
-  const openLog = useMainStore((state) => state.openLog);
-  if (!("view" in machine)) {
-    throw new Error("メイン画面の表示状態が不正です。");
-  }
+  const spectrumAvailable = useMainStore(canOpenSpectrum);
   return (
     <div className="home-layout">
       <AppHeader />
@@ -25,8 +21,8 @@ export function Home() {
         <button
           type="button"
           className="home-secondary-action"
-          disabled={!canOpenSpectrum(machine)}
-          onClick={() => void spectrum()}
+          disabled={!spectrumAvailable}
+          onClick={() => void openSpectrum()}
         >
           スペアナ
         </button>
@@ -48,7 +44,6 @@ function OpenSettingsButton({
   children: string;
   className: string;
 }) {
-  const openSettings = useMainStore((state) => state.openSettings);
   return (
     <button type="button" className={className} onClick={() => void openSettings(section)}>
       {children}
@@ -57,13 +52,7 @@ function OpenSettingsButton({
 }
 
 function DeviceSetupGuidance() {
-  const reason = useMainStore((state) => {
-    const { machine } = state;
-    if (!("view" in machine)) {
-      return "";
-    }
-    return setupGuidance(machine.view);
-  });
+  const reason = useMainStore(setupGuidance);
   if (!reason) {
     return null;
   }

@@ -1,13 +1,13 @@
 import { connectSettingsNavigation, readSettingsSection, type SettingsSection } from "./navigation";
 import { useEffect, useState } from "react";
 import { useSettingsLocked } from "./hooks";
-import { DeviceSettings } from "./DeviceSettings";
-import { DeEsserSettings } from "./DeEsserSettings";
-import { VoiceSettings } from "./VoiceSettings";
-import { NoiseGateSettings } from "./NoiseGateSettings";
-import { EqSettings } from "./EqSettings";
-import { AutoLevelSettings } from "./AutoLevelSettings";
-import { RumbleSettings } from "./RumbleSettings";
+import { DeviceSettings } from "./devices/DeviceSettings";
+import { DeEsserSettings } from "./deesser/DeEsserSettings";
+import { VoiceSettings } from "./voice/VoiceSettings";
+import { NoiseGateSettings } from "./noise/NoiseGateSettings";
+import { EqSettings } from "./eq/EqSettings";
+import { AutoLevelSettings } from "./level/AutoLevelSettings";
+import { RumbleSettings } from "./noise/RumbleSettings";
 
 const groups: { id: SettingsSection; name: string }[] = [
   { id: "devices", name: "音声デバイス" },
