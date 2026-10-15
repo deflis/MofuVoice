@@ -8,12 +8,16 @@ export function VoiceSettings() {
     <section>
       <h2>声の変換</h2>
       <SemitonesInput
+        precise={false}
+        lowerLabel="低く"
+        upperLabel="高く"
         label="声の高さ（ピッチ）"
         value={pitch}
         onChange={(value) => update("pitch", value)}
       />
       <fieldset className="settings" disabled={!preserveFormants}>
         <SemitonesInput
+          precise={false}
           label="声の響き（フォルマント）"
           lowerLabel="太く"
           upperLabel="明るく"
@@ -30,7 +34,7 @@ export function VoiceSettings() {
       >
         元の声に戻す
       </button>
-      <DetailsPopup title="声の変換">
+      <DetailsPopup title="声の変換" buttonLabel="詳細設定">
         <SemitonesInput
           precise
           label="声の高さ（ピッチ）"

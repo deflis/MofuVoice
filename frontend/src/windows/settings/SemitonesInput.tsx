@@ -1,20 +1,13 @@
 import { useId } from "react";
 
-export function SemitonesInput({
-  label,
-  value,
-  onChange,
-  precise = false,
-  lowerLabel = "低く",
-  upperLabel = "高く",
-}: {
-  precise?: boolean;
-  lowerLabel?: string;
-  upperLabel?: string;
+type SemitonesInputProps = {
   label: string;
   value: string;
   onChange: (value: string) => void;
-}) {
+} & ({ precise: true } | { precise: false; lowerLabel: string; upperLabel: string });
+
+export function SemitonesInput(props: SemitonesInputProps) {
+  const { label, value, onChange, precise } = props;
   const number = Number(value);
   const sliderId = useId();
   return (
@@ -48,9 +41,9 @@ export function SemitonesInput({
       </div>
       {!precise && (
         <div className="eq-scale">
-          <span>{lowerLabel}</span>
+          <span>{props.lowerLabel}</span>
           <span>元の声</span>
-          <span>{upperLabel}</span>
+          <span>{props.upperLabel}</span>
         </div>
       )}
     </div>

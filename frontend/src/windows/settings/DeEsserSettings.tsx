@@ -110,7 +110,11 @@ export function DeEsserSettings() {
           )}
         </>
 
-        <DetailsPopup title="ディエッサー" onOpen={() => update("deesserMode", "pro")}>
+        <DetailsPopup
+          title="ディエッサー"
+          buttonLabel="詳細設定"
+          onOpen={() => update("deesserMode", "pro")}
+        >
           <>
             {custom && (
               <p className="notice">

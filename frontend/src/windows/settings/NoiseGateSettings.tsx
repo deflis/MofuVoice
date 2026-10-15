@@ -19,7 +19,7 @@ export function NoiseGateSettings() {
         </label>
       </div>
       <fieldset className="settings" disabled={!gate} hidden={!gate}>
-        <DetailsPopup title="ノイズゲート">
+        <DetailsPopup title="ノイズゲート" buttonLabel="詳細設定">
           <div>
             <div>
               <label>
