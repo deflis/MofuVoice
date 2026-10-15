@@ -1,8 +1,8 @@
-import { useSettingsStore } from "./store";
+import { useSettingsConnection } from "./listener";
 
 export function Notifications() {
-  const error = useSettingsStore((state) => state.error || state.deviceError);
-  const notice = useSettingsStore((state) => state.notice);
+  const error = useSettingsConnection((state) => state.error || state.deviceError);
+  const notice = useSettingsConnection((state) => state.notice);
   return (
     <>
       {error && (

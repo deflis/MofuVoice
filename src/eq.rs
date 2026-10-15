@@ -1,26 +1,27 @@
-//! Three causal peaking biquads. No lookahead, buffering, or callback allocation.
+//! A configurable chain of causal peaking biquads. No lookahead, buffering, or callback allocation.
 use crate::{
     dsp::{biquad::Biquad, gain::amplitude, Sample},
     RATE,
 };
 use std::error::Error;
 
-pub const FLAGS: [&str; 6] = [
-    "--eq",
-    "--eq-mode",
-    "--eq-band1",
-    "--eq-band2",
-    "--eq-band3",
-    "--eq-output",
-];
-pub const KEYS: [&str; 6] = [
-    "eq",
-    "eq_mode",
-    "eq_band1",
-    "eq_band2",
-    "eq_band3",
-    "eq_output",
-];
+pub const FLAGS: [&str; 3] = ["--eq", "--eq-mode", "--eq-output"];
+pub const KEYS: [&str; 3] = ["eq", "eq_mode", "eq_output"];
+
+pub fn band_index(flag: &str) -> Option<usize> {
+    let number = flag.strip_prefix("--eq-band")?;
+    let index = number.parse::<usize>().ok()?.checked_sub(1)?;
+    (number == (index + 1).to_string()).then_some(index)
+}
+pub fn is_flag(flag: &str) -> bool {
+    FLAGS.contains(&flag) || band_index(flag).is_some()
+}
+pub fn is_key(key: &str) -> bool {
+    KEYS.contains(&key)
+        || key
+            .strip_prefix("eq_band")
+            .is_some_and(|number| band_index(&format!("--eq-band{number}")).is_some())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Band {
@@ -62,17 +63,17 @@ impl Band {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct EqSettings {
     pub enabled: bool,
-    pub bands: [Band; 3],
+    pub bands: Vec<Band>,
     pub output_db: f64,
 }
 impl Default for EqSettings {
     fn default() -> Self {
         Self {
             enabled: false,
-            bands: [
+            bands: vec![
                 Band {
                     frequency: 250.0,
                     gain_db: 0.0,
@@ -94,8 +95,11 @@ impl Default for EqSettings {
     }
 }
 impl EqSettings {
-    pub fn validate(self) -> Result<(), Box<dyn Error>> {
-        for band in self.bands {
+    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.bands.is_empty() {
+            return Err("EQ requires at least one band".into());
+        }
+        for band in &self.bands {
             band.validate()?;
         }
         if !self.output_db.is_finite() || !(-18.0..=0.0).contains(&self.output_db) {
@@ -103,30 +107,47 @@ impl EqSettings {
         }
         Ok(())
     }
-    pub fn arguments(self, mode: &str) -> [String; 6] {
+    pub fn flags(&self) -> Vec<String> {
+        FLAGS
+            .into_iter()
+            .map(String::from)
+            .chain((1..=self.bands.len()).map(|i| format!("--eq-band{i}")))
+            .collect()
+    }
+    pub fn keys(&self) -> Vec<String> {
+        KEYS.into_iter()
+            .map(String::from)
+            .chain((1..=self.bands.len()).map(|i| format!("eq_band{i}")))
+            .collect()
+    }
+    pub fn arguments(&self, mode: &str) -> Vec<String> {
         [
             if self.enabled { "on" } else { "off" }.into(),
             mode.into(),
-            self.bands[0].text(),
-            self.bands[1].text(),
-            self.bands[2].text(),
             self.output_db.to_string(),
         ]
+        .into_iter()
+        .chain(self.bands.iter().map(|band| band.text()))
+        .collect()
     }
     /// Reserve the sum of positive band gains; this is not a true-peak limiter.
-    pub fn headroom_db(self) -> f64 {
+    pub fn headroom_db(&self) -> f64 {
         self.bands.iter().map(|band| band.gain_db.max(0.0)).sum()
     }
-    pub fn build(self) -> Result<Equalizer, Box<dyn Error>> {
+    pub fn build(&self) -> Result<Equalizer, Box<dyn Error>> {
         self.build_with_sample_rate(RATE)
     }
-    pub fn build_with_sample_rate(self, rate: u32) -> Result<Equalizer, Box<dyn Error>> {
+    pub fn build_with_sample_rate(&self, rate: u32) -> Result<Equalizer, Box<dyn Error>> {
         crate::validate_sample_rate(rate)?;
         self.validate()?;
         Ok(Equalizer {
             active: self.enabled
                 && (self.output_db != 0.0 || self.bands.iter().any(|b| b.gain_db != 0.0)),
-            filters: self.bands.map(|band| PeakingFilter::new(band, rate)),
+            filters: self
+                .bands
+                .iter()
+                .map(|band| PeakingFilter::new(*band, rate))
+                .collect(),
             gain: amplitude(self.output_db - self.headroom_db()),
         })
     }
@@ -163,7 +184,7 @@ impl PeakingFilter {
 }
 pub struct Equalizer {
     active: bool,
-    filters: [PeakingFilter; 3],
+    filters: Vec<PeakingFilter>,
     gain: f64,
 }
 impl Equalizer {
@@ -194,6 +215,35 @@ impl Equalizer {
 mod tests {
     use super::*;
     #[test]
+    fn variable_band_counts_preserve_neutral_bits_and_validate_every_band() {
+        for count in [1, 4, 8] {
+            let mut settings = EqSettings {
+                enabled: true,
+                bands: vec![
+                    Band {
+                        frequency: 1000.0,
+                        gain_db: 0.0,
+                        q: 1.0
+                    };
+                    count
+                ],
+                output_db: 0.0,
+            };
+            let input = [f32::from_bits(0x7fc01234), -0.0, 0.4];
+            let mut output = input;
+            settings.build().unwrap().process_in_place(&mut output);
+            assert_eq!(output.map(f32::to_bits), input.map(f32::to_bits));
+            settings.bands[count - 1].q = f64::NAN;
+            assert!(settings.build().is_err());
+        }
+        assert!(EqSettings {
+            bands: Vec::new(),
+            ..Default::default()
+        }
+        .build()
+        .is_err());
+    }
+    #[test]
     fn neutral_and_disabled_preserve_bits() {
         let original = [
             f32::from_bits(0x7fc01234),
@@ -217,7 +267,7 @@ mod tests {
     }
     #[test]
     fn response_matches_band_gain_and_headroom() {
-        for index in 0..3 {
+        for index in 0..EqSettings::default().bands.len() {
             for gain in [-12.0, -3.0, 6.0, 12.0] {
                 let mut settings = EqSettings {
                     enabled: true,
@@ -270,11 +320,14 @@ mod tests {
     fn invalid_input_resets_state_and_extreme_filters_remain_finite() {
         let settings = EqSettings {
             enabled: true,
-            bands: [Band {
-                frequency: 40.0,
-                gain_db: 12.0,
-                q: 8.0,
-            }; 3],
+            bands: vec![
+                Band {
+                    frequency: 40.0,
+                    gain_db: 12.0,
+                    q: 8.0,
+                };
+                3
+            ],
             output_db: 0.0,
         };
         let mut filter = settings.build().unwrap();

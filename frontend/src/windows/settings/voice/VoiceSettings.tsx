@@ -2,7 +2,8 @@ import { useVoiceSettings } from "./hooks";
 import { SemitonesInput } from "./SemitonesInput";
 
 export function VoiceSettings() {
-  const { pitch, formantShift, preserveFormants, update } = useVoiceSettings();
+  const { pitch, formantShift, preserveFormants, setPitch, setFormantShift, setPreserveFormants } =
+    useVoiceSettings();
   return (
     <section>
       <h2>声の変換</h2>
@@ -11,7 +12,7 @@ export function VoiceSettings() {
         upperLabel="高く"
         label="声の高さ（ピッチ）"
         value={pitch}
-        onChange={(value) => update("pitch", value)}
+        onChange={(value) => setPitch(value)}
       />
       <fieldset className="settings" disabled={!preserveFormants}>
         <SemitonesInput
@@ -19,14 +20,14 @@ export function VoiceSettings() {
           lowerLabel="太く"
           upperLabel="明るく"
           value={formantShift}
-          onChange={(value) => update("formantShift", value)}
+          onChange={(value) => setFormantShift(value)}
         />
       </fieldset>
       <button
         type="button"
         onClick={() => {
-          update("pitch", "0");
-          update("formantShift", "0");
+          setPitch(0);
+          setFormantShift(0);
         }}
       >
         元の声に戻す
@@ -36,9 +37,9 @@ export function VoiceSettings() {
           type="checkbox"
           checked={preserveFormants}
           onChange={(event) => {
-            update("preserveFormants", event.target.checked);
+            setPreserveFormants(event.target.checked);
             if (!event.target.checked) {
-              update("formantShift", "0");
+              setFormantShift(0);
             }
           }}
         />

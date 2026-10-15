@@ -117,3 +117,26 @@ fn eq_arguments_validate_and_modes_preserve_parameters() {
         EqSettings::default()
     );
 }
+
+#[test]
+fn added_bands_are_processed_and_contiguous_across_blocks() {
+    let args = [
+        "--eq",
+        "on",
+        "--eq-band5",
+        "6000,2,1",
+        "--eq-band4",
+        "1200,-6,1",
+    ];
+    let options = Options::parse(args.map(String::from)).unwrap();
+    assert_eq!(options.eq.bands.len(), 5);
+    let input: Vec<f32> = (0..4096).map(|i| 0.1 * (i as f32 * 0.157).sin()).collect();
+    let expected = run(&input, &args, 512);
+    assert_ne!(expected, run(&input, &["--eq", "on"], 512));
+    for block in [1, 31, 777] {
+        assert_eq!(run(&input, &args, block), expected);
+    }
+    for flag in ["--eq-band0", "--eq-band04", "--eq-band5"] {
+        assert!(Options::parse([flag, "1000,0,1"].map(String::from)).is_err());
+    }
+}

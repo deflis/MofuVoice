@@ -1,126 +1,83 @@
 import assert from "node:assert/strict";
-import { after, beforeEach, mock, test } from "node:test";
-import { registerTypeScript } from "./testing/registerTypeScript.mjs";
-
-registerTypeScript();
-
-const invoke = mock.fn(async () => undefined);
-const listen = mock.fn(async () => () => {});
-mock.module("@tauri-apps/api/core", { exports: { invoke } });
-mock.module("@tauri-apps/api/event", { exports: { listen } });
-const { mainApi } = await import("./windows/main/api.ts");
+import { test, mock } from "node:test";
+import { handlers, calls, deferred, mainView, settings } from "./testing/storeMocks.mjs";
+const { connectWindow, connectLogs } = await import("./api.ts");
 const { settingsApi } = await import("./windows/settings/api.ts");
-const { logApi } = await import("./windows/log/api.ts");
-const storageDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
-const setItem = mock.fn();
-Object.defineProperty(globalThis, "localStorage", { configurable: true, value: { setItem } });
-after(() => {
-  if (storageDescriptor) {
-    Object.defineProperty(globalThis, "localStorage", storageDescriptor);
-  } else {
-    delete globalThis.localStorage;
-  }
+
+test("connection delivers initial state and updates through the same channel", async () => {
+  const received = mock.fn();
+  const connection = connectWindow(received, assert.fail);
+  await connection.ready;
+  assert.equal(received.mock.calls[0].arguments[0].type, "main");
+  const channel = calls("connect_window")[0].arguments[1].channel;
+  channel.onmessage({ type: "phase", phase: { phase: "running", busy: true, error: null } });
+  assert.equal(received.mock.callCount(), 2);
+  await connection.close();
+  channel.onmessage({ type: "close" });
+  assert.equal(received.mock.callCount(), 2);
+  await connection.close();
+  assert.equal(calls("disconnect_window").length, 1);
 });
-beforeEach(() => {
-  invoke.mock.resetCalls();
-  listen.mock.resetCalls();
-  setItem.mock.resetCalls();
+test("closing before registration completes suppresses delivery and releases its exact connection", async () => {
+  const pending = deferred();
+  handlers.set("connect_window", () => pending.promise);
+  const received = mock.fn();
+  const connection = connectWindow(received, assert.fail);
+  const args = calls("connect_window")[0].arguments[1];
+  const closing = connection.close();
+  args.channel.onmessage({ type: "main", view: mainView });
+  assert.equal(received.mock.callCount(), 0);
+  assert.equal(calls("disconnect_window").length, 0);
+  pending.resolve();
+  await closing;
+  assert.equal(calls("disconnect_window")[0].arguments[1].connectionId, args.connectionId);
+});
+test("failed registration is visible and does not attempt to disconnect a missing subscription", async () => {
+  handlers.set("connect_window", async () => {
+    throw new Error("registration failed");
+  });
+  const errors = mock.fn();
+  const connection = connectWindow(assert.fail, errors);
+  await assert.rejects(connection.ready, /registration failed/);
+  await connection.close();
+  assert.equal(errors.mock.callCount(), 1);
+  assert.equal(calls("disconnect_window").length, 0);
 });
 
-test("main API preserves commands and sends no draft settings on start or close", async () => {
-  await mainApi.getView();
-  await mainApi.start(false);
-  await mainApi.start(true);
-  await mainApi.stop();
-  await mainApi.spectrum();
-  await mainApi.openSettings("voice");
-  await mainApi.openLog();
-  await mainApi.close();
-  assert.deepEqual(
-    invoke.mock.calls.map((call) => call.arguments),
-    [
-      ["main_view"],
-      ["start_audio", { inspect: false }],
-      ["start_audio", { inspect: true }],
-      ["stop_audio"],
-      ["open_spectrum"],
-      ["open_settings"],
-      ["open_log"],
-      ["close_application"],
-    ],
-  );
-  assert.equal(setItem.mock.calls[0].arguments[0], "voice-changer.settings-navigation");
-  const navigation = JSON.parse(setItem.mock.calls[0].arguments[1]);
-  assert.equal(navigation.section, "voice");
-  assert.equal(typeof navigation.request, "string");
+test("a failed disconnect can be retried while message delivery remains stopped", async () => {
+  const received = mock.fn();
+  const connection = connectWindow(received, assert.fail);
+  await connection.ready;
+  const channel = calls("connect_window")[0].arguments[1].channel;
+  handlers.set("disconnect_window", async () => {
+    throw new Error("disconnect failed");
+  });
+  await assert.rejects(connection.close(), /disconnect failed/);
+  channel.onmessage({ type: "close" });
+  assert.equal(received.mock.callCount(), 1);
+  handlers.delete("disconnect_window");
+  await connection.close();
+  assert.equal(calls("disconnect_window").length, 2);
 });
-
-test("settings API preserves settings, backend, and close delegation payloads", async () => {
-  const settings = { pitch: "3" };
+test("log subscription has its own channel carrying only log payloads", async () => {
+  const received = mock.fn();
+  const connection = connectLogs(received, assert.fail);
+  await connection.ready;
+  assert.deepEqual(received.mock.calls[0].arguments[0], { elapsedSeconds: 0, telemetry: null });
+  assert.equal(calls("connect_window").length, 0);
+  assert.equal(calls("set_logging").length, 0);
+  await connection.close();
+  assert.equal(calls("disconnect_logs").length, 1);
+});
+test("settings snapshot, saving and backend discovery retain their command payloads", async () => {
   await settingsApi.getView();
   await settingsApi.save(settings);
   await settingsApi.deviceChoices("cpal");
-  await settingsApi.deviceSampleRates({
+  await settingsApi.deviceSampleRates({ backend: "cpal", device: "Mic", outputDevice: "Speakers" });
+  assert.deepEqual(calls("save_settings")[0].arguments[1], { settings });
+  assert.deepEqual(calls("device_sample_rates")[0].arguments[1], {
     backend: "cpal",
     device: "Mic",
-    outputDevice: "Headphones",
+    outputDevice: "Speakers",
   });
-  await settingsApi.hide();
-  await settingsApi.acknowledgeClose(7);
-  await settingsApi.fallbackClose(7);
-  await settingsApi.closeApplication();
-  assert.deepEqual(
-    invoke.mock.calls.map((call) => call.arguments),
-    [
-      ["settings_view"],
-      ["save_settings", { settings }],
-      ["device_choices", { backend: "cpal" }],
-      ["device_sample_rates", { backend: "cpal", device: "Mic", outputDevice: "Headphones" }],
-      ["close_settings"],
-      ["acknowledge_application_close", { requestId: 7 }],
-      ["fallback_application_close", { requestId: 7 }],
-      ["close_application"],
-    ],
-  );
-});
-
-test("log API preserves logging enable and disable payloads", async () => {
-  await logApi.getView();
-  await logApi.setLogging(true);
-  await logApi.setLogging(false);
-  await logApi.hide();
-  assert.deepEqual(
-    invoke.mock.calls.map((call) => call.arguments),
-    [
-      ["log_view"],
-      ["set_logging", { logging: true }],
-      ["set_logging", { logging: false }],
-      ["close_log"],
-    ],
-  );
-});
-
-test("API subscriptions expose payloads and return the original cleanup", async () => {
-  const subscriptions = [
-    [mainApi.onPhase, "audio-phase"],
-    [mainApi.onView, "main-view"],
-    [mainApi.onClose, "request-close"],
-    [settingsApi.onPhase, "audio-phase"],
-    [settingsApi.onClose, "request-close"],
-    [settingsApi.onApplicationClose, "request-application-close"],
-    [logApi.onInfo, "log-info"],
-    [logApi.onLog, "audio-log"],
-    [logApi.onClose, "request-close"],
-  ];
-  for (const [subscribe, event] of subscriptions) {
-    const remove = mock.fn();
-    listen.mock.mockImplementationOnce(async () => remove);
-    const receive = mock.fn();
-    assert.equal(await subscribe(receive), remove);
-    const call = listen.mock.calls.at(-1);
-    assert.equal(call.arguments[0], event);
-    const payload = { value: 7 };
-    call.arguments[1]({ payload });
-    assert.equal(receive.mock.calls[0].arguments[0], payload);
-  }
 });

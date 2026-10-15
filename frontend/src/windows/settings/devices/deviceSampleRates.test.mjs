@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { mock, test } from "node:test";
-import { registerTypeScript } from "../../testing/registerTypeScript.mjs";
+import { registerTypeScript } from "../../../testing/registerTypeScript.mjs";
 registerTypeScript();
 const { queryDeviceSampleRates } = await import("./deviceSampleRates.ts");
 

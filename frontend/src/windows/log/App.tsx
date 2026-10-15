@@ -1,11 +1,7 @@
-import { useEffect } from "react";
-import { useLogStore } from "./store";
 import { Notifications } from "./Notifications";
 import { StatusDetails } from "./StatusDetails";
 
 export function LogApp() {
-  useEffect(() => useLogStore.getState().mount(), []);
-
   return (
     <main>
       <Notifications />

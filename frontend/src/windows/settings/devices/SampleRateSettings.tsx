@@ -1,5 +1,6 @@
 import type { RateResult } from "./deviceSampleRates";
-import { useSampleRateSettings, useSettingsLocked } from "./hooks";
+import { useSampleRateSettings } from "./hooks";
+import { useSettingsLocked } from "../hooks";
 import { useDeviceSampleRates } from "./useDeviceSampleRates";
 
 function ratesText(rates: number[]) {
@@ -14,7 +15,7 @@ function SupportedRates({
 }: {
   result: RateResult | undefined;
   backend: string;
-  sampleRate: string;
+  sampleRate: number;
   locked: boolean;
   device: string;
 }) {
@@ -31,9 +32,9 @@ function SupportedRates({
           {backend === "asio" ? "デバイスの対応レート" : "入出力で共通して使えるレート"}：
           {ratesText(result.rates.common)}
         </p>
-        {!result.rates.common.includes(Number(sampleRate)) && (
+        {!result.rates.common.includes(sampleRate) && (
           <p role="alert">
-            選択中の {Number(sampleRate).toLocaleString()} Hz
+            選択中の {sampleRate.toLocaleString()} Hz
             は対応していません。対応レートを選び直してください。
           </p>
         )}
@@ -58,14 +59,15 @@ function SupportedRates({
 }
 
 export function SampleRateSettings() {
-  const { device, outputDevice, resolvedBackend, sampleRate, update } = useSampleRateSettings();
+  const { device, outputDevice, resolvedBackend, sampleRate, setSampleRate } =
+    useSampleRateSettings();
   const locked = useSettingsLocked();
   const result = useDeviceSampleRates({ backend: resolvedBackend, device, outputDevice }, locked);
   return (
     <>
       <label>
         サンプリングレート
-        <select value={sampleRate} onChange={(event) => update("sampleRate", event.target.value)}>
+        <select value={sampleRate} onChange={(event) => setSampleRate(Number(event.target.value))}>
           {[44100, 48000].map((rate) => (
             <option key={rate} value={String(rate)}>
               {rate.toLocaleString()} Hz

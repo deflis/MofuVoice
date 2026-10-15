@@ -4,95 +4,100 @@ use crate::native_spectrum;
 use crate::{backend, cli::Options, gate::GateThreshold, gui_settings, session::Session};
 use serde::{Deserialize, Serialize};
 use std::{error::Error, path::PathBuf, sync::Mutex};
-use tauri::{Emitter, Manager, State};
+use tauri::{ipc::Channel, Manager, State};
+
+mod streams;
+use streams::WindowStreams;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct LevelControls {
     enabled: bool,
-    target_db: String,
-    max_gain_db: String,
-    floor_db: String,
-    response_ms: String,
-    threshold_db: String,
-    ratio: String,
-    attack_ms: String,
-    release_ms: String,
+    target_db: f64,
+    max_gain_db: f64,
+    floor_db: f64,
+    response_ms: f64,
+    threshold_db: f64,
+    ratio: f64,
+    attack_ms: f64,
+    release_ms: f64,
 }
 impl LevelControls {
     fn from_settings(settings: crate::level::LevelSettings) -> Self {
         Self {
             enabled: settings.enabled,
-            target_db: settings.target_db.to_string(),
-            max_gain_db: settings.max_gain_db.to_string(),
-            floor_db: settings.floor_db.to_string(),
-            response_ms: settings.response_ms.to_string(),
-            threshold_db: settings.threshold_db.to_string(),
-            ratio: settings.ratio.to_string(),
-            attack_ms: settings.attack_ms.to_string(),
-            release_ms: settings.release_ms.to_string(),
+            target_db: settings.target_db,
+            max_gain_db: settings.max_gain_db,
+            floor_db: settings.floor_db,
+            response_ms: settings.response_ms,
+            threshold_db: settings.threshold_db,
+            ratio: settings.ratio,
+            attack_ms: settings.attack_ms,
+            release_ms: settings.release_ms,
         }
     }
-    fn values(&self) -> [&str; 8] {
-        [
-            &self.target_db,
-            &self.max_gain_db,
-            &self.floor_db,
-            &self.response_ms,
-            &self.threshold_db,
-            &self.ratio,
-            &self.attack_ms,
-            &self.release_ms,
-        ]
+    fn settings(&self) -> crate::level::LevelSettings {
+        crate::level::LevelSettings {
+            enabled: self.enabled,
+            target_db: self.target_db,
+            max_gain_db: self.max_gain_db,
+            floor_db: self.floor_db,
+            response_ms: self.response_ms,
+            threshold_db: self.threshold_db,
+            ratio: self.ratio,
+            attack_ms: self.attack_ms,
+            release_ms: self.release_ms,
+        }
     }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct EqBandControls {
-    frequency: String,
-    gain_db: String,
-    q: String,
+    frequency: f64,
+    gain_db: f64,
+    q: f64,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct EqControls {
     enabled: bool,
     mode: String,
-    bands: [EqBandControls; 3],
-    output_db: String,
+    bands: Vec<EqBandControls>,
+    output_db: f64,
 }
 impl EqControls {
     fn from_options(options: &Options) -> Self {
         Self {
             enabled: options.eq.enabled,
             mode: options.eq_mode.clone(),
-            bands: options.eq.bands.map(|band| EqBandControls {
-                frequency: band.frequency.to_string(),
-                gain_db: band.gain_db.to_string(),
-                q: band.q.to_string(),
-            }),
-            output_db: options.eq.output_db.to_string(),
+            bands: options
+                .eq
+                .bands
+                .iter()
+                .map(|band| EqBandControls {
+                    frequency: band.frequency,
+                    gain_db: band.gain_db,
+                    q: band.q,
+                })
+                .collect(),
+            output_db: options.eq.output_db,
         }
     }
-    fn arguments(&self) -> [String; 6] {
-        [
-            if self.enabled { "on" } else { "off" }.into(),
-            self.mode.clone(),
-            format!(
-                "{},{},{}",
-                self.bands[0].frequency, self.bands[0].gain_db, self.bands[0].q
-            ),
-            format!(
-                "{},{},{}",
-                self.bands[1].frequency, self.bands[1].gain_db, self.bands[1].q
-            ),
-            format!(
-                "{},{},{}",
-                self.bands[2].frequency, self.bands[2].gain_db, self.bands[2].q
-            ),
-            self.output_db.clone(),
-        ]
+    fn settings(&self) -> crate::eq::EqSettings {
+        crate::eq::EqSettings {
+            enabled: self.enabled,
+            bands: self
+                .bands
+                .iter()
+                .map(|band| crate::eq::Band {
+                    frequency: band.frequency,
+                    gain_db: band.gain_db,
+                    q: band.q,
+                })
+                .collect(),
+            output_db: self.output_db,
+        }
     }
 }
 
@@ -106,236 +111,167 @@ enum GateThresholdMode {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct DeEsserControls {
-    frequency_hz: String,
-    threshold_db: String,
-    range_db: String,
-    attack_ms: String,
-    release_ms: String,
+    enabled: bool,
+    mode: String,
+    frequency_hz: f64,
+    threshold_db: f64,
+    range_db: f64,
+    attack_ms: f64,
+    release_ms: f64,
 }
 impl DeEsserControls {
-    fn from_parameters(p: crate::deesser::DeEsserParameters) -> Self {
+    fn from_options(options: &Options) -> Self {
+        let p = options.deesser_parameters;
         Self {
-            frequency_hz: p.frequency_hz.to_string(),
-            threshold_db: p.threshold_db.to_string(),
-            range_db: p.range_db.to_string(),
-            attack_ms: p.attack_ms.to_string(),
-            release_ms: p.release_ms.to_string(),
+            enabled: options.deesser,
+            mode: if options.deesser_pro { "pro" } else { "simple" }.into(),
+            frequency_hz: p.frequency_hz,
+            threshold_db: p.threshold_db,
+            range_db: p.range_db,
+            attack_ms: p.attack_ms,
+            release_ms: p.release_ms,
         }
     }
-    fn values(&self) -> [&str; 5] {
-        [
-            &self.frequency_hz,
-            &self.threshold_db,
-            &self.range_db,
-            &self.attack_ms,
-            &self.release_ms,
-        ]
+    fn parameters(&self) -> crate::deesser::DeEsserParameters {
+        crate::deesser::DeEsserParameters {
+            frequency_hz: self.frequency_hz,
+            threshold_db: self.threshold_db,
+            range_db: self.range_db,
+            attack_ms: self.attack_ms,
+            release_ms: self.release_ms,
+        }
     }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Settings {
+    devices: DeviceSettings,
+    voice: VoiceSettings,
+    noise: NoiseSettings,
+    deesser: DeEsserControls,
     eq: EqControls,
     level: LevelControls,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DeviceSettings {
+    backend: String,
     device: String,
     output_device: String,
     input_channel: usize,
     output_channels: Vec<usize>,
-    backend: String,
-    frames: String,
-    sample_rate: String,
-    pitch: String,
-    formant_shift: String,
+    frames: u32,
+    sample_rate: u32,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VoiceSettings {
+    pitch: f64,
+    formant_shift: f64,
     preserve_formants: bool,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct NoiseSettings {
     rumble_filter: bool,
-    deesser: bool,
-    deesser_mode: String,
-    deesser_parameters: DeEsserControls,
-    gate: bool,
-    gate_threshold_mode: GateThresholdMode,
-    gate_threshold_db: String,
-    gate_attack_ms: String,
-    gate_release_ms: String,
+    enabled: bool,
+    threshold_mode: GateThresholdMode,
+    threshold_db: f64,
+    attack_ms: f64,
+    release_ms: f64,
 }
 impl Settings {
     fn from_options(options: &Options) -> Self {
         Self {
+            devices: DeviceSettings {
+                backend: options.backend.name().into(),
+                device: options.device.clone(),
+                output_device: options.output_device.clone(),
+                input_channel: options.input_channel,
+                output_channels: options.output_channels.clone(),
+                frames: options.frames,
+                sample_rate: options.sample_rate,
+            },
+            voice: VoiceSettings {
+                pitch: options.pitch.semitones,
+                formant_shift: options.pitch.formant_shift,
+                preserve_formants: options.pitch.preserve_formants,
+            },
+            noise: NoiseSettings {
+                rumble_filter: options.rumble_filter,
+                enabled: options.gate,
+                threshold_mode: match options.gate_threshold {
+                    GateThreshold::Auto => GateThresholdMode::Auto,
+                    GateThreshold::Db(_) => GateThresholdMode::Manual,
+                },
+                threshold_db: match options.gate_threshold {
+                    GateThreshold::Auto => -50.0,
+                    GateThreshold::Db(db) => db,
+                },
+                attack_ms: options.gate_attack_ms,
+                release_ms: options.gate_release_ms,
+            },
+            deesser: DeEsserControls::from_options(options),
             eq: EqControls::from_options(options),
             level: LevelControls::from_settings(options.level),
-            device: options.device.clone(),
-            output_device: options.output_device.clone(),
-            input_channel: options.input_channel,
-            output_channels: options.output_channels.clone(),
-            backend: options.backend.name().into(),
-            frames: options.frames.to_string(),
-            sample_rate: options.sample_rate.to_string(),
-            pitch: options.pitch.semitones.to_string(),
-            formant_shift: options.pitch.formant_shift.to_string(),
-            preserve_formants: options.pitch.preserve_formants,
-            rumble_filter: options.rumble_filter,
-            deesser: options.deesser,
-            deesser_mode: if options.deesser_pro { "pro" } else { "simple" }.into(),
-            deesser_parameters: DeEsserControls::from_parameters(options.deesser_parameters),
-            gate: options.gate,
-            gate_threshold_mode: match options.gate_threshold {
-                GateThreshold::Auto => GateThresholdMode::Auto,
-                GateThreshold::Db(_) => GateThresholdMode::Manual,
-            },
-            gate_threshold_db: match options.gate_threshold {
-                GateThreshold::Auto => "-50".into(),
-                GateThreshold::Db(db) => db.to_string(),
-            },
-            gate_attack_ms: options.gate_attack_ms.to_string(),
-            gate_release_ms: options.gate_release_ms.to_string(),
         }
     }
     fn options(&self) -> Result<Options, String> {
-        let threshold = match self.gate_threshold_mode {
-            GateThresholdMode::Auto => GateThreshold::Auto,
-            GateThresholdMode::Manual => {
-                let db = self
-                    .gate_threshold_db
-                    .parse::<f64>()
-                    .map_err(|_| "ゲートの手動値には−90〜0 dBFSの数値を指定してください。")?;
-                if !db.is_finite() || !(-90.0..=0.0).contains(&db) {
-                    return Err("ゲートの手動値には−90〜0 dBFSの数値を指定してください。".into());
-                }
-                GateThreshold::Db(db)
-            }
-        };
-        let mut args = vec![
-            "--input-channel".into(),
-            self.input_channel.to_string(),
-            "--output-channels".into(),
-            self.output_channels
-                .iter()
-                .map(usize::to_string)
-                .collect::<Vec<_>>()
-                .join(","),
-            "--backend".into(),
-            self.backend.clone(),
-            "--sample-rate".into(),
-            self.sample_rate.clone(),
-            "--frames".into(),
-            self.frames.clone(),
-            "--pitch".into(),
-            self.pitch.clone(),
-            "--formant-shift".into(),
-            self.formant_shift.clone(),
-            "--formant".into(),
-            if self.preserve_formants {
-                "preserve"
-            } else {
-                "off"
-            }
-            .into(),
-            "--deesser".into(),
-            if self.deesser { "on" } else { "off" }.into(),
-            "--deesser-mode".into(),
-            self.deesser_mode.clone(),
-            "--rumble-filter".into(),
-            if self.rumble_filter { "on" } else { "off" }.into(),
-            "--gate".into(),
-            if self.gate { "on" } else { "off" }.into(),
-            "--gate-threshold".into(),
-            match threshold {
-                GateThreshold::Auto => "auto".into(),
-                GateThreshold::Db(db) => db.to_string(),
+        let mut options = Options {
+            eq: self.eq.settings(),
+            eq_mode: self.eq.mode.clone(),
+            level: self.level.settings(),
+            device: self.devices.device.clone(),
+            output_device: self.devices.output_device.clone(),
+            input_channel: self.devices.input_channel,
+            output_channels: self.devices.output_channels.clone(),
+            backend: backend::BackendKind::parse(&self.devices.backend)
+                .map_err(|error| error.to_string())?,
+            frames: self.devices.frames,
+            sample_rate: self.devices.sample_rate,
+            pitch: crate::pitch::PitchSettings {
+                semitones: self.voice.pitch,
+                formant_shift: self.voice.formant_shift,
+                preserve_formants: self.voice.preserve_formants,
             },
-            "--gate-attack".into(),
-            self.gate_attack_ms.clone(),
-            "--gate-release".into(),
-            self.gate_release_ms.clone(),
-        ];
-        args.extend([
-            "--auto-level".into(),
-            if self.level.enabled { "on" } else { "off" }.into(),
-        ]);
-        for (flag, value) in crate::deesser::FLAGS
-            .iter()
-            .zip(self.deesser_parameters.values())
-        {
-            args.extend([(*flag).into(), value.into()]);
-        }
-        for (flag, value) in crate::level::FLAGS.iter().zip(self.level.values()) {
-            args.extend([(*flag).into(), value.into()]);
-        }
-        for (flag, value) in crate::eq::FLAGS.iter().zip(self.eq.arguments()) {
-            args.extend([(*flag).into(), value]);
-        }
-        if !self.device.is_empty() {
-            args.extend(["--device".into(), self.device.clone()]);
-        }
-        if !self.output_device.is_empty() {
-            args.extend(["--output-device".into(), self.output_device.clone()]);
-        }
-        if self.device.contains(['\r', '\n', '\0'])
-            || self.output_device.contains(['\r', '\n', '\0'])
-        {
-            return Err("Invalid device name".into());
-        }
-        Options::parse_gui(args).map_err(|error| error.to_string())
+            rumble_filter: self.noise.rumble_filter,
+            deesser: self.deesser.enabled,
+            deesser_pro: match self.deesser.mode.as_str() {
+                "simple" => false,
+                "pro" => true,
+                _ => return Err("De-esser mode requires simple or pro".into()),
+            },
+            deesser_parameters: self.deesser.parameters(),
+            gate: self.noise.enabled,
+            gate_threshold: match self.noise.threshold_mode {
+                GateThresholdMode::Auto => GateThreshold::Auto,
+                GateThresholdMode::Manual => GateThreshold::Db(self.noise.threshold_db),
+            },
+            gate_attack_ms: self.noise.attack_ms,
+            gate_release_ms: self.noise.release_ms,
+            ..Options::default()
+        };
+        options.validate().map_err(|error| error.to_string())?;
+        options.output_channels.sort_unstable();
+        Ok(options)
     }
 }
+
 #[derive(Default)]
 struct CloseRequests {
-    next_id: u32,
-    pending: Option<CloseRequest>,
-}
-struct CloseRequest {
-    id: u32,
-    deadline: std::time::Instant,
-    acknowledged: bool,
+    pending: bool,
 }
 impl CloseRequests {
-    fn request(&mut self) -> Option<u32> {
-        if self
-            .pending
-            .as_ref()
-            .is_some_and(|request| !request.acknowledged)
-        {
-            return None;
+    fn request(&mut self) -> bool {
+        if self.pending {
+            return false;
         }
-        self.next_id = self.next_id.wrapping_add(1);
-        self.pending = Some(CloseRequest {
-            id: self.next_id,
-            deadline: std::time::Instant::now() + std::time::Duration::from_secs(1),
-            acknowledged: false,
-        });
-        Some(self.next_id)
+        self.pending = true;
+        true
     }
-    fn acknowledge(&mut self, id: u32) -> bool {
-        if let Some(request) = self.pending.as_mut().filter(|request| request.id == id) {
-            request.acknowledged = true;
-            true
-        } else {
-            false
-        }
-    }
-    fn cancel(&mut self, id: u32) -> bool {
-        if self
-            .pending
-            .as_ref()
-            .is_some_and(|request| request.id == id)
-        {
-            self.pending = None;
-            true
-        } else {
-            false
-        }
-    }
-    fn fallback_due(&mut self, now: std::time::Instant) -> bool {
-        if self
-            .pending
-            .as_ref()
-            .is_some_and(|request| !request.acknowledged && now >= request.deadline)
-        {
-            self.pending = None;
-            true
-        } else {
-            false
-        }
+    fn cancel(&mut self) {
+        self.pending = false;
     }
 }
 struct Desktop {
@@ -344,6 +280,8 @@ struct Desktop {
     path: PathBuf,
     closing: bool,
     close_requests: CloseRequests,
+    streams: WindowStreams<WindowMessage>,
+    logs: WindowStreams<Option<crate::session::AudioLog>>,
 }
 type DesktopState = Mutex<Desktop>;
 #[derive(Clone, Serialize)]
@@ -378,7 +316,6 @@ struct SettingsView {
     #[serde(flatten)]
     choices: DeviceChoices,
     backends: Vec<String>,
-    audio_busy: bool,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -425,26 +362,27 @@ fn available_backends() -> Vec<String> {
 }
 fn build_main_view(desktop: &mut Desktop) -> Result<MainView, String> {
     let settings = &desktop.settings;
-    let kind = backend::BackendKind::parse(&settings.backend).map_err(|error| error.to_string())?;
+    let kind = backend::BackendKind::parse(&settings.devices.backend)
+        .map_err(|error| error.to_string())?;
     let device_choices = choices(kind);
     let resolved = device_choices.resolved_backend.as_str();
-    let input_configured = resolved != "asio" || !settings.device.is_empty();
+    let input_configured = resolved != "asio" || !settings.devices.device.is_empty();
     let output_configured = if resolved == "asio" {
         input_configured
     } else {
         true
     };
-    let remembered_device_missing = (!settings.device.is_empty()
+    let remembered_device_missing = (!settings.devices.device.is_empty()
         && !device_choices
             .devices
             .iter()
-            .any(|device| device == &settings.device))
+            .any(|device| device == &settings.devices.device))
         || (resolved == "cpal"
-            && !settings.output_device.is_empty()
+            && !settings.devices.output_device.is_empty()
             && !device_choices
                 .output_devices
                 .iter()
-                .any(|device| device == &settings.output_device));
+                .any(|device| device == &settings.devices.output_device));
     let busy = desktop.session.poll();
     let info = desktop.session.info();
     Ok(MainView {
@@ -465,32 +403,113 @@ fn build_main_view(desktop: &mut Desktop) -> Result<MainView, String> {
     })
 }
 fn build_settings_view(desktop: &mut Desktop) -> Result<SettingsView, String> {
-    let kind = backend::BackendKind::parse(&desktop.settings.backend)
+    let kind = backend::BackendKind::parse(&desktop.settings.devices.backend)
         .map_err(|error| error.to_string())?;
     Ok(SettingsView {
         level_defaults: LevelControls::from_settings(crate::level::LevelSettings::default()),
         settings: desktop.settings.clone(),
         choices: choices(kind),
         backends: available_backends(),
-        audio_busy: desktop.session.poll(),
     })
 }
-#[tauri::command]
-fn main_view(state: State<'_, DesktopState>) -> Result<MainView, String> {
-    let mut desktop = state.lock().map_err(|error| error.to_string())?;
-    build_main_view(&mut desktop)
+#[derive(Serialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+enum WindowMessage {
+    Main { view: MainView },
+    Info { info: crate::session::AudioInfo },
+    Phase { phase: AudioPhase },
+    Close,
+    ApplicationClose,
+    Error { error: String },
 }
+
 #[tauri::command]
-fn settings_view(state: State<'_, DesktopState>) -> Result<SettingsView, String> {
+fn connect_window(
+    connection_id: String,
+    channel: Channel<WindowMessage>,
+    window: tauri::WebviewWindow,
+    state: State<'_, DesktopState>,
+) -> Result<(), String> {
     let mut desktop = state.lock().map_err(|error| error.to_string())?;
-    build_settings_view(&mut desktop)
+    let label = window.label();
+    if desktop.closing {
+        return Err("Application is closing".into());
+    }
+    // Registration and the first message share the same lock as every update.
+    // No update can overtake the initial state or fall into a snapshot/listen gap.
+    let initial = match label {
+        "main" => WindowMessage::Main {
+            view: build_main_view(&mut desktop)?,
+        },
+        "settings" => {
+            let busy = desktop.session.poll();
+            let info = desktop.session.info();
+            WindowMessage::Phase {
+                phase: AudioPhase {
+                    phase: info.phase.to_string(),
+                    error: info.error,
+                    busy,
+                },
+            }
+        }
+        "log" => {
+            // A new page starts with log display off, including after reload.
+            desktop.logs.remove("log");
+            desktop.session.set_logging(false);
+            desktop.session.poll();
+            WindowMessage::Info {
+                info: desktop.session.info(),
+            }
+        }
+        _ => return Err("Unknown window".into()),
+    };
+    desktop
+        .streams
+        .connect(label, connection_id, channel, initial)?;
+    if label == "settings" && desktop.close_requests.pending {
+        desktop
+            .streams
+            .send("settings", WindowMessage::ApplicationClose)?;
+    }
+    Ok(())
 }
+
 #[tauri::command]
-fn log_view(state: State<'_, DesktopState>) -> Result<crate::session::AudioInfo, String> {
+fn disconnect_window(
+    connection_id: String,
+    window: tauri::WebviewWindow,
+    state: State<'_, DesktopState>,
+) -> Result<(), String> {
     let mut desktop = state.lock().map_err(|error| error.to_string())?;
-    let _ = desktop.session.poll();
-    Ok(desktop.session.info())
+    if desktop.streams.disconnect(window.label(), &connection_id)
+        && window.label() == "settings"
+        && desktop.close_requests.pending
+    {
+        desktop.close_requests.cancel();
+        desktop.streams.send(
+            "main",
+            WindowMessage::Error {
+                error: "設定画面との接続が切れたため、終了を中止しました。".into(),
+            },
+        )?;
+    }
+    Ok(())
 }
+
+#[tauri::command]
+fn cancel_application_close(state: State<'_, DesktopState>) -> Result<(), String> {
+    state
+        .lock()
+        .map_err(|error| error.to_string())?
+        .close_requests
+        .cancel();
+    Ok(())
+}
+
 #[tauri::command]
 async fn device_choices(backend: String) -> Result<DeviceChoices, String> {
     let kind = crate::backend::BackendKind::parse(&backend).map_err(|error| error.to_string())?;
@@ -530,13 +549,47 @@ async fn device_sample_rates(
     .map_err(|error| error.to_string())?
 }
 #[tauri::command]
-fn set_logging(
-    logging: bool,
+fn settings_view(state: State<'_, DesktopState>) -> Result<SettingsView, String> {
+    let mut desktop = state.lock().map_err(|error| error.to_string())?;
+    build_settings_view(&mut desktop)
+}
+
+#[tauri::command]
+fn connect_logs(
+    connection_id: String,
+    channel: Channel<Option<crate::session::AudioLog>>,
+    window: tauri::WebviewWindow,
     state: State<'_, DesktopState>,
-) -> Result<Option<crate::session::AudioLog>, String> {
-    let desktop = state.lock().map_err(|error| error.to_string())?;
-    desktop.session.set_logging(logging);
-    Ok(desktop.session.log_info())
+) -> Result<(), String> {
+    if window.label() != "log" {
+        return Err("Only the log window can subscribe to logs".into());
+    }
+    let mut desktop = state.lock().map_err(|error| error.to_string())?;
+    if desktop.closing {
+        return Err("Application is closing".into());
+    }
+    desktop.session.set_logging(true);
+    let initial = desktop.session.log_info();
+    if let Err(error) = desktop.logs.connect("log", connection_id, channel, initial) {
+        if !desktop.logs.contains("log") {
+            desktop.session.set_logging(false);
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn disconnect_logs(
+    connection_id: String,
+    window: tauri::WebviewWindow,
+    state: State<'_, DesktopState>,
+) -> Result<(), String> {
+    let mut desktop = state.lock().map_err(|error| error.to_string())?;
+    if desktop.logs.disconnect(window.label(), &connection_id) {
+        desktop.session.set_logging(false);
+    }
+    Ok(())
 }
 #[tauri::command]
 fn start_audio(inspect: bool, state: State<'_, DesktopState>) -> Result<(), String> {
@@ -645,39 +698,6 @@ async fn open_log(app: tauri::AppHandle) -> Result<(), String> {
     .await
 }
 #[tauri::command]
-fn acknowledge_application_close(
-    request_id: u32,
-    window: tauri::WebviewWindow,
-    state: State<'_, DesktopState>,
-) -> Result<bool, String> {
-    if window.label() != "settings" {
-        return Err("Only the settings window can acknowledge shutdown".into());
-    }
-    let mut desktop = state.lock().map_err(|error| error.to_string())?;
-    Ok(desktop.close_requests.acknowledge(request_id))
-}
-#[tauri::command]
-fn fallback_application_close(
-    request_id: u32,
-    window: tauri::WebviewWindow,
-    app: tauri::AppHandle,
-    state: State<'_, DesktopState>,
-) -> Result<(), String> {
-    if window.label() != "settings" {
-        return Err("Only the settings window can return shutdown to main".into());
-    }
-    let cancelled = state
-        .lock()
-        .map_err(|error| error.to_string())?
-        .close_requests
-        .cancel(request_id);
-    if cancelled {
-        app.emit_to("main", "request-close", ())
-            .map_err(|error| error.to_string())?;
-    }
-    Ok(())
-}
-#[tauri::command]
 fn close_settings(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("settings") {
         window.hide().map_err(|error| error.to_string())?;
@@ -692,11 +712,7 @@ fn close_log(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 #[tauri::command]
-fn save_settings(
-    app: tauri::AppHandle,
-    settings: Settings,
-    state: State<'_, DesktopState>,
-) -> Result<(), String> {
+fn save_settings(settings: Settings, state: State<'_, DesktopState>) -> Result<(), String> {
     let options = settings.options()?;
     let mut desktop = state.lock().map_err(|error| error.to_string())?;
     if desktop.closing {
@@ -705,12 +721,7 @@ fn save_settings(
     gui_settings::save(&desktop.path, &options).map_err(|error| error.to_string())?;
     desktop.settings = settings;
     let view = build_main_view(&mut desktop)?;
-    drop(desktop);
-    if let Some(main) = app.get_webview_window("main") {
-        app.emit_to(main.label(), "main-view", &view)
-            .map_err(|error| error.to_string())?;
-    }
-    Ok(())
+    desktop.streams.send("main", WindowMessage::Main { view })
 }
 #[tauri::command]
 #[cfg(windows)]
@@ -779,14 +790,18 @@ pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
             path: gui_settings::path()?,
             closing: false,
             close_requests: CloseRequests::default(),
+            streams: WindowStreams::default(),
+            logs: WindowStreams::default(),
         }))
         .invoke_handler(tauri::generate_handler![
-            main_view,
-            settings_view,
-            log_view,
+            connect_window,
+            disconnect_window,
+            cancel_application_close,
             device_choices,
             device_sample_rates,
-            set_logging,
+            settings_view,
+            connect_logs,
+            disconnect_logs,
             start_audio,
             stop_audio,
             save_settings,
@@ -794,8 +809,6 @@ pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
             close_settings,
             open_log,
             close_log,
-            acknowledge_application_close,
-            fallback_application_close,
             open_spectrum,
             close_application
         ])
@@ -808,7 +821,7 @@ pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
                     let mut previous_info = None;
                     let mut previous_log = None;
                     loop {
-                        let (phase, info, log, fallback_close) = {
+                        {
                             let state = handle.state::<DesktopState>();
                             let Ok(mut desktop) = state.lock() else {
                                 break;
@@ -818,45 +831,41 @@ pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
                             }
                             let busy = desktop.session.poll();
                             let info = desktop.session.info();
-                            (
-                                AudioPhase {
-                                    phase: info.phase.to_string(),
-                                    error: info.error.clone(),
-                                    busy,
-                                },
-                                info,
-                                desktop.session.log_info(),
-                                desktop
-                                    .close_requests
-                                    .fallback_due(std::time::Instant::now()),
-                            )
-                        };
-                        if fallback_close {
-                            if let Err(error) = handle.emit_to("main", "request-close", ()) {
-                                eprintln!("Cannot return shutdown to main: {error}");
-                            }
-                        }
-                        if previous_phase.as_ref() != Some(&phase) {
-                            if let Err(error) = handle.emit("audio-phase", &phase) {
-                                eprintln!("Cannot emit audio phase: {error}");
-                            }
-                            previous_phase = Some(phase);
-                        }
-                        if previous_info.as_ref() != Some(&info) {
-                            if let Err(error) = handle.emit("log-info", &info) {
-                                eprintln!("Cannot emit log info: {error}");
-                            }
-                            previous_info = Some(info);
-                        }
-                        if let Some(log) = log {
-                            if previous_log.as_ref() != Some(&log) {
-                                if let Err(error) = handle.emit("audio-log", &log) {
-                                    eprintln!("Cannot emit audio log: {error}");
+                            let phase = AudioPhase {
+                                phase: info.phase.to_string(),
+                                error: info.error.clone(),
+                                busy,
+                            };
+                            if previous_phase.as_ref() != Some(&phase) {
+                                for label in ["main", "settings"] {
+                                    if let Err(error) = desktop.streams.send(
+                                        label,
+                                        WindowMessage::Phase {
+                                            phase: phase.clone(),
+                                        },
+                                    ) {
+                                        eprintln!("Cannot send audio phase: {error}");
+                                    }
                                 }
-                                previous_log = Some(log);
+                                previous_phase = Some(phase);
                             }
-                        } else {
-                            previous_log = None;
+                            if previous_info.as_ref() != Some(&info) {
+                                if let Err(error) = desktop
+                                    .streams
+                                    .send("log", WindowMessage::Info { info: info.clone() })
+                                {
+                                    eprintln!("Cannot send audio info: {error}");
+                                }
+                                previous_info = Some(info);
+                            }
+                            let log = desktop.session.log_info();
+                            if previous_log != log {
+                                if let Err(error) = desktop.logs.send("log", log.clone()) {
+                                    desktop.session.set_logging(false);
+                                    eprintln!("Cannot send audio log: {error}");
+                                }
+                                previous_log = log;
+                            }
                         }
                         std::thread::sleep(std::time::Duration::from_millis(100));
                     }
@@ -866,36 +875,59 @@ pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                // Let the settings owner save its draft before application shutdown.
-                let settings_window = (window.label() == "main")
-                    .then(|| window.app_handle().get_webview_window("settings"))
-                    .flatten();
-                let result = if let Some(settings) = settings_window {
-                    let _ = settings.show();
-                    let state = window.app_handle().state::<DesktopState>();
-                    let request_id = match state.lock() {
-                        Ok(mut desktop) => desktop.close_requests.request(),
-                        Err(error) => {
-                            show_message(&error.to_string(), true);
-                            return;
+                let state = window.app_handle().state::<DesktopState>();
+                let result = (|| -> Result<(), String> {
+                    let mut desktop = state.lock().map_err(|error| error.to_string())?;
+                    if desktop.closing {
+                        return Ok(());
+                    }
+                    if window.label() == "main" && window.app_handle().get_webview_window("settings").is_some() {
+                        if !desktop.streams.contains("settings") {
+                            return Err("設定画面との接続がありません。設定画面の接続を確認してから終了してください。".into());
                         }
-                    };
-                    let Some(request_id) = request_id else {
-                        return;
-                    };
-                    window.app_handle().emit_to(
-                        settings.label(),
-                        "request-application-close",
-                        request_id,
-                    )
-                } else {
-                    window
-                        .app_handle()
-                        .emit_to(window.label(), "request-close", ())
-                };
+                        if desktop.close_requests.request() {
+                            if let Some(settings) =
+                                window.app_handle().get_webview_window("settings")
+                            {
+                                settings.show().map_err(|error| error.to_string())?;
+                            }
+                            if let Err(error) = desktop
+                                .streams
+                                .send("settings", WindowMessage::ApplicationClose)
+                            {
+                                desktop.close_requests.cancel();
+                                return Err(error);
+                            }
+                        }
+                        Ok(())
+                    } else if desktop.streams.contains(window.label()) {
+                        desktop.streams.send(window.label(), WindowMessage::Close)
+                    } else {
+                        Err(
+                            "画面との接続がありません。画面を再読み込みしてから終了してください。"
+                                .into(),
+                        )
+                    }
+                })();
                 if let Err(error) = result {
-                    show_message(&error.to_string(), true);
+                    show_message(&error, true);
                 }
+            }
+            if let tauri::WindowEvent::Destroyed = event {
+                let state = window.app_handle().state::<DesktopState>();
+                if let Ok(mut desktop) = state.lock() {
+                    desktop.streams.remove(window.label());
+                    if window.label() == "log" {
+                        desktop.logs.remove("log");
+                        desktop.session.set_logging(false);
+                    }
+                    if window.label() == "settings" && desktop.close_requests.pending {
+                        desktop.close_requests.cancel();
+                        if let Err(error) = desktop.streams.send("main", WindowMessage::Error {
+                            error: "設定画面が閉じられたため、終了を中止しました。".into(),
+                        }) { eprintln!("Cannot report interrupted shutdown: {error}"); }
+                    }
+                };
             }
         })
         .run(tauri::generate_context!())?;
@@ -935,54 +967,40 @@ pub fn show_message(message: &str, _error: bool) {
 mod tests {
     use super::*;
     #[test]
+    fn settings_payload_uses_numeric_values_in_feature_groups() {
+        use tauri::ipc::{InvokeResponseBody, IpcResponse};
+        let settings = Settings::from_options(&Options::default());
+        let InvokeResponseBody::Json(json) = settings.body().unwrap() else {
+            panic!("settings must be serialized as JSON");
+        };
+        for key in ["devices", "voice", "noise", "deesser", "eq", "level"] {
+            assert!(json.contains(&format!("\"{key}\":{{")), "{json}");
+        }
+        assert!(json.contains("\"sampleRate\":48000"), "{json}");
+        assert!(json.contains("\"pitch\":0.0"), "{json}");
+        assert!(!json.contains("\"pitch\":\""), "{json}");
+        assert!(!json.contains("\"sampleRate\":\""), "{json}");
+    }
+    #[test]
     fn sample_rate_controls_round_trip_and_validate() {
         let options = Options::parse_gui(["--sample-rate", "44100"].map(String::from)).unwrap();
         let mut settings = Settings::from_options(&options);
-        assert_eq!(settings.sample_rate, "44100");
+        assert_eq!(settings.devices.sample_rate, 44100);
         assert_eq!(settings.options().unwrap(), options);
-        settings.sample_rate = "48000".into();
+        settings.devices.sample_rate = 48000;
         assert_eq!(settings.options().unwrap().sample_rate, 48000);
-        for value in ["", "0", "32000", "NaN", "48000.5"] {
-            settings.sample_rate = value.into();
+        for value in [0, 32000, u32::MAX] {
+            settings.devices.sample_rate = value;
             assert!(settings.options().is_err(), "{value}");
         }
     }
     #[test]
-    fn unacknowledged_shutdown_falls_back_once_and_rejects_late_ack() {
+    fn shutdown_requests_coalesce_until_completion_or_failure() {
         let mut requests = CloseRequests::default();
-        let id = requests.request().unwrap();
-        assert!(!requests.fallback_due(std::time::Instant::now()));
-        assert!(
-            requests.fallback_due(std::time::Instant::now() + std::time::Duration::from_secs(2))
-        );
-        assert!(
-            !requests.fallback_due(std::time::Instant::now() + std::time::Duration::from_secs(3))
-        );
-        assert!(!requests.acknowledge(id));
-    }
-    #[test]
-    fn repeated_close_does_not_reset_the_fallback_deadline() {
-        let mut requests = CloseRequests::default();
-        requests.request().unwrap();
-        let deadline = requests.pending.as_ref().unwrap().deadline;
-        assert!(requests.request().is_none());
-        assert_eq!(requests.pending.as_ref().unwrap().deadline, deadline);
-        assert!(requests.fallback_due(deadline));
-    }
-    #[test]
-    fn acknowledged_shutdown_waits_for_settings_and_allows_retry() {
-        let mut requests = CloseRequests::default();
-        let id = requests.request().unwrap();
-        assert!(requests.acknowledge(id));
-        assert!(
-            !requests.fallback_due(std::time::Instant::now() + std::time::Duration::from_secs(60))
-        );
-        let retry = requests.request().unwrap();
-        assert_ne!(id, retry);
-        assert!(!requests.acknowledge(id));
-        assert!(!requests.cancel(id));
-        assert!(requests.cancel(retry));
-        assert!(!requests.acknowledge(retry));
+        assert!(requests.request());
+        assert!(!requests.request());
+        requests.cancel();
+        assert!(requests.request());
     }
     #[test]
     fn channel_controls_round_trip_and_validate() {
@@ -992,9 +1010,9 @@ mod tests {
         .unwrap();
         let mut settings = Settings::from_options(&options);
         assert_eq!(settings.options().unwrap(), options);
-        settings.output_channels.clear();
+        settings.devices.output_channels.clear();
         assert!(settings.options().is_err());
-        settings.output_channels = vec![2];
+        settings.devices.output_channels = vec![2];
         assert_eq!(settings.options().unwrap().output_channels, [2]);
     }
     #[test]
@@ -1002,33 +1020,30 @@ mod tests {
         let options = Options::parse_gui(Vec::new()).unwrap();
         let mut settings = Settings::from_options(&options);
         assert!(matches!(
-            settings.gate_threshold_mode,
+            settings.noise.threshold_mode,
             GateThresholdMode::Auto
         ));
         assert_eq!(
             settings.options().unwrap().gate_threshold,
             GateThreshold::Auto
         );
-        settings.gate_threshold_mode = GateThresholdMode::Manual;
-        for value in ["-90", "-35.5", "0"] {
-            settings.gate_threshold_db = value.into();
+        settings.noise.threshold_mode = GateThresholdMode::Manual;
+        for value in [-90.0, -35.5, 0.0] {
+            settings.noise.threshold_db = value;
             let manual = settings.options().unwrap();
-            assert_eq!(
-                manual.gate_threshold,
-                GateThreshold::Db(value.parse().unwrap())
-            );
+            assert_eq!(manual.gate_threshold, GateThreshold::Db(value));
             let restored = Settings::from_options(&manual);
             assert!(matches!(
-                restored.gate_threshold_mode,
+                restored.noise.threshold_mode,
                 GateThresholdMode::Manual
             ));
-            assert_eq!(restored.gate_threshold_db, value);
+            assert_eq!(restored.noise.threshold_db, value);
         }
-        for value in ["auto", "", "NaN", "inf", "-91", "1"] {
-            settings.gate_threshold_db = value.into();
+        for value in [f64::NAN, f64::INFINITY, -91.0, 1.0] {
+            settings.noise.threshold_db = value;
             assert!(settings.options().is_err(), "{value}");
         }
-        settings.gate_threshold_mode = GateThresholdMode::Auto;
+        settings.noise.threshold_mode = GateThresholdMode::Auto;
         assert_eq!(
             settings.options().unwrap().gate_threshold,
             GateThreshold::Auto
@@ -1053,12 +1068,12 @@ mod tests {
         .unwrap();
         let mut settings = Settings::from_options(&options);
         assert_eq!(settings.options().unwrap(), options);
-        settings.deesser_mode = "simple".into();
+        settings.deesser.mode = "simple".into();
         assert_eq!(
             settings.options().unwrap().deesser_parameters,
             options.deesser_parameters
         );
-        settings.deesser_parameters.frequency_hz = "NaN".into();
+        settings.deesser.frequency_hz = f64::NAN;
         assert!(settings.options().is_err());
     }
     #[test]
@@ -1102,10 +1117,10 @@ mod tests {
             controls.options().unwrap().level.values(),
             options.level.values()
         );
-        controls.level.ratio = "NaN".into();
+        controls.level.ratio = f64::NAN;
         assert!(controls.options().is_err());
-        controls.level.ratio = "4".into();
-        controls.level.floor_db = "-15".into();
+        controls.level.ratio = 4.0;
+        controls.level.floor_db = -15.0;
         assert!(controls.options().is_err());
         controls.level = LevelControls::from_settings(crate::level::LevelSettings::default());
         assert_eq!(
@@ -1119,15 +1134,15 @@ mod tests {
         let options = Options::parse_gui(Vec::new()).unwrap();
         let mut settings = Settings::from_options(&options);
         assert_eq!(settings.options().unwrap(), options);
-        settings.pitch = "NaN".into();
+        settings.voice.pitch = f64::NAN;
         assert!(settings.options().is_err());
-        settings.pitch = "3.25".into();
-        settings.formant_shift = "2".into();
-        settings.preserve_formants = false;
+        settings.voice.pitch = 3.25;
+        settings.voice.formant_shift = 2.0;
+        settings.voice.preserve_formants = false;
         assert!(settings.options().is_err());
-        settings.preserve_formants = true;
+        settings.voice.preserve_formants = true;
         assert_eq!(settings.options().unwrap().pitch.semitones, 3.25);
-        settings.frames = "0".into();
+        settings.devices.frames = 0;
         assert!(settings.options().is_err());
     }
 
@@ -1151,10 +1166,10 @@ mod tests {
         assert_eq!(controls.options().unwrap().eq, options.eq);
         controls.eq.mode = "simple".into();
         assert_eq!(controls.options().unwrap().eq, options.eq);
-        controls.eq.bands[1].q = "".into();
+        controls.eq.bands[1].q = f64::NAN;
         assert!(controls.options().is_err());
-        controls.eq.bands[1].q = "1".into();
-        controls.eq.output_db = "NaN".into();
+        controls.eq.bands[1].q = 1.0;
+        controls.eq.output_db = f64::NAN;
         assert!(controls.options().is_err());
     }
 }

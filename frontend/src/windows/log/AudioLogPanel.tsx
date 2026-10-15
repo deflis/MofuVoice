@@ -2,16 +2,10 @@ import { useLogStore } from "./store";
 
 export function AudioLogPanel() {
   const log = useLogStore((state) => state.log);
-  const error = useLogStore((state) => state.error);
   const metrics = log?.telemetry;
   const elapsedSeconds = log?.elapsedSeconds;
   return (
     <div className="log-panel">
-      {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
       <dl className="status-grid">
         <div>
           <dt>経過時間</dt>
