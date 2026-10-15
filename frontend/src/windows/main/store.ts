@@ -16,6 +16,7 @@ export type MainMachine =
 
 type MainStore = {
   machine: MainMachine;
+  error: string;
   notice: string;
   mount: () => () => void;
   retry: () => void;
@@ -85,13 +86,17 @@ function applyPhase(machine: MainMachine, phase: AudioPhase): MainMachine {
   };
 }
 
+function reportActionError(set: (partial: Partial<MainStore>) => void, failure: unknown) {
+  set({ error: String(failure) });
+}
+
 export const useMainStore = create<MainStore>()((set, get) => {
   let closeRequested = false;
   let loadGeneration = 0;
 
   const loadView = () => {
     const generation = ++loadGeneration;
-    set({ machine: { status: "bootstrapping" }, notice: "" });
+    set({ machine: { status: "bootstrapping" }, error: "", notice: "" });
     void invoke<MainView>("main_view")
       .then((view) => {
         if (generation !== loadGeneration) {
@@ -159,6 +164,7 @@ export const useMainStore = create<MainStore>()((set, get) => {
 
   return {
     machine: { status: "bootstrapping" },
+    error: "",
     notice: "",
     mount: () => {
       let disposed = false;
@@ -166,22 +172,8 @@ export const useMainStore = create<MainStore>()((set, get) => {
       loadView();
 
       const reportListenError = (failure: unknown) => {
-        if (disposed) {
-          return;
-        }
-        const { machine } = get();
-        if (
-          machine.status === "idle" ||
-          machine.status === "running" ||
-          machine.status === "faulted"
-        ) {
-          set({
-            machine: {
-              status: "faulted",
-              view: machine.view,
-              error: String(failure),
-            },
-          });
+        if (!disposed) {
+          reportActionError(set, failure);
         }
       };
 
@@ -234,10 +226,14 @@ export const useMainStore = create<MainStore>()((set, get) => {
     },
     start: async (inspect) => {
       const { machine } = get();
-      if (machine.status !== "idle" || !machine.view.canStart) {
+      if ((machine.status !== "idle" && machine.status !== "faulted") || !machine.view.canStart) {
         return;
       }
-      set({ machine: { status: "starting", view: machine.view, inspect }, notice: "" });
+      set({
+        machine: { status: "starting", view: machine.view, inspect },
+        error: "",
+        notice: "",
+      });
       try {
         await invoke<void>("start_audio", { inspect });
       } catch (failure) {
@@ -252,7 +248,7 @@ export const useMainStore = create<MainStore>()((set, get) => {
       if (machine.status !== "running") {
         return;
       }
-      set({ machine: { status: "stopping", view: machine.view }, notice: "" });
+      set({ machine: { status: "stopping", view: machine.view }, error: "", notice: "" });
       try {
         await invoke<void>("stop_audio");
       } catch (failure) {
@@ -279,33 +275,21 @@ export const useMainStore = create<MainStore>()((set, get) => {
       try {
         await invoke<void>("open_spectrum");
       } catch (failure) {
-        set({
-          machine: { status: "faulted", view: machine.view, error: String(failure) },
-        });
+        reportActionError(set, failure);
       }
     },
     openSettings: async (section) => {
       try {
         await openSettings(section);
       } catch (failure) {
-        const { machine } = get();
-        if ("view" in machine) {
-          set({
-            machine: { status: "faulted", view: machine.view, error: String(failure) },
-          });
-        }
+        reportActionError(set, failure);
       }
     },
     openLog: async () => {
       try {
         await invoke<void>("open_log");
       } catch (failure) {
-        const { machine } = get();
-        if ("view" in machine) {
-          set({
-            machine: { status: "faulted", view: machine.view, error: String(failure) },
-          });
-        }
+        reportActionError(set, failure);
       }
     },
     requestClose: () => {

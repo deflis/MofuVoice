@@ -2,7 +2,7 @@ import { useMainStore } from "./store";
 import { machineError } from "./selectors";
 
 export function Notifications() {
-  const error = useMainStore((state) => machineError(state.machine));
+  const error = useMainStore((state) => machineError(state.machine) || state.error);
   const notice = useMainStore((state) => state.notice);
   return (
     <>

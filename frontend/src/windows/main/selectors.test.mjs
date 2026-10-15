@@ -34,6 +34,7 @@ const view = {
 test("selectors derive controls from machine status", () => {
   assert.equal(canStart({ status: "idle", view }), true);
   assert.equal(canStart({ status: "idle", view: { ...view, canStart: false } }), false);
+  assert.equal(canStart({ status: "faulted", view, error: "x" }), true);
   assert.equal(canStart({ status: "running", view }), false);
   assert.equal(canStop({ status: "running", view }), true);
   assert.equal(canOpenSpectrum({ status: "faulted", view, error: "x" }), true);

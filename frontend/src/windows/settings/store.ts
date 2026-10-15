@@ -71,6 +71,7 @@ export const useSettingsStore = create<SettingsStore>()((set, get) => {
   let applicationClosing = false;
   let delegatedRequestId: number | undefined;
   let loadGeneration = 0;
+  let phaseSeen = false;
 
   const load = () => {
     const generation = ++loadGeneration;
@@ -80,7 +81,12 @@ export const useSettingsStore = create<SettingsStore>()((set, get) => {
         if (generation !== loadGeneration) {
           return undefined;
         }
-        set({ ...applyView(view), error: "", notice: "" });
+        set((state) => ({
+          ...applyView(view),
+          audioBusy: phaseSeen ? state.audioBusy : view.audioBusy,
+          error: "",
+          notice: "",
+        }));
         flushClose();
         return undefined;
       })
@@ -89,7 +95,7 @@ export const useSettingsStore = create<SettingsStore>()((set, get) => {
           return undefined;
         }
         set({ status: "loadFailed", error: String(failure) });
-        closeRequested = false;
+        flushClose();
         return undefined;
       });
   };
@@ -156,7 +162,7 @@ export const useSettingsStore = create<SettingsStore>()((set, get) => {
       closeRequested = false;
       applicationClosing = false;
       delegatedRequestId = undefined;
-      load();
+      phaseSeen = false;
 
       const unlistenClose = listen("request-close", () => {
         if (!disposed) {
@@ -173,6 +179,7 @@ export const useSettingsStore = create<SettingsStore>()((set, get) => {
         if (disposed) {
           return;
         }
+        phaseSeen = true;
         const busy = payload.phase === "opening" || payload.phase === "running";
         set({ audioBusy: busy });
       });
@@ -216,10 +223,13 @@ export const useSettingsStore = create<SettingsStore>()((set, get) => {
         }
       });
 
+      load();
+
       return () => {
         disposed = true;
         loadGeneration += 1;
         closeRequested = false;
+        phaseSeen = false;
         if (delegatedRequestId !== undefined) {
           void invoke("fallback_application_close", { requestId: delegatedRequestId }).catch(
             () => {},
@@ -257,6 +267,7 @@ export const useSettingsStore = create<SettingsStore>()((set, get) => {
       } catch (failure) {
         set({ status: "ready", error: String(failure) });
       }
+      flushClose();
     },
     updateBackend: async (backend) => {
       const state = get();
@@ -280,6 +291,7 @@ export const useSettingsStore = create<SettingsStore>()((set, get) => {
       } catch (failure) {
         set({ status: "ready", error: String(failure) });
       }
+      flushClose();
     },
     updateRouting: (inputChannel, outputChannels) =>
       set((state) => ({

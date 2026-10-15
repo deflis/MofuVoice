@@ -53,6 +53,32 @@ test("bootstrap failure exposes retry without closing", async () => {
   assert.equal(commands.close_application.mock.callCount(), 0);
 });
 
+test("open_log failure keeps running audio and reports action error", async () => {
+  cleanups.push(mainStore.getState().mount());
+  await setImmediate();
+  await mainStore.getState().start(false);
+  callback("audio-phase")({ payload: { phase: "running", error: null } });
+  commands.open_log.mock.mockImplementationOnce(async () => {
+    throw new Error("log window failed");
+  });
+  await mainStore.getState().openLog();
+  assert.equal(mainStore.getState().machine.status, "running");
+  assert.match(mainStore.getState().error, /log window failed/);
+});
+
+test("faulted audio can be retried when canStart is true", async () => {
+  cleanups.push(mainStore.getState().mount());
+  await setImmediate();
+  commands.start_audio.mock.mockImplementationOnce(async () => {
+    throw new Error("device missing");
+  });
+  await mainStore.getState().start(false);
+  assert.equal(mainStore.getState().machine.status, "faulted");
+  commands.start_audio.mock.mockImplementation(async () => {});
+  await mainStore.getState().start(false);
+  assert.equal(mainStore.getState().machine.status, "starting");
+});
+
 test("unmount ignores late main_view and removes listeners", async () => {
   const loading = deferred();
   const remove = { phase: 0, view: 0, close: 0 };

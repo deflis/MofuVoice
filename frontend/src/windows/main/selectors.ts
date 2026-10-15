@@ -27,7 +27,7 @@ export function headerLabel(machine: MainMachine): string {
 }
 
 export function canStart(machine: MainMachine): boolean {
-  return machine.status === "idle" && machine.view.canStart;
+  return (machine.status === "idle" || machine.status === "faulted") && machine.view.canStart;
 }
 
 export function canStop(machine: MainMachine): boolean {

@@ -23,6 +23,12 @@ export function MainApp() {
         </button>
       </div>
     );
+  } else if (status === "closing") {
+    body = (
+      <div>
+        <p>終了しています…</p>
+      </div>
+    );
   } else {
     body = <Home />;
   }

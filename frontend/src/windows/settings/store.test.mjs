@@ -35,6 +35,49 @@ test("load failure allows hide without save", async () => {
   assert.equal(commands.close_settings.mock.callCount(), 1);
 });
 
+test("close queued during failed load hides the window", async () => {
+  const loading = deferred();
+  commands.settings_view.mock.mockImplementationOnce(() => loading.promise);
+  cleanups.push(settingsStore.getState().mount());
+  settingsStore.getState().requestClose();
+  loading.reject(new Error("settings failed"));
+  await setImmediate();
+  assert.equal(commands.save_settings.mock.callCount(), 0);
+  assert.equal(commands.close_settings.mock.callCount(), 1);
+});
+
+test("close queued during backend switch resumes after device_choices", async () => {
+  const switching = deferred();
+  cleanups.push(settingsStore.getState().mount());
+  await setImmediate();
+  commands.device_choices.mock.mockImplementationOnce(() => switching.promise);
+  const update = settingsStore.getState().updateBackend("cpal");
+  callback("request-application-close")({ payload: 9 });
+  await setImmediate();
+  assert.equal(commands.close_application.mock.callCount(), 0);
+  switching.resolve({
+    devices: ["Mic"],
+    outputDevices: ["Headphones"],
+    audioAvailable: true,
+    deviceError: "",
+    resolvedBackend: "cpal",
+  });
+  await update;
+  await setImmediate();
+  assert.equal(commands.close_application.mock.callCount(), 1);
+});
+
+test("settings_view does not overwrite a newer audio-phase busy flag", async () => {
+  const loading = deferred();
+  commands.settings_view.mock.mockImplementationOnce(() => loading.promise);
+  cleanups.push(settingsStore.getState().mount());
+  callback("audio-phase")({ payload: { phase: "running", error: null } });
+  assert.equal(settingsStore.getState().audioBusy, true);
+  loading.resolve({ ...settingsView, audioBusy: false });
+  await setImmediate();
+  assert.equal(settingsStore.getState().audioBusy, true);
+});
+
 test("application close acknowledgment delegates shutdown after save", async () => {
   cleanups.push(settingsStore.getState().mount());
   await setImmediate();
