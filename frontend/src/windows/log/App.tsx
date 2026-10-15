@@ -1,10 +1,10 @@
 import { useEffect } from "react";
-import { connectLog } from "./connect";
-import { Notifications } from "../../components/Notifications";
-import { StatusDetails } from "../../components/StatusDetails";
+import { useLogStore } from "./store";
+import { Notifications } from "./Notifications";
+import { StatusDetails } from "./StatusDetails";
 
 export function LogApp() {
-  useEffect(() => connectLog().disconnect, []);
+  useEffect(() => useLogStore.getState().mount(), []);
 
   return (
     <main>

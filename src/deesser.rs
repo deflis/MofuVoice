@@ -80,6 +80,9 @@ pub struct DeEsser {
     enabled: bool,
     parameters: DeEsserParameters,
     coefficient: f64,
+    threshold_power: f64,
+    saturated_power: f64,
+    minimum_gain: f64,
     previous_input: f64,
     low: f64,
     high_power: f64,
@@ -111,6 +114,10 @@ impl DeEsser {
             enabled,
             parameters,
             coefficient: k / (1.0 + k),
+            threshold_power: 10.0_f64.powf(parameters.threshold_db / 10.0),
+            saturated_power: 10.0_f64
+                .powf((parameters.threshold_db + parameters.range_db / 0.75) / 10.0),
+            minimum_gain: 10.0_f64.powf(-parameters.range_db / 20.0),
             previous_input: 0.0,
             low: 0.0,
             high_power: 0.0,
@@ -120,6 +127,26 @@ impl DeEsser {
             release: (-1.0 / (parameters.release_ms * 0.001 * rate as f64)).exp(),
             gain: 1.0,
         })
+    }
+    // Compare linear power before invoking transcendental functions. The active
+    // transition retains the original curve and spectral weighting.
+    fn target_gain(&self, weight: f64) -> f64 {
+        if weight == 0.0
+            || self.parameters.range_db == 0.0
+            || self.high_power <= self.threshold_power
+        {
+            return 1.0;
+        }
+        if self.high_power >= self.saturated_power {
+            if weight == 1.0 {
+                return self.minimum_gain;
+            }
+            return 10.0_f64.powf(-self.parameters.range_db * weight / 20.0);
+        }
+        let excess =
+            (10.0 * self.high_power.max(1e-30).log10() - self.parameters.threshold_db).max(0.0);
+        let reduction = (excess * 0.75).min(self.parameters.range_db) * weight;
+        10.0_f64.powf(-reduction / 20.0)
     }
     pub fn process_in_place<T: Sample>(&mut self, samples: &mut [T]) {
         if !self.enabled {
@@ -147,10 +174,7 @@ impl DeEsser {
             // Smooth spectral weighting reduces vowel triggering without a binary gate.
             let fraction = self.high_power / self.full_power.max(1e-30);
             let weight = ((fraction - 0.25) / 0.25).clamp(0.0, 1.0);
-            let excess =
-                (10.0 * self.high_power.max(1e-30).log10() - self.parameters.threshold_db).max(0.0);
-            let reduction = (excess * 0.75).min(self.parameters.range_db) * weight;
-            let target = 10.0_f64.powf(-reduction / 20.0);
+            let target = self.target_gain(weight);
             let response = if target < self.gain {
                 self.attack
             } else {
@@ -176,6 +200,40 @@ impl DeEsser {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn optimized_target_matches_original_curve_at_boundaries_and_transitions() {
+        for threshold_db in [-60.0, -36.0, -24.0, 0.0] {
+            for range_db in [0.0, 0.1, 3.0, 6.0, 12.0] {
+                let parameters = DeEsserParameters {
+                    threshold_db,
+                    range_db,
+                    ..DeEsserParameters::default()
+                };
+                let mut dsp = DeEsser::with_parameters(true, parameters).unwrap();
+                let mut powers: Vec<_> = (-1000..=300)
+                    .map(|i| 10.0_f64.powf(i as f64 / 100.0))
+                    .collect();
+                for boundary in [dsp.threshold_power, dsp.saturated_power] {
+                    powers.extend([
+                        f64::from_bits(boundary.to_bits() - 1),
+                        boundary,
+                        f64::from_bits(boundary.to_bits() + 1),
+                    ]);
+                }
+                powers.extend([0.0, 1e-30, 256.0]);
+                for power in powers {
+                    dsp.high_power = power;
+                    for weight in [0.0, 1e-12, 0.01, 0.25, 0.5, 0.99, 1.0] {
+                        let excess = (10.0 * power.max(1e-30).log10() - threshold_db).max(0.0);
+                        let expected =
+                            10.0_f64.powf(-(excess * 0.75).min(range_db) * weight / 20.0);
+                        assert!((dsp.target_gain(weight) - expected).abs() < 2e-15,
+                            "threshold={threshold_db}, range={range_db}, power={power}, weight={weight}");
+                    }
+                }
+            }
+        }
+    }
     fn tone(hz: f64, amplitude: f64) -> Vec<f32> {
         (0..RATE)
             .map(|i| {

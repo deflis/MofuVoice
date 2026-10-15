@@ -346,21 +346,39 @@ struct Desktop {
     close_requests: CloseRequests,
 }
 type DesktopState = Mutex<Desktop>;
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MainSetup {
+    audio_available: bool,
+    resolved_backend: String,
+    input_configured: bool,
+    output_configured: bool,
+    remembered_device_missing: bool,
+}
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MainView {
+    can_start: bool,
+    spectrum_available: bool,
+    setup: MainSetup,
+    phase: AudioPhase,
+}
 #[derive(Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct Snapshot {
+struct AudioPhase {
+    phase: String,
+    error: Option<String>,
     busy: bool,
-    info: crate::session::AudioInfo,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct Bootstrap {
+struct SettingsView {
     level_defaults: LevelControls,
     settings: Settings,
     #[serde(flatten)]
     choices: DeviceChoices,
     backends: Vec<String>,
-    spectrum_available: bool,
+    audio_busy: bool,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -394,26 +412,84 @@ fn choices(kind: backend::BackendKind) -> DeviceChoices {
         },
     }
 }
-#[tauri::command]
-fn bootstrap(state: State<'_, DesktopState>) -> Result<Bootstrap, String> {
-    let desktop = state.lock().map_err(|error| error.to_string())?;
+fn available_backends() -> Vec<String> {
+    [
+        backend::BackendKind::Auto,
+        backend::BackendKind::Cpal,
+        backend::BackendKind::Asio,
+    ]
+    .into_iter()
+    .filter(|kind| kind.available())
+    .map(|kind| kind.name().into())
+    .collect()
+}
+fn build_main_view(desktop: &mut Desktop) -> Result<MainView, String> {
+    let settings = &desktop.settings;
+    let kind = backend::BackendKind::parse(&settings.backend).map_err(|error| error.to_string())?;
+    let device_choices = choices(kind);
+    let resolved = device_choices.resolved_backend.as_str();
+    let input_configured = resolved != "asio" || !settings.device.is_empty();
+    let output_configured = if resolved == "asio" {
+        input_configured
+    } else {
+        true
+    };
+    let remembered_device_missing = (!settings.device.is_empty()
+        && !device_choices
+            .devices
+            .iter()
+            .any(|device| device == &settings.device))
+        || (resolved == "cpal"
+            && !settings.output_device.is_empty()
+            && !device_choices
+                .output_devices
+                .iter()
+                .any(|device| device == &settings.output_device));
+    let busy = desktop.session.poll();
+    let info = desktop.session.info();
+    Ok(MainView {
+        can_start: device_choices.audio_available && input_configured,
+        spectrum_available: cfg!(windows),
+        setup: MainSetup {
+            audio_available: device_choices.audio_available,
+            resolved_backend: device_choices.resolved_backend,
+            input_configured,
+            output_configured,
+            remembered_device_missing,
+        },
+        phase: AudioPhase {
+            phase: info.phase.to_string(),
+            error: info.error.clone(),
+            busy,
+        },
+    })
+}
+fn build_settings_view(desktop: &mut Desktop) -> Result<SettingsView, String> {
     let kind = backend::BackendKind::parse(&desktop.settings.backend)
         .map_err(|error| error.to_string())?;
-    Ok(Bootstrap {
+    Ok(SettingsView {
         level_defaults: LevelControls::from_settings(crate::level::LevelSettings::default()),
         settings: desktop.settings.clone(),
         choices: choices(kind),
-        backends: [
-            backend::BackendKind::Auto,
-            backend::BackendKind::Cpal,
-            backend::BackendKind::Asio,
-        ]
-        .into_iter()
-        .filter(|kind| kind.available())
-        .map(|kind| kind.name().into())
-        .collect(),
-        spectrum_available: cfg!(windows),
+        backends: available_backends(),
+        audio_busy: desktop.session.poll(),
     })
+}
+#[tauri::command]
+fn main_view(state: State<'_, DesktopState>) -> Result<MainView, String> {
+    let mut desktop = state.lock().map_err(|error| error.to_string())?;
+    build_main_view(&mut desktop)
+}
+#[tauri::command]
+fn settings_view(state: State<'_, DesktopState>) -> Result<SettingsView, String> {
+    let mut desktop = state.lock().map_err(|error| error.to_string())?;
+    build_settings_view(&mut desktop)
+}
+#[tauri::command]
+fn log_view(state: State<'_, DesktopState>) -> Result<crate::session::AudioInfo, String> {
+    let mut desktop = state.lock().map_err(|error| error.to_string())?;
+    let _ = desktop.session.poll();
+    Ok(desktop.session.info())
 }
 #[tauri::command]
 async fn device_choices(backend: String) -> Result<DeviceChoices, String> {
@@ -454,14 +530,6 @@ async fn device_sample_rates(
     .map_err(|error| error.to_string())?
 }
 #[tauri::command]
-fn audio_status(state: State<'_, DesktopState>) -> Result<Snapshot, String> {
-    let mut desktop = state.lock().map_err(|error| error.to_string())?;
-    Ok(Snapshot {
-        busy: desktop.session.poll(),
-        info: desktop.session.info(),
-    })
-}
-#[tauri::command]
 fn set_logging(
     logging: bool,
     state: State<'_, DesktopState>,
@@ -471,25 +539,20 @@ fn set_logging(
     Ok(desktop.session.log_info())
 }
 #[tauri::command]
-fn start_audio(
-    settings: Settings,
-    inspect: bool,
-    state: State<'_, DesktopState>,
-) -> Result<(), String> {
-    let mut options = settings.options()?;
+fn start_audio(inspect: bool, state: State<'_, DesktopState>) -> Result<(), String> {
+    let mut desktop = state.lock().map_err(|error| error.to_string())?;
+    if desktop.closing {
+        return Err("Application is closing".into());
+    }
+    let mut options = desktop.settings.options()?;
     backend::select_with_sample_rate(options.backend, &options.output_device, options.sample_rate)
         .map_err(|error| error.to_string())?;
     if backend::resolve(options.backend) == backend::BackendKind::Asio && options.device.is_empty()
     {
         return Err("Select an audio device first".into());
     }
-    let mut desktop = state.lock().map_err(|error| error.to_string())?;
-    if desktop.closing {
-        return Err("Application is closing".into());
-    }
     options.inspect = inspect;
     desktop.session.start(options)?;
-    desktop.settings = settings;
     Ok(())
 }
 #[tauri::command]
@@ -640,10 +703,11 @@ fn save_settings(
         return Err("Application is closing".into());
     }
     gui_settings::save(&desktop.path, &options).map_err(|error| error.to_string())?;
-    desktop.settings = settings.clone();
+    desktop.settings = settings;
+    let view = build_main_view(&mut desktop)?;
     drop(desktop);
     if let Some(main) = app.get_webview_window("main") {
-        app.emit_to(main.label(), "settings-saved", &settings)
+        app.emit_to(main.label(), "main-view", &view)
             .map_err(|error| error.to_string())?;
     }
     Ok(())
@@ -668,16 +732,15 @@ async fn open_spectrum() -> Result<(), String> {
     Err("Spectrum window is available only on Windows".into())
 }
 #[tauri::command]
-async fn close_application(settings: Settings, app: tauri::AppHandle) -> Result<(), String> {
-    let options = settings.options()?;
+async fn close_application(app: tauri::AppHandle) -> Result<(), String> {
     {
         let state = app.state::<DesktopState>();
         let mut desktop = state.lock().map_err(|error| error.to_string())?;
         if desktop.closing {
             return Err("Application is already closing".into());
         }
+        let options = desktop.settings.options()?;
         gui_settings::save(&desktop.path, &options).map_err(|error| error.to_string())?;
-        desktop.settings = settings;
         desktop.closing = true;
         desktop.session.stop();
     }
@@ -718,10 +781,11 @@ pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
             close_requests: CloseRequests::default(),
         }))
         .invoke_handler(tauri::generate_handler![
-            bootstrap,
+            main_view,
+            settings_view,
+            log_view,
             device_choices,
             device_sample_rates,
-            audio_status,
             set_logging,
             start_audio,
             stop_audio,
@@ -740,10 +804,11 @@ pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
             std::thread::Builder::new()
                 .name("desktop-status".into())
                 .spawn(move || {
-                    let mut previous = None;
+                    let mut previous_phase = None;
+                    let mut previous_info = None;
                     let mut previous_log = None;
                     loop {
-                        let (snapshot, log, fallback_close) = {
+                        let (phase, info, log, fallback_close) = {
                             let state = handle.state::<DesktopState>();
                             let Ok(mut desktop) = state.lock() else {
                                 break;
@@ -751,11 +816,15 @@ pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
                             if desktop.closing {
                                 break;
                             }
+                            let busy = desktop.session.poll();
+                            let info = desktop.session.info();
                             (
-                                Snapshot {
-                                    busy: desktop.session.poll(),
-                                    info: desktop.session.info(),
+                                AudioPhase {
+                                    phase: info.phase.to_string(),
+                                    error: info.error.clone(),
+                                    busy,
                                 },
+                                info,
                                 desktop.session.log_info(),
                                 desktop
                                     .close_requests
@@ -767,11 +836,17 @@ pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
                                 eprintln!("Cannot return shutdown to main: {error}");
                             }
                         }
-                        if previous.as_ref() != Some(&snapshot) {
-                            if let Err(error) = handle.emit("audio-status", &snapshot) {
-                                eprintln!("Cannot emit audio status: {error}");
+                        if previous_phase.as_ref() != Some(&phase) {
+                            if let Err(error) = handle.emit("audio-phase", &phase) {
+                                eprintln!("Cannot emit audio phase: {error}");
                             }
-                            previous = Some(snapshot);
+                            previous_phase = Some(phase);
+                        }
+                        if previous_info.as_ref() != Some(&info) {
+                            if let Err(error) = handle.emit("log-info", &info) {
+                                eprintln!("Cannot emit log info: {error}");
+                            }
+                            previous_info = Some(info);
                         }
                         if let Some(log) = log {
                             if previous_log.as_ref() != Some(&log) {

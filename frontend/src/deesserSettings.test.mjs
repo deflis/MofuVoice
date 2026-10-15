@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-const { bootstrap, settingsStore, commands } = await import("./testing/tauriMocks.mjs");
+const { settingsView, settingsStore, commands } = await import("./testing/tauriMocks.mjs");
 
 test("de-esser mode changes retain custom controls and save the selected mode", async () => {
-  settingsStore.setState(bootstrap);
+  settingsStore.setState({ ...settingsStore.getState(), ...settingsView, status: "ready" });
   const original = settingsStore.getState().settings;
   const parameters = { ...original.deesserParameters, frequencyHz: "6500", rangeDb: "9" };
   settingsStore.getState().update("deesserParameters", parameters);
