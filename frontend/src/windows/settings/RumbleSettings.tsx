@@ -1,4 +1,4 @@
-import { useVoiceSettings } from "../settingsHooks";
+import { useVoiceSettings } from "./hooks";
 
 export function RumbleSettings() {
   const { rumbleFilter, update } = useVoiceSettings();

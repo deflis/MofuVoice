@@ -1,4 +1,4 @@
-import { useSaveSettings } from "../settingsHooks";
+import { useSaveSettings } from "./hooks";
 
 export function SaveSettingsButton() {
   const { disabled, save } = useSaveSettings();

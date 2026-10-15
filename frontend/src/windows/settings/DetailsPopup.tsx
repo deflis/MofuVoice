@@ -1,6 +1,6 @@
 import { Notifications } from "./Notifications";
 import { createPortal } from "react-dom";
-import { useSettingsLocked } from "../settingsHooks";
+import { useSettingsLocked } from "./hooks";
 import { useId, useRef, type ReactNode } from "react";
 
 export function DetailsPopup({

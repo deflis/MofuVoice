@@ -1,7 +1,7 @@
 import { DetailsPopup } from "./DetailsPopup";
 import { useId } from "react";
-import { useEqSettings } from "../settingsHooks";
-import type { EqBand } from "../types";
+import { useEqSettings } from "./hooks";
+import type { EqBand } from "../../types";
 
 const bands = [
   {

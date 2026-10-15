@@ -1,7 +1,8 @@
-import { useHeaderStatus } from "../audioHooks";
+import { useMainStore } from "./store";
+import { headerLabel } from "./selectors";
 
 export function AppHeader() {
-  const status = useHeaderStatus();
+  const status = useMainStore((state) => headerLabel(state.machine));
   return (
     <header>
       <h1>Voice Changer</h1>

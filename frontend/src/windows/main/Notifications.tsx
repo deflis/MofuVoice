@@ -1,7 +1,9 @@
-import { useNotifications } from "../audioHooks";
+import { useMainStore } from "./store";
+import { machineError } from "./selectors";
 
 export function Notifications() {
-  const { error, notice } = useNotifications();
+  const error = useMainStore((state) => machineError(state.machine) || state.error);
+  const notice = useMainStore((state) => state.notice);
   return (
     <>
       {error && (

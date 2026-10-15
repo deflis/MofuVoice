@@ -64,34 +64,41 @@ export const settings = {
     releaseMs: "100",
   },
 };
-export const bootstrap = {
+
+export const mainView = {
+  canStart: true,
+  spectrumAvailable: true,
+  setup: {
+    audioAvailable: true,
+    resolvedBackend: "asio",
+    inputConfigured: true,
+    outputConfigured: true,
+    rememberedDeviceMissing: false,
+  },
+  phase: { phase: "ready", error: null, busy: false },
+};
+
+export const settingsView = {
   settings,
   devices: ["ASIO"],
   outputDevices: [],
   backends: ["auto", "cpal", "asio"],
   levelDefaults: settings.level,
-  spectrumAvailable: true,
   audioAvailable: true,
   deviceError: "",
   resolvedBackend: "asio",
+  audioBusy: false,
 };
+
 export const commands = {};
 export const listen = mock.fn();
 mock.module("@tauri-apps/api/core", {
   exports: { invoke: (command, args) => commands[command](args) },
 });
 mock.module("@tauri-apps/api/event", { exports: { listen } });
-export const { useSettingsStore: settingsStore } = await import("../settingsStore.ts");
-export const { useAudioStore: audioStore } = await import("../audioStore.ts");
-export const { useAudioLogStore: logStore } = await import("../audioLogStore.ts");
-export const { connectMain } = await import("../windows/main/connect.ts");
-export const { connectSettings } = await import("../windows/settings/connect.ts");
-export const { connectLog } = await import("../windows/log/connect.ts");
-export let connection;
-export function setConnection(value) {
-  connection = value;
-  return value;
-}
+export const { useMainStore: mainStore } = await import("../windows/main/store.ts");
+export const { useSettingsStore: settingsStore } = await import("../windows/settings/store.ts");
+export const { useLogStore: logStore } = await import("../windows/log/store.ts");
 export const cleanups = [];
 export function deferred() {
   let resolve;
@@ -103,10 +110,26 @@ export function deferred() {
   return { promise, resolve, reject };
 }
 beforeEach(() => {
+  mainStore.setState(mainStore.getInitialState(), true);
   settingsStore.setState(settingsStore.getInitialState(), true);
-  audioStore.setState(audioStore.getInitialState(), true);
   logStore.setState(logStore.getInitialState(), true);
-  commands.bootstrap = mock.fn(async () => bootstrap);
+  commands.main_view = mock.fn(async () => mainView);
+  commands.settings_view = mock.fn(async () => settingsView);
+  commands.log_view = mock.fn(async () => ({
+    phase: "ready",
+    error: null,
+    device: null,
+    outputDevice: null,
+    backend: null,
+    sampleRate: null,
+    inputs: null,
+    outputs: null,
+    frames: null,
+    periodMs: null,
+    dspMs: null,
+    inputLatencyMs: null,
+    outputLatencyMs: null,
+  }));
   commands.device_choices = mock.fn(async () => ({
     devices: ["Mic"],
     outputDevices: ["Headphones"],
@@ -116,7 +139,6 @@ beforeEach(() => {
   }));
   commands.acknowledge_application_close = mock.fn(async () => true);
   commands.fallback_application_close = mock.fn(async () => {});
-  commands.audio_status = mock.fn(async () => ({ busy: false, info: { phase: "ready" } }));
   commands.set_logging = mock.fn(async ({ logging }) =>
     logging ? { elapsedSeconds: 0, telemetry: null } : null,
   );
@@ -125,6 +147,7 @@ beforeEach(() => {
     "stop_audio",
     "save_settings",
     "open_spectrum",
+    "open_settings",
     "open_log",
     "close_settings",
     "close_log",
@@ -136,8 +159,6 @@ beforeEach(() => {
   listen.mock.mockImplementation(async () => () => {});
 });
 afterEach(async () => {
-  connection?.disconnect();
-  connection = undefined;
   for (const cleanup of cleanups.splice(0)) {
     cleanup();
   }

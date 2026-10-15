@@ -1,13 +1,21 @@
-import { useState } from "react";
-import { useStatusDetails } from "../audioHooks";
+import { useLogStore } from "./store";
 import { AudioLogPanel } from "./AudioLogPanel";
 
 const ms = (value: number | null | undefined) =>
   value === null || value === undefined ? "—" : `${value.toFixed(2)} ms`;
 
 export function StatusDetails() {
-  const info = useStatusDetails();
-  const [logging, setLogging] = useState(false);
+  const info = useLogStore((state) => state.info);
+  const logging = useLogStore((state) => state.logging);
+  const setLogging = useLogStore((state) => state.setLogging);
+  if (!info) {
+    return (
+      <section className="status-panel">
+        <h2>音声処理の状態</h2>
+        <p>状態を読み込んでいます…</p>
+      </section>
+    );
+  }
   let outputDevice = "—";
   if (info.backend === "asio") {
     outputDevice = info.device ?? "—";
