@@ -75,10 +75,21 @@ button {
 .slider-row {
   display: grid;
   grid-template-columns: 1fr 80px;
-  gap: 12px;
+  column-gap: 12px;
 }
 .slider-row input[type="range"] {
   width: 100%;
+}
+.slider-row .eq-scale {
+  grid-column: 1;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+}
+.slider-row .eq-scale span:nth-child(2) {
+  text-align: center;
+}
+.slider-row .eq-scale span:last-child {
+  text-align: right;
 }
 .gate-fields {
   display: grid;
@@ -402,9 +413,6 @@ main:has(.home-layout) {
   border-top: 1px solid #373c46;
 }
 
-.simple-slider-row input[type="range"] {
-  width: 100%;
-}
 .settings-content section {
   margin: 12px 0;
 }
