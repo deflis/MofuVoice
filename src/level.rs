@@ -114,6 +114,7 @@ impl LevelSettings {
         self.validate()?;
         Ok(AutoLevel {
             settings: self,
+            compression_start: amplitude(self.threshold_db - 3.0),
             power: 0.0,
             peak: 0.0,
             level_gain_db: 0.0,
@@ -148,6 +149,7 @@ fn reduction(level: f64, threshold: f64, ratio: f64) -> f64 {
 }
 pub struct AutoLevel {
     settings: LevelSettings,
+    compression_start: f64,
     power: f64,
     peak: f64,
     level_gain_db: f64,
@@ -159,6 +161,19 @@ pub struct AutoLevel {
     release_rate: f64,
 }
 impl AutoLevel {
+    fn compression_target(&self) -> f64 {
+        // The 6 dB soft knee starts 3 dB below the threshold. Keep the
+        // original dB curve above it, including both knee boundaries.
+        if self.settings.ratio == 1.0 || self.peak < self.compression_start {
+            0.0
+        } else {
+            reduction(
+                db(self.peak),
+                self.settings.threshold_db,
+                self.settings.ratio,
+            )
+        }
+    }
     pub fn process_in_place<T: Sample>(&mut self, samples: &mut [T]) {
         if !self.settings.enabled {
             return;
@@ -181,18 +196,20 @@ impl AutoLevel {
             let leveled = input * amplitude(self.level_gain_db);
             self.peak += (0.0 - self.peak) * self.rms_rate;
             self.peak = self.peak.max(leveled.abs());
-            let target = reduction(
-                db(self.peak),
-                self.settings.threshold_db,
-                self.settings.ratio,
-            );
+            let target = self.compression_target();
             let rate = if target > self.compression_db {
                 self.attack_rate
             } else {
                 self.release_rate
             };
             self.compression_db += (target - self.compression_db) * rate;
-            let compressed = leveled * amplitude(-self.compression_db);
+            // A zero target must still release existing attenuation. Skip the
+            // conversion only when the smoothed attenuation itself is zero.
+            let compressed = if self.compression_db == 0.0 {
+                leveled
+            } else {
+                leveled * amplitude(-self.compression_db)
+            };
             // Immediate peak guard followed by smooth recovery; no lookahead or delayed samples.
             let ceiling_gain = (amplitude(-1.0) / compressed.abs().max(1e-12)).min(1.0);
             self.guard_gain += (1.0 - self.guard_gain) * self.release_rate;
@@ -205,6 +222,153 @@ impl AutoLevel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Retain the former sample loop as an independent streaming reference.
+    impl AutoLevel {
+        fn process_reference<T: Sample>(&mut self, samples: &mut [T]) {
+            if !self.settings.enabled {
+                return;
+            } // Preserve every bypass bit, including NaNs.
+            for sample in samples {
+                let input = sample.normalized();
+                // Invalid wet samples are silenced without poisoning detector state.
+                let input = if input.is_finite() {
+                    input.clamp(-16.0, 16.0)
+                } else {
+                    0.0
+                };
+                self.power += (input * input - self.power) * self.rms_rate;
+                let rms_db = db(self.power.sqrt());
+                if rms_db > self.settings.floor_db && db(input.abs()) > self.settings.floor_db {
+                    let target =
+                        (self.settings.target_db - rms_db).clamp(-18.0, self.settings.max_gain_db);
+                    self.level_gain_db += (target - self.level_gain_db) * self.level_rate;
+                }
+                let leveled = input * amplitude(self.level_gain_db);
+                self.peak += (0.0 - self.peak) * self.rms_rate;
+                self.peak = self.peak.max(leveled.abs());
+                let target = reduction(
+                    db(self.peak),
+                    self.settings.threshold_db,
+                    self.settings.ratio,
+                );
+                let rate = if target > self.compression_db {
+                    self.attack_rate
+                } else {
+                    self.release_rate
+                };
+                self.compression_db += (target - self.compression_db) * rate;
+                let compressed = leveled * amplitude(-self.compression_db);
+                // Immediate peak guard followed by smooth recovery; no lookahead or delayed samples.
+                let ceiling_gain = (amplitude(-1.0) / compressed.abs().max(1e-12)).min(1.0);
+                self.guard_gain += (1.0 - self.guard_gain) * self.release_rate;
+                self.guard_gain = self.guard_gain.min(ceiling_gain);
+                *sample = T::from_normalized(compressed * self.guard_gain);
+            }
+        }
+    }
+
+    #[test]
+    fn compressor_target_matches_original_curve() {
+        for threshold_db in [-36.0, -12.0, 0.0] {
+            for ratio in [1.0, 1.01, 3.0, 20.0] {
+                let mut dsp = LevelSettings {
+                    threshold_db,
+                    ratio,
+                    ..active()
+                }
+                .build()
+                .unwrap();
+                let mut peaks: Vec<_> = (-1200..=250).map(|i| amplitude(i as f64 / 10.0)).collect();
+                for boundary in [dsp.compression_start, amplitude(threshold_db + 3.0)] {
+                    peaks.extend([
+                        f64::from_bits(boundary.to_bits() - 1),
+                        boundary,
+                        f64::from_bits(boundary.to_bits() + 1),
+                    ]);
+                }
+                peaks.extend([0.0, 1e-300]);
+                for peak in peaks {
+                    dsp.peak = peak;
+                    let expected = reduction(db(peak), threshold_db, ratio);
+                    assert!(
+                        (dsp.compression_target() - expected).abs() < 1e-25,
+                        "threshold={threshold_db}, ratio={ratio}, peak={peak}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn compressor_stream_matches_reference_through_attack_release_and_invalid_input() {
+        fn check<T: Sample>(input: &[T], settings: LevelSettings, tolerance: f64) {
+            let mut expected = input.to_vec();
+            let mut actual = input.to_vec();
+            let mut reference = settings.build().unwrap();
+            reference.process_reference(&mut expected);
+            let mut optimized = settings.build().unwrap();
+            for chunk in actual.chunks_mut(63) {
+                optimized.process_in_place(chunk);
+            }
+            for (index, (a, b)) in actual.iter().zip(&expected).enumerate() {
+                assert!(
+                    (a.normalized() - b.normalized()).abs() <= tolerance,
+                    "sample {index}: {} vs {}",
+                    a.normalized(),
+                    b.normalized()
+                );
+            }
+            assert!((optimized.compression_db - reference.compression_db).abs() < 1e-12);
+            if settings.ratio != 1.0 {
+                assert!(reference.compression_db > 0.0, "must exercise release tail");
+            }
+        }
+        let input: Vec<f64> = (0..RATE as usize * 2)
+            .map(|i| {
+                let amplitude = match i / 12000 {
+                    0 => 0.01,
+                    1..=3 => 0.9,
+                    _ => 0.01,
+                };
+                amplitude * (std::f64::consts::TAU * 173.0 * i as f64 / RATE as f64).sin()
+            })
+            .collect();
+        for threshold_db in [-36.0, -12.0, 0.0] {
+            for ratio in [1.0, 3.0, 20.0] {
+                let settings = LevelSettings {
+                    threshold_db,
+                    ratio,
+                    ..active()
+                };
+                let mut float: Vec<f32> = input.iter().map(|x| *x as f32).collect();
+                float[12001] = f32::NAN;
+                float[12002] = f32::INFINITY;
+                float[12003] = -32.0;
+                check(&float, settings, 0.0);
+                check(
+                    &input.iter().map(|x| *x as f32).collect::<Vec<_>>(),
+                    settings,
+                    0.0,
+                );
+                check(
+                    &input
+                        .iter()
+                        .map(|x| i16::from_normalized(*x))
+                        .collect::<Vec<_>>(),
+                    settings,
+                    0.0,
+                );
+                check(
+                    &input
+                        .iter()
+                        .map(|x| i32::from_normalized(*x))
+                        .collect::<Vec<_>>(),
+                    settings,
+                    0.0,
+                );
+            }
+        }
+    }
     fn active() -> LevelSettings {
         LevelSettings {
             enabled: true,
