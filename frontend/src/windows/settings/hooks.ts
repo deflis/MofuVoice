@@ -1,37 +1,71 @@
 import { useShallow } from "zustand/react/shallow";
-import { requireSettings, useSettingsStore } from "./store";
+import { canEditSettings, requireSettings, useSettingsStore } from "./store";
 
 export function useSettingsLocked() {
-  return useSettingsStore(
-    (state) =>
-      state.audioBusy ||
-      state.status === "saving" ||
-      state.status === "switchingBackend" ||
-      state.status === "closing",
-  );
+  return useSettingsStore((state) => !canEditSettings(state));
 }
 
-export function useDeviceSettings() {
+export function useDeviceSelection() {
   return useSettingsStore(
     useShallow((state) => {
       const settings = requireSettings(state.settings);
       return {
         device: settings.device,
         outputDevice: settings.outputDevice,
-        inputChannel: settings.inputChannel,
-        outputChannels: settings.outputChannels,
-        backend: settings.backend,
         resolvedBackend: state.resolvedBackend,
-        backends: state.backends,
-        outputDevices: state.outputDevices,
-        updateBackend: state.updateBackend,
-        updateRouting: state.updateRouting,
-        frames: settings.frames,
-        sampleRate: settings.sampleRate,
         devices: state.devices,
+        outputDevices: state.outputDevices,
         update: state.update,
       };
     }),
+  );
+}
+
+export function useSampleRateSettings() {
+  return useSettingsStore(
+    useShallow((state) => {
+      const settings = requireSettings(state.settings);
+      return {
+        device: settings.device,
+        outputDevice: settings.outputDevice,
+        resolvedBackend: state.resolvedBackend,
+        sampleRate: settings.sampleRate,
+        update: state.update,
+      };
+    }),
+  );
+}
+
+export function useChannelRouting() {
+  return useSettingsStore(
+    useShallow((state) => {
+      const settings = requireSettings(state.settings);
+      return {
+        inputChannel: settings.inputChannel,
+        outputChannels: settings.outputChannels,
+        update: state.update,
+        updateRouting: state.updateRouting,
+      };
+    }),
+  );
+}
+
+export function useBackendSettings() {
+  return useSettingsStore(
+    useShallow((state) => ({
+      backend: requireSettings(state.settings).backend,
+      backends: state.backends,
+      updateBackend: state.updateBackend,
+    })),
+  );
+}
+
+export function useBufferSettings() {
+  return useSettingsStore(
+    useShallow((state) => ({
+      frames: requireSettings(state.settings).frames,
+      update: state.update,
+    })),
   );
 }
 
@@ -83,7 +117,7 @@ export function useAutoLevelSettings() {
 export function useSaveSettings() {
   return useSettingsStore(
     useShallow((state) => ({
-      disabled: state.status !== "ready" || state.audioBusy,
+      disabled: !canEditSettings(state),
       save: state.save,
     })),
   );

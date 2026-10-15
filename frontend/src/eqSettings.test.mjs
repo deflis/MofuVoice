@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-const { settingsView, settingsStore, commands } = await import("./testing/tauriMocks.mjs");
+import { settingsView, settingsStore, settingsApi } from "./testing/storeMocks.mjs";
 
 test("EQ mode changes preserve bands and persist through save", async () => {
   settingsStore.setState({ ...settingsStore.getState(), ...settingsView, status: "ready" });
@@ -12,10 +12,7 @@ test("EQ mode changes preserve bands and persist through save", async () => {
     assert.deepEqual(settingsStore.getState().settings.eq.bands, original.bands);
   }
   await settingsStore.getState().save();
-  assert.equal(
-    commands.save_settings.mock.calls.at(-1).arguments[0].settings.eq.bands[1].frequency,
-    "2200",
-  );
+  assert.equal(settingsApi.save.mock.calls.at(-1).arguments[0].eq.bands[1].frequency, "2200");
 });
 
 test("EQ changes and reset leave voice and level settings alone", () => {

@@ -1,5 +1,3 @@
-import { invoke } from "@tauri-apps/api/core";
-
 export type SettingsSection = "devices" | "voice" | "noise" | "tone";
 const navigationKey = "voice-changer.settings-navigation";
 
@@ -15,11 +13,10 @@ export function readSettingsSection(value = localStorage.getItem(navigationKey))
   return "voice";
 }
 
-export async function openSettings(section: SettingsSection) {
+export function selectSettingsSection(section: SettingsSection) {
   // Shared WebView storage also delivers navigation when the OS window is already open.
   // A unique request lets the same shortcut work after navigating elsewhere in settings.
   localStorage.setItem(navigationKey, JSON.stringify({ section, request: crypto.randomUUID() }));
-  await invoke("open_settings");
 }
 
 export function connectSettingsNavigation(select: (section: SettingsSection) => void) {
