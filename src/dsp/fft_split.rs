@@ -20,6 +20,36 @@ impl<const N: usize> Default for SplitBuffer<N> {
     }
 }
 impl<const N: usize> SplitBuffer<N> {
+    /// Window a real circular buffer directly into the complex FFT's split input.
+    /// The ring offset is even so each packed pair stays within one source span.
+    pub(crate) fn pack_windowed_ring(
+        &mut self,
+        input: &[f64],
+        window: &[f64],
+        first: usize,
+        vector: bool,
+    ) {
+        assert!(N >= 4 && N.is_power_of_two());
+        assert_eq!(input.len(), 2 * N);
+        assert_eq!(window.len(), 2 * N);
+        assert!(first < 2 * N && first.is_multiple_of(2));
+        let length = 2 * N - first;
+        let count = length / 2;
+        pack_windowed_part(
+            &input[first..],
+            &window[..length],
+            &mut self.re[..count],
+            &mut self.im[..count],
+            vector,
+        );
+        pack_windowed_part(
+            &input[..first],
+            &window[length..],
+            &mut self.re[count..],
+            &mut self.im[count..],
+            vector,
+        );
+    }
     /// Seed the first three forward FFT stages for a real signal supported on
     /// 0..=2*KEEP and 2*N-2*KEEP..2*N. Imaginary input components are ignored.
     /// Each bit-reversed eight-point block has at most one nonzero input:
@@ -85,6 +115,81 @@ impl<const N: usize> SplitBuffer<N> {
     }
 }
 
+fn pack_windowed_part(
+    input: &[f64],
+    window: &[f64],
+    real: &mut [f64],
+    imag: &mut [f64],
+    vector: bool,
+) {
+    assert_eq!(input.len(), window.len());
+    assert_eq!(input.len(), 2 * real.len());
+    assert_eq!(real.len(), imag.len());
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    if vector {
+        unsafe { pack_windowed_part_avx2(input, window, real, imag) };
+        return;
+    }
+    let _ = vector;
+    for ((pair, weight), (real, imag)) in input
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .zip(window.as_chunks::<2>().0.iter())
+        .zip(real.iter_mut().zip(imag))
+    {
+        *real = pair[0] * weight[0];
+        *imag = pair[1] * weight[1];
+    }
+}
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[target_feature(enable = "avx2")]
+unsafe fn pack_windowed_part_avx2(
+    input: &[f64],
+    window: &[f64],
+    real: &mut [f64],
+    imag: &mut [f64],
+) {
+    #[cfg(target_arch = "x86")]
+    use std::arch::x86::*;
+    #[cfg(target_arch = "x86_64")]
+    use std::arch::x86_64::*;
+    let (input, input_tail) = input.as_chunks::<8>();
+    let (window, window_tail) = window.as_chunks::<8>();
+    let (real, real_tail) = real.as_chunks_mut::<4>();
+    let (imag, imag_tail) = imag.as_chunks_mut::<4>();
+    for (((input, window), real), imag) in input.iter().zip(window).zip(real).zip(imag) {
+        // SAFETY: each source/weight chunk has eight values and each output has four.
+        unsafe {
+            let lo = _mm256_mul_pd(
+                _mm256_loadu_pd(input.as_ptr()),
+                _mm256_loadu_pd(window.as_ptr()),
+            );
+            let hi = _mm256_mul_pd(
+                _mm256_loadu_pd(input.as_ptr().add(4)),
+                _mm256_loadu_pd(window.as_ptr().add(4)),
+            );
+            _mm256_storeu_pd(
+                real.as_mut_ptr(),
+                _mm256_permute4x64_pd::<0xd8>(_mm256_unpacklo_pd(lo, hi)),
+            );
+            _mm256_storeu_pd(
+                imag.as_mut_ptr(),
+                _mm256_permute4x64_pd::<0xd8>(_mm256_unpackhi_pd(lo, hi)),
+            );
+        }
+    }
+    for ((pair, weight), (real, imag)) in input_tail
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .zip(window_tail.as_chunks::<2>().0.iter())
+        .zip(real_tail.iter_mut().zip(imag_tail))
+    {
+        *real = pair[0] * weight[0];
+        *imag = pair[1] * weight[1];
+    }
+}
 pub(crate) struct SplitRoots {
     re: Vec<f64>,
     im: Vec<f64>,
@@ -577,6 +682,23 @@ mod tests {
 
     #[test]
     fn rejects_invalid_plans_and_stage_ranges() {
+        for (input, window) in [(7, 8), (8, 7)] {
+            assert!(std::panic::catch_unwind(|| {
+                SplitBuffer::<4>::default().pack_windowed_ring(
+                    &[0.0; 8][..input],
+                    &[0.0; 8][..window],
+                    0,
+                    false,
+                );
+            })
+            .is_err());
+        }
+        for first in [1, 8] {
+            assert!(std::panic::catch_unwind(|| {
+                SplitBuffer::<4>::default().pack_windowed_ring(&[0.0; 8], &[0.0; 8], first, false);
+            })
+            .is_err());
+        }
         assert!(std::panic::catch_unwind(|| {
             SplitBuffer::<64>::default().seed_sparse_real_eight::<4>(&[Complex::default(); 128]);
         })

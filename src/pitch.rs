@@ -280,8 +280,24 @@ impl Fft {
         }
     }
 
+    #[inline(always)]
+    fn forward_windowed_ring(
+        &self,
+        input: &[f64; WINDOW],
+        window: &[f64; WINDOW],
+        first: usize,
+        spectrum: &mut [Complex],
+        work: &mut SplitBuffer<HALF>,
+    ) {
+        assert_eq!(spectrum.len(), BINS);
+        work.pack_windowed_ring(input, window, first, self.vector());
+        self.transform_half(work, false);
+        self.finish_real(spectrum, work);
+    }
+
     /// Real forward FFT: `time[n].re` is the real sequence (imag ignored).
     /// Writes only the nonnegative-frequency bins; inverse_real needs no mirror.
+    #[cfg(test)]
     #[inline(always)]
     fn forward_real(&self, time: &mut [Complex; WINDOW], work: &mut SplitBuffer<HALF>) {
         for n in 0..HALF {
@@ -294,7 +310,7 @@ impl Fft {
             );
         }
         self.transform_half(work, false);
-        self.finish_real(time, work);
+        self.finish_real(&mut time[..BINS], work);
     }
 
     /// The lifter has zeroed all real samples outside +/- CEPSTRUM.
@@ -307,11 +323,12 @@ impl Fft {
         roots.pair::<HALF, 32, 64>(work, vector);
         roots.pair::<HALF, 128, 256>(work, vector);
         roots.pair::<HALF, 512, 1024>(work, vector);
-        self.finish_real(time, work);
+        self.finish_real(&mut time[..BINS], work);
     }
 
     #[inline(always)]
-    fn finish_real(&self, time: &mut [Complex; WINDOW], work: &SplitBuffer<HALF>) {
+    fn finish_real(&self, time: &mut [Complex], work: &SplitBuffer<HALF>) {
+        assert_eq!(time.len(), BINS);
         let z0 = work.get(0);
         time[0] = Complex {
             re: z0.re + z0.im,
@@ -499,7 +516,7 @@ pub struct PitchShifter {
     nominal_advance: Box<[f64; BINS]>,
     input: Box<[f64; WINDOW]>,
     output: Box<[f64; QUEUE]>,
-    spectrum: Box<[Complex; WINDOW]>,
+    spectrum: Box<[Complex; BINS]>,
     shifted: Box<[Complex; WINDOW]>,
     fft_work: Box<SplitBuffer<HALF>>,
     envelope_work: Box<[Complex; WINDOW]>,
@@ -515,7 +532,7 @@ pub struct PitchShifter {
     // bin is advantageous only with four-wide phase math.
     phase_valid: Box<[bool; BINS]>,
     // Match the analysis buffer's size so history can be retained by swapping boxes.
-    previous_spectrum: Box<[Complex; WINDOW]>,
+    previous_spectrum: Box<[Complex; BINS]>,
     #[cfg(test)]
     eager_phase: bool,
     #[cfg(test)]
@@ -574,7 +591,7 @@ impl PitchShifter {
             nominal_advance,
             input: Box::new([0.0; WINDOW]),
             output: Box::new([0.0; QUEUE]),
-            spectrum: Box::new([Complex::default(); WINDOW]),
+            spectrum: Box::new([Complex::default(); BINS]),
             shifted: Box::new([Complex::default(); WINDOW]),
             fft_work: Box::new(SplitBuffer::default()),
             envelope_work: Box::new([Complex::default(); WINDOW]),
@@ -587,7 +604,7 @@ impl PitchShifter {
             phase_result: Box::new([0.0; 2 * BINS]),
             phase: Box::new([0.0; BINS]),
             phase_valid: Box::new([true; BINS]),
-            previous_spectrum: Box::new([Complex::default(); WINDOW]),
+            previous_spectrum: Box::new([Complex::default(); BINS]),
             #[cfg(test)]
             eager_phase: false,
             #[cfg(test)]
@@ -646,14 +663,13 @@ impl PitchShifter {
     #[inline(always)]
     fn frame_inner(&mut self) {
         let clock = self.clock;
-        for i in 0..WINDOW {
-            self.spectrum[i] = Complex {
-                re: self.input[(clock + i) % WINDOW] * self.analysis_window[i],
-                im: 0.0,
-            };
-        }
-        self.fft
-            .forward_real(&mut self.spectrum, &mut self.fft_work);
+        self.fft.forward_windowed_ring(
+            &self.input,
+            &self.analysis_window,
+            clock % WINDOW,
+            self.spectrum.as_mut_slice(),
+            &mut self.fft_work,
+        );
         for i in 0..BINS {
             let value = self.spectrum[i];
             self.magnitude[i] = (value.re * value.re + value.im * value.im).sqrt();
@@ -1059,6 +1075,52 @@ impl PitchShifter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windowed_ring_fft_matches_complex_staging_bits() {
+        let input = std::array::from_fn(|i| (i as f64 * 0.31).sin() * [1e-12, 1.0, 1e6][i % 3]);
+        let window = std::array::from_fn(|i| (i as f64 * 0.17).cos().abs());
+        let sentinel = f64::from_bits(0x7ff8_0000_0000_0123);
+        for vector in [false, true] {
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            let mut fft = Fft::new();
+            #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+            let fft = Fft::new();
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            {
+                fft.avx2 = vector && std::is_x86_feature_detected!("avx2");
+            }
+            for first in [0, 2, 4, 6, 128, 512, WINDOW / 2, WINDOW - 2] {
+                let mut expected = std::array::from_fn(|i| Complex {
+                    re: input[(first + i) % WINDOW] * window[i],
+                    im: 0.0,
+                });
+                let mut actual = [Complex {
+                    re: sentinel,
+                    im: sentinel,
+                }; WINDOW];
+                let mut work = SplitBuffer::default();
+                fft.forward_real(&mut expected, &mut work);
+                fft.forward_windowed_ring(&input, &window, first, &mut actual[..BINS], &mut work);
+                for i in 0..BINS {
+                    assert_eq!(
+                        actual[i].re.to_bits(),
+                        expected[i].re.to_bits(),
+                        "real bin={i}, first={first}, vector={vector}"
+                    );
+                    assert_eq!(
+                        actual[i].im.to_bits(),
+                        expected[i].im.to_bits(),
+                        "imag bin={i}, first={first}, vector={vector}"
+                    );
+                }
+                for value in &actual[BINS..] {
+                    assert_eq!(value.re.to_bits(), sentinel.to_bits());
+                    assert_eq!(value.im.to_bits(), sentinel.to_bits());
+                }
+            }
+        }
+    }
 
     #[test]
     fn sparse_cepstrum_transform_matches_full_fft_and_direct_dft() {
