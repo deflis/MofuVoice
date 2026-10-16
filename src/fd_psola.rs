@@ -9,9 +9,10 @@ use crate::dsp::{complex::Complex, fft::Fft};
 /// Fixed frame size for the first FD-PSOLA implementation. At 48 kHz this
 /// accommodates the longest analysis support used by the current voice range.
 pub(crate) const FRAME: usize = 2048;
-pub(crate) const LATENCY: usize = crate::td_psola::LATENCY;
+pub(crate) const LATENCY: usize = crate::psola_common::LATENCY;
 const _: () = assert!(
-    LATENCY >= crate::td_psola::LOOKAHEAD + 2 * crate::td_psola::MAX_PERIOD + FRAME / 2 + 128
+    LATENCY
+        >= crate::psola_common::LOOKAHEAD + 2 * crate::psola_common::MAX_PERIOD + FRAME / 2 + 128
 );
 
 pub(crate) struct FdFrameTransform {
@@ -19,6 +20,153 @@ pub(crate) struct FdFrameTransform {
     spectrum: Box<[Complex; FRAME]>,
     warped: Box<[Complex; FRAME]>,
     envelope: Box<[f64; FRAME / 2 + 1]>,
+}
+
+/// FD-specific frame analysis and overlap-add state. The shared PSOLA tracker
+/// supplies each source and synthesis mark; TD-PSOLA never owns these buffers.
+pub(crate) struct FdSynthesis {
+    transform: FdFrameTransform,
+    input: Box<[f64; FRAME]>,
+    output: Box<[f64; FRAME]>,
+}
+
+impl FdSynthesis {
+    pub(crate) fn new() -> Self {
+        Self {
+            transform: FdFrameTransform::new(),
+            input: Box::new([0.0; FRAME]),
+            output: Box::new([0.0; FRAME]),
+        }
+    }
+
+    fn grain_impl(
+        &mut self,
+        source: f64,
+        destination: f64,
+        left: f64,
+        right: f64,
+        gain: f64,
+        ratio: f64,
+        preserve_formants: bool,
+        clock: usize,
+        input: &[f64],
+        output: &mut [f64],
+        weights: &mut [f64],
+        coverage: &mut [bool],
+    ) {
+        let half = FRAME / 2;
+        let support = ((left + right).ceil() as usize).clamp(128, half);
+        for i in 0..FRAME {
+            let offset = i as isize - half as isize;
+            if offset.unsigned_abs() > support {
+                self.input[i] = 0.0;
+            } else {
+                let window =
+                    0.5 + 0.5 * (std::f64::consts::PI * offset as f64 / support as f64).cos();
+                self.input[i] =
+                    crate::psola_common::interpolate(input, source + offset as f64) * window;
+            }
+        }
+        self.transform
+            .process_grain(&self.input, &mut self.output, ratio, preserve_formants);
+        let first = (destination - half as f64).floor().max(clock as f64) as usize;
+        let last = (destination + half as f64).ceil() as usize;
+        assert!(
+            first >= clock,
+            "FD-PSOLA grain missed its synthesis deadline"
+        );
+        assert!(
+            last < clock + crate::psola_common::RING,
+            "FD-PSOLA synthesis exceeded its preallocated queue"
+        );
+        for target in first..=last {
+            let frame = (target as f64 - (destination - half as f64))
+                .round()
+                .clamp(0.0, (FRAME - 1) as f64) as usize;
+            let phase = std::f64::consts::TAU * frame as f64 / (FRAME - 1) as f64;
+            let window = 0.5 - 0.5 * phase.cos();
+            let index = target % crate::psola_common::RING;
+            output[index] += self.output[frame] * window * gain;
+            weights[index] += window * window;
+            coverage[index] = true;
+        }
+    }
+}
+
+impl crate::psola_synthesis::PsolaSynthesis for FdSynthesis {
+    fn grain_timing(
+        &self,
+        previous_source_period: f64,
+        source_period: f64,
+        next_source_period: f64,
+        _pitch_ratio: f64,
+        previous_synthesis_period: f64,
+    ) -> crate::psola_synthesis::GrainTiming {
+        let period = source_period;
+        let left =
+            (source_period - previous_source_period).min(if previous_synthesis_period > 0.0 {
+                previous_synthesis_period
+            } else {
+                period
+            });
+        let right = (next_source_period - source_period).min(period);
+        crate::psola_synthesis::GrainTiming {
+            period,
+            left,
+            right,
+        }
+    }
+
+    fn normalize_output(&self, sample: f64, weight: f64) -> f64 {
+        if weight > 1e-12 {
+            sample / weight
+        } else {
+            sample
+        }
+    }
+
+    fn has_unvoiced_transform(&self) -> bool {
+        false
+    }
+
+    fn update_unvoiced(&mut self, _clock: usize, _latency: usize, _input: &[f64]) {}
+
+    fn unvoiced_sample(&self, _index: usize) -> Option<f64> {
+        None
+    }
+
+    fn clear_output_slot(&mut self, _index: usize) {}
+
+    fn grain(
+        &mut self,
+        source: f64,
+        destination: f64,
+        left: f64,
+        right: f64,
+        gain: f64,
+        ratio: f64,
+        preserve_formants: bool,
+        clock: usize,
+        input: &[f64],
+        output: &mut [f64],
+        weights: &mut [f64],
+        coverage: &mut [bool],
+    ) {
+        self.grain_impl(
+            source,
+            destination,
+            left,
+            right,
+            gain,
+            ratio,
+            preserve_formants,
+            clock,
+            input,
+            output,
+            weights,
+            coverage,
+        );
+    }
 }
 
 impl FdFrameTransform {
