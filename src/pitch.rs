@@ -4,6 +4,7 @@
 //! so the fixed delay is SYNTHESIS samples; the neutral setting bypasses exactly.
 #[cfg(test)]
 use crate::dsp::fft_kernel::FftKernel;
+use crate::dsp::phase::wrap;
 use crate::dsp::{
     complex::Complex,
     fft_split::{SplitBuffer, SplitRoots},
@@ -479,21 +480,6 @@ impl Fft {
     }
 }
 
-fn wrap(phase: f64) -> f64 {
-    // Internal phases are bounded (bin advances, window-centre offsets and
-    // wrapped accumulators). Quotient reduction avoids a floating remainder
-    // call for every analysis bin; roundoff is far below the phase tolerance.
-    let shifted = phase + std::f64::consts::PI;
-    let period = std::f64::consts::TAU;
-    let mut remainder = shifted - (shifted / period).floor() * period;
-    if remainder < 0.0 {
-        remainder += period;
-    } else if remainder >= period {
-        remainder -= period;
-    }
-    remainder - std::f64::consts::PI
-}
-
 #[derive(Clone, Copy, Default)]
 struct Lobe {
     first: usize,
@@ -670,7 +656,7 @@ impl PitchShifter {
             self.spectrum.as_mut_slice(),
             &mut self.fft_work,
         );
-        Complex::magnitudes(self.spectrum.as_slice(), self.magnitude.as_mut_slice());
+        Complex::magnitudes(&self.spectrum[..BINS], self.magnitude.as_mut_slice());
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         let vector = self.fft.avx2;
         #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
@@ -746,27 +732,26 @@ impl PitchShifter {
         );
         let mut previous = 0;
         let centre_step = std::f64::consts::TAU * self.phase_center / WINDOW as f64;
-        for &peak in &self.peaks[..count] {
-            // Store phase at the product-Hann centre. A moving peak must retain its
-            // oscillator phase, rather than adopt the unrelated accumulator of its new bin.
-            let input_phase = wrap(self.phase[peak] + centre_step * peak as f64);
+        for (region, &peak) in self.peaks[..count].iter().enumerate() {
             while previous + 1 < self.previous_peak_count
                 && self.previous_peaks[previous + 1].abs_diff(peak)
                     < self.previous_peaks[previous].abs_diff(peak)
             {
                 previous += 1;
             }
-            self.synthesis_phase[peak] = if self.ratio == 1.0
+            self.phase_result[region] = if self.ratio == 1.0
                 || self.previous_peak_count == 0
                 || self.previous_peaks[previous].abs_diff(peak) > 2
             {
-                input_phase
+                self.phase[peak] + centre_step * peak as f64
             } else {
-                wrap(
-                    self.previous_synthesis_phase[self.previous_peaks[previous]]
-                        + self.phase_advance[peak] * self.ratio,
-                )
+                self.previous_synthesis_phase[self.previous_peaks[previous]]
+                    + self.phase_advance[peak] * self.ratio
             };
+        }
+        phase::wrap_in_place(&mut self.phase_result[..count], vector);
+        for (region, &peak) in self.peaks[..count].iter().enumerate() {
+            self.synthesis_phase[peak] = self.phase_result[region];
         }
         self.previous_peaks[..count].copy_from_slice(&self.peaks[..count]);
         self.previous_peak_count = count;
@@ -991,6 +976,7 @@ impl PitchShifter {
         self.phase_advance[bin] = advance + wrap(self.phase[bin] - previous_phase - advance);
     }
 
+    #[inline(always)]
     fn analyze_peaks(&mut self, count: usize, vector: bool) {
         let active = if count == 0 {
             for (i, bin) in self.peaks[..BINS - 2].iter_mut().enumerate() {

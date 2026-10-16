@@ -2,6 +2,57 @@
 //! SIMD uses range reduction and Chebyshev interpolants, without FMA or f32 arithmetic.
 use super::complex::Complex;
 
+#[inline(always)]
+pub(crate) fn wrap(phase: f64) -> f64 {
+    // Internal phases are bounded (bin advances, window-centre offsets and
+    // wrapped accumulators). Quotient reduction avoids a floating remainder
+    // call for every analysis bin; roundoff is far below the phase tolerance.
+    let shifted = phase + std::f64::consts::PI;
+    let period = std::f64::consts::TAU;
+    let mut remainder = shifted - (shifted / period).floor() * period;
+    if remainder < 0.0 {
+        remainder += period;
+    } else if remainder >= period {
+        remainder -= period;
+    }
+    remainder - std::f64::consts::PI
+}
+
+pub(crate) fn wrap_in_place(values: &mut [f64], vector: bool) {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    if vector {
+        // SAFETY: the caller uses the FFT plan's AVX2 detection.
+        unsafe { wrap_avx2(values) };
+        return;
+    }
+    let _ = vector;
+    for value in values {
+        *value = wrap(*value);
+    }
+}
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[target_feature(enable = "avx2")]
+unsafe fn wrap_avx2(values: &mut [f64]) {
+    let (blocks, tail) = values.as_chunks_mut::<4>();
+    for block in blocks {
+        // SAFETY: four checked f64 values. Keep the scalar operation order.
+        unsafe {
+            let pi = _mm256_set1_pd(std::f64::consts::PI);
+            let period = _mm256_set1_pd(std::f64::consts::TAU);
+            let shifted = _mm256_add_pd(_mm256_loadu_pd(block.as_ptr()), pi);
+            let quotient = _mm256_floor_pd(_mm256_div_pd(shifted, period));
+            let remainder = _mm256_sub_pd(shifted, _mm256_mul_pd(quotient, period));
+            let negative = _mm256_cmp_pd::<_CMP_LT_OQ>(remainder, _mm256_setzero_pd());
+            let high = _mm256_cmp_pd::<_CMP_GE_OQ>(remainder, period);
+            let corrected = _mm256_blendv_pd(remainder, _mm256_add_pd(remainder, period), negative);
+            let corrected = _mm256_blendv_pd(corrected, _mm256_sub_pd(remainder, period), high);
+            _mm256_storeu_pd(block.as_mut_ptr(), _mm256_sub_pd(corrected, pi));
+        }
+    }
+    for value in tail {
+        *value = wrap(*value);
+    }
+}
 pub(crate) fn angles(input: &[Complex], output: &mut [f64], vector: bool) {
     assert_eq!(input.len(), output.len());
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -202,6 +253,60 @@ unsafe fn phasors_avx2(input: &[f64], output: &mut [Complex]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn batched_wrapping_matches_scalar_bits_at_boundaries_and_tails() {
+        let mut input = vec![
+            0.0,
+            -0.0,
+            std::f64::consts::PI,
+            -std::f64::consts::PI,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NAN,
+        ];
+        input.extend((0..100_003).map(|i| -16384.0 + 32768.0 * i as f64 / 100_002.0));
+        for period in -2600..=2600 {
+            let edge = period as f64 * std::f64::consts::TAU - std::f64::consts::PI;
+            for offset in -2_i64..=2 {
+                input.push(f64::from_bits(edge.to_bits().wrapping_add_signed(offset)));
+            }
+        }
+        for vector in [false, vector_available()] {
+            let mut actual = input.clone();
+            wrap_in_place(&mut actual, vector);
+            for (&input, actual) in input.iter().zip(actual) {
+                let expected = wrap(input);
+                if expected.is_nan() {
+                    assert!(actual.is_nan());
+                } else {
+                    assert_eq!(actual.to_bits(), expected.to_bits(), "phase={input}");
+                }
+            }
+            for head in 1..=3 {
+                for length in 0..=12 {
+                    let mut buffer = vec![12345.0; head + length + 2];
+                    for i in 0..length {
+                        buffer[head + i] = input[(i * 617 + head) % input.len()];
+                    }
+                    let expected: Vec<_> = buffer[head..head + length]
+                        .iter()
+                        .map(|&v| wrap(v))
+                        .collect();
+                    wrap_in_place(&mut buffer[head..head + length], vector);
+                    assert!(buffer[..head].iter().all(|&v| v == 12345.0));
+                    assert!(buffer[head + length..].iter().all(|&v| v == 12345.0));
+                    for (&actual, expected) in buffer[head..head + length].iter().zip(expected) {
+                        if expected.is_nan() {
+                            assert!(actual.is_nan());
+                        } else {
+                            assert_eq!(actual.to_bits(), expected.to_bits());
+                        }
+                    }
+                }
+            }
+        }
+    }
     fn vector_available() -> bool {
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
