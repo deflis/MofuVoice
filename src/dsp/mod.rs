@@ -6,6 +6,7 @@ pub(crate) mod envelope;
 pub(crate) mod fft;
 pub(crate) mod fft_kernel;
 pub(crate) mod gain;
+pub(crate) mod phase;
 mod sample;
 pub(crate) mod window;
 

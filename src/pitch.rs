@@ -2,7 +2,7 @@
 //! All FFT tables, windows, and overlap storage are allocated before streaming.
 //! Wet audio uses a long analysis window and a short right-aligned synthesis window,
 //! so the fixed delay is SYNTHESIS samples; the neutral setting bypasses exactly.
-use crate::dsp::{complex::Complex, fft_kernel::FftKernel, window::hann, Sample};
+use crate::dsp::{complex::Complex, fft_kernel::FftKernel, phase, window::hann, Sample};
 use std::{error::Error, fmt};
 #[path = "pitch_math.rs"]
 mod math;
@@ -592,6 +592,16 @@ fn wrap(phase: f64) -> f64 {
     remainder - std::f64::consts::PI
 }
 
+#[derive(Clone, Copy, Default)]
+struct Lobe {
+    first: usize,
+    last: usize,
+    offset: isize,
+    fraction: f64,
+    rotation: Complex,
+    peak: usize,
+}
+
 pub struct PitchShifter {
     fft: Fft,
     analysis_window: Box<[f64; WINDOW]>,
@@ -610,13 +620,16 @@ pub struct PitchShifter {
     envelope_work: Box<[Complex; WINDOW]>,
     magnitude: Box<[f64; BINS]>,
     gains: Box<[f64; BINS]>,
+    lobes: Box<[Lobe; BINS]>,
+    rotation_angles: Box<[f64; BINS]>,
+    rotations: Box<[Complex; BINS]>,
     phase: Box<[f64; BINS]>,
-    /// Whether a bin's phase was calculated in the immediately preceding frame.
+    // Portable processors retain peak-only scalar analysis; evaluating every
+    // bin is advantageous only with four-wide phase math.
     phase_valid: Box<[bool; BINS]>,
     previous_spectrum: Box<[Complex; BINS]>,
     #[cfg(test)]
     eager_phase: bool,
-    #[cfg(test)]
     previous_phase: Box<[f64; BINS]>,
     synthesis_phase: Box<[f64; BINS]>,
     previous_synthesis_phase: Box<[f64; BINS]>,
@@ -678,12 +691,14 @@ impl PitchShifter {
             envelope_work: Box::new([Complex::default(); WINDOW]),
             magnitude: Box::new([0.0; BINS]),
             gains: Box::new([0.0; BINS]),
+            lobes: Box::new([Lobe::default(); BINS]),
+            rotation_angles: Box::new([0.0; BINS]),
+            rotations: Box::new([Complex::default(); BINS]),
             phase: Box::new([0.0; BINS]),
             phase_valid: Box::new([true; BINS]),
             previous_spectrum: Box::new([Complex::default(); BINS]),
             #[cfg(test)]
             eager_phase: false,
-            #[cfg(test)]
             previous_phase: Box::new([0.0; BINS]),
             synthesis_phase: Box::new([0.0; BINS]),
             previous_synthesis_phase: Box::new([0.0; BINS]),
@@ -788,39 +803,40 @@ impl PitchShifter {
                 count += 1;
             }
         }
-        // Only peak phases drive lobe translation and phase locking. Retain the
-        // complex history so a newly detected/moving peak still gets the exact
-        // previous-frame phase of its current bin. No magnitude threshold or
-        // approximate angle is needed, including for quiet speech and noise.
+        // Batch independent phases, including bins that may become peaks in the
+        // next frame. This replaces scalar atan2 calls and complex history with
+        // four-wide double-precision arithmetic and a real phase history.
         #[cfg(test)]
         let eager = self.eager_phase;
         #[cfg(not(test))]
         let eager = false;
-        if eager {
-            #[cfg(test)]
-            for i in 0..BINS {
-                let value = self.spectrum[i];
-                self.phase[i] = value.im.atan2(value.re);
-                let advance = self.nominal_advance[i];
-                self.phase_advance[i] =
-                    advance + wrap(self.phase[i] - self.previous_phase[i] - advance);
-                self.previous_phase[i] = self.phase[i];
-            }
-        } else if count == 0 {
+        let batched = vector || eager;
+        if batched {
+            phase::angles(
+                &self.spectrum[..BINS],
+                self.phase.as_mut_slice(),
+                vector && !eager,
+            );
+        }
+        if count == 0 {
             // A spectrum without local maxima uses each bin as its own peak.
             for i in 1..BINS - 1 {
-                self.analyze_phase(i);
+                self.analyze_phase(i, batched);
             }
         } else {
             for p in 0..count {
-                self.analyze_phase(self.peaks[p]);
+                self.analyze_phase(self.peaks[p], batched);
             }
         }
-        self.previous_spectrum
-            .copy_from_slice(&self.spectrum[..BINS]);
-        self.phase_valid.fill(count == 0 || eager);
-        for &peak in &self.peaks[..count] {
-            self.phase_valid[peak] = true;
+        if batched {
+            self.previous_phase.copy_from_slice(self.phase.as_slice());
+        } else {
+            self.previous_spectrum
+                .copy_from_slice(&self.spectrum[..BINS]);
+            self.phase_valid.fill(count == 0);
+            for &peak in &self.peaks[..count] {
+                self.phase_valid[peak] = true;
+            }
         }
         self.previous_synthesis_phase
             .copy_from_slice(self.synthesis_phase.as_slice());
@@ -866,6 +882,15 @@ impl PitchShifter {
             let ratio_delta = self.ratio - 1.0;
             let preserve = self.preserve_formants;
             let inverse_formant = 1.0 / self.formant_ratio;
+            for (region, &peak) in self.peaks[..count].iter().enumerate() {
+                self.rotation_angles[region] =
+                    self.synthesis_phase[peak] - self.phase[peak] - centre_step * peak as f64;
+            }
+            phase::unit_phasors(
+                &self.rotation_angles[..count],
+                &mut self.rotations[..count],
+                vector && !eager,
+            );
             let relative = |offset: isize| {
                 let value = self.centre_phasor[offset.unsigned_abs()];
                 if offset < 0 {
@@ -878,6 +903,10 @@ impl PitchShifter {
                 }
             };
             let mut start = if dc_lobe { 2 } else { 1 };
+            let mut lobe_count = 0;
+            if preserve {
+                self.gains.fill(0.0);
+            }
             for region in 0..if count == 0 { BINS - 2 } else { count } {
                 let peak = if count == 0 {
                     region + 1
@@ -902,10 +931,7 @@ impl PitchShifter {
                 let rotation = if count == 0 {
                     Complex { re: 1.0, im: 0.0 }
                 } else {
-                    Complex::polar(
-                        1.0,
-                        self.synthesis_phase[peak] - self.phase[peak] - centre_step * peak as f64,
-                    )
+                    self.rotations[region]
                 };
                 // Clip the source range before indexing rotation tables. Entire
                 // lobes can fall outside the positive-frequency synthesis range.
@@ -915,10 +941,15 @@ impl PitchShifter {
                 if first >= last {
                     continue;
                 }
-                let lower_rotation = rotation.mul(relative(offset));
-                let upper_rotation = rotation.mul(relative(offset + 1));
-                let weighted_lower = lower_rotation.scale(1.0 - fraction);
-                let weighted_upper = upper_rotation.scale(fraction);
+                self.lobes[lobe_count] = Lobe {
+                    first,
+                    last,
+                    offset,
+                    fraction,
+                    rotation,
+                    peak,
+                };
+                lobe_count += 1;
                 if preserve {
                     if self.formant_ratio == 1.0 {
                         let target = (first as isize + offset) as usize;
@@ -949,8 +980,27 @@ impl PitchShifter {
                             };
                         }
                     }
-                    math::exp(&mut self.gains[first..last], vector);
                 }
+            }
+            // A lobe often contains fewer than four bins. Batch all independent
+            // corrections so SIMD does not devolve into scalar exp tails per peak.
+            // Unused bins have log-gain zero and do not enter synthesis.
+            if preserve {
+                math::exp(self.gains.as_mut_slice(), vector);
+            }
+            for lobe in &self.lobes[..lobe_count] {
+                let Lobe {
+                    first,
+                    last,
+                    offset,
+                    fraction,
+                    rotation,
+                    peak,
+                } = *lobe;
+                #[cfg(not(test))]
+                let _ = peak;
+                let weighted_lower = rotation.mul(relative(offset)).scale(1.0 - fraction);
+                let weighted_upper = rotation.mul(relative(offset + 1)).scale(fraction);
                 for i in first..last {
                     let lower = i as isize + offset;
                     let gain = if preserve { self.gains[i] } else { 1.0 };
@@ -1021,17 +1071,20 @@ impl PitchShifter {
     }
 
     #[inline]
-    fn analyze_phase(&mut self, bin: usize) {
-        let value = self.spectrum[bin];
-        let previous = self.previous_spectrum[bin];
-        let previous_phase = if self.phase_valid[bin] {
-            self.phase[bin]
-        } else {
-            previous.im.atan2(previous.re)
-        };
-        self.phase[bin] = value.im.atan2(value.re);
+    fn analyze_phase(&mut self, bin: usize, batched: bool) {
+        if !batched {
+            let previous = self.previous_spectrum[bin];
+            self.previous_phase[bin] = if self.phase_valid[bin] {
+                self.phase[bin]
+            } else {
+                previous.im.atan2(previous.re)
+            };
+            let value = self.spectrum[bin];
+            self.phase[bin] = value.im.atan2(value.re);
+        }
         let advance = self.nominal_advance[bin];
-        self.phase_advance[bin] = advance + wrap(self.phase[bin] - previous_phase - advance);
+        self.phase_advance[bin] =
+            advance + wrap(self.phase[bin] - self.previous_phase[bin] - advance);
     }
 
     /// Equal-length blocks; callback storage and FFT tables are never allocated here.
@@ -1195,7 +1248,7 @@ mod tests {
     }
 
     #[test]
-    fn peak_only_phase_analysis_matches_eager_output_bits() {
+    fn batched_phase_analysis_matches_system_reference() {
         let mut seed = 17_u32;
         let input: Vec<f32> = (0..16_384)
             .map(|i| {
@@ -1233,7 +1286,9 @@ mod tests {
                     for chunk in input.chunks(127) {
                         lazy.process_block(chunk, &mut actual[..chunk.len()]);
                         eager.process_block(chunk, &mut expected[..chunk.len()]);
-                        assert_eq!(actual.map(f32::to_bits), expected.map(f32::to_bits));
+                        for (&actual, &expected) in actual.iter().zip(&expected) {
+                            assert!((actual - expected).abs() < 1e-7);
+                        }
                     }
                 }
             }
