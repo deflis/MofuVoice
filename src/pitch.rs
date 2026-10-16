@@ -514,7 +514,8 @@ pub struct PitchShifter {
     // Portable processors retain peak-only scalar analysis; evaluating every
     // bin is advantageous only with four-wide phase math.
     phase_valid: Box<[bool; BINS]>,
-    previous_spectrum: Box<[Complex; BINS]>,
+    // Match the analysis buffer's size so history can be retained by swapping boxes.
+    previous_spectrum: Box<[Complex; WINDOW]>,
     #[cfg(test)]
     eager_phase: bool,
     #[cfg(test)]
@@ -586,7 +587,7 @@ impl PitchShifter {
             phase_result: Box::new([0.0; 2 * BINS]),
             phase: Box::new([0.0; BINS]),
             phase_valid: Box::new([true; BINS]),
-            previous_spectrum: Box::new([Complex::default(); BINS]),
+            previous_spectrum: Box::new([Complex::default(); WINDOW]),
             #[cfg(test)]
             eager_phase: false,
             #[cfg(test)]
@@ -722,14 +723,14 @@ impl PitchShifter {
                 self.analyze_phase(self.peaks[p]);
             }
         }
-        self.previous_spectrum
-            .copy_from_slice(&self.spectrum[..BINS]);
         self.phase_valid.fill(count == 0 || eager);
         for &peak in &self.peaks[..count] {
             self.phase_valid[peak] = true;
         }
-        self.previous_synthesis_phase
-            .copy_from_slice(self.synthesis_phase.as_slice());
+        std::mem::swap(
+            &mut self.previous_synthesis_phase,
+            &mut self.synthesis_phase,
+        );
         let mut previous = 0;
         let centre_step = std::f64::consts::TAU * self.phase_center / WINDOW as f64;
         for &peak in &self.peaks[..count] {
@@ -960,6 +961,7 @@ impl PitchShifter {
             self.output[(clock + i - start) % QUEUE] +=
                 self.shifted[i].re * self.synthesis_window[i];
         }
+        std::mem::swap(&mut self.previous_spectrum, &mut self.spectrum);
     }
 
     #[inline]
