@@ -11,10 +11,15 @@ export function useAutoLevelSettings() {
     level.setMaxGainDb(levelDefaults.maxGainDb);
     level.setFloorDb(levelDefaults.floorDb);
     level.setResponseMs(levelDefaults.responseMs);
+  }
+  function resetCompressor() {
+    if (!levelDefaults) {
+      return;
+    }
     level.setThresholdDb(levelDefaults.thresholdDb);
     level.setRatio(levelDefaults.ratio);
     level.setAttackMs(levelDefaults.attackMs);
     level.setReleaseMs(levelDefaults.releaseMs);
   }
-  return { level, levelDefaults, resetLevel };
+  return { level, levelDefaults, resetLevel, resetCompressor };
 }

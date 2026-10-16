@@ -837,6 +837,7 @@ mod tests {
         .unwrap();
         state.dsp.get_mut().level = crate::level::LevelSettings {
             enabled: true,
+            compressor_enabled: true,
             ..Default::default()
         }
         .build()

@@ -26,6 +26,7 @@ fn main() {
         for _ in 0..31 {
             let mut dsp = LevelSettings {
                 enabled: true,
+                compressor_enabled: true,
                 ratio,
                 ..Default::default()
             }

@@ -59,6 +59,7 @@ export const settings = {
   },
   level: {
     enabled: false,
+    compressorEnabled: false,
     targetDb: -18,
     maxGainDb: 6,
     floorDb: -55,
