@@ -3,7 +3,7 @@
 use crate::{
     dsp::{
         envelope::update_rate,
-        gain::{amplitude, amplitude_db},
+        gain::{amplitude, amplitude_db, power, upper_db_boundary},
         Sample,
     },
     RATE,
@@ -115,6 +115,12 @@ impl LevelSettings {
         Ok(AutoLevel {
             settings: self,
             compression_start: amplitude(self.threshold_db - 3.0),
+            floor_amplitude: upper_db_boundary(amplitude(self.floor_db), self.floor_db, |v| {
+                amplitude_db(v, 1e-12)
+            }),
+            floor_power: upper_db_boundary(power(self.floor_db), self.floor_db, |v| {
+                amplitude_db(v.sqrt(), 1e-12)
+            }),
             power: 0.0,
             peak: 0.0,
             level_gain_db: 0.0,
@@ -149,6 +155,8 @@ fn reduction(level: f64, threshold: f64, ratio: f64) -> f64 {
 pub struct AutoLevel {
     settings: LevelSettings,
     compression_start: f64,
+    floor_amplitude: f64,
+    floor_power: f64,
     power: f64,
     peak: f64,
     level_gain_db: f64,
@@ -188,10 +196,8 @@ impl AutoLevel {
             };
             if self.settings.enabled {
                 self.power += (input * input - self.power) * self.rms_rate;
-                let rms_db = amplitude_db(self.power.sqrt(), 1e-12);
-                if rms_db > self.settings.floor_db
-                    && amplitude_db(input.abs(), 1e-12) > self.settings.floor_db
-                {
+                if self.power > self.floor_power && input.abs() > self.floor_amplitude {
+                    let rms_db = amplitude_db(self.power.sqrt(), 1e-12);
                     let target =
                         (self.settings.target_db - rms_db).clamp(-18.0, self.settings.max_gain_db);
                     self.level_gain_db += (target - self.level_gain_db) * self.level_rate;
@@ -230,9 +236,39 @@ impl AutoLevel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn floor_comparisons_match_db_predicates_at_ulp_boundaries() {
+        for value in -9000..=-3000 {
+            let settings = LevelSettings {
+                enabled: true,
+                floor_db: value as f64 / 100.0,
+                ..Default::default()
+            };
+            let dsp = settings.build().unwrap();
+            for offset in -64_i64..=64 {
+                let amplitude =
+                    f64::from_bits(dsp.floor_amplitude.to_bits().wrapping_add_signed(offset));
+                let power = f64::from_bits(dsp.floor_power.to_bits().wrapping_add_signed(offset));
+                assert_eq!(
+                    amplitude > dsp.floor_amplitude,
+                    amplitude_db(amplitude, 1e-12) > settings.floor_db,
+                    "amplitude floor={}, offset={offset}",
+                    settings.floor_db,
+                );
+                assert_eq!(
+                    power > dsp.floor_power,
+                    amplitude_db(power.sqrt(), 1e-12) > settings.floor_db,
+                    "power floor={}, offset={offset}",
+                    settings.floor_db,
+                );
+            }
+        }
+    }
     // Retain the former sample loop as an independent streaming reference.
     impl AutoLevel {
         fn process_reference<T: Sample>(&mut self, samples: &mut [T]) {
+            let amplitude = |db: f64| 10.0_f64.powf(db / 20.0);
             if !self.settings.enabled {
                 return;
             } // Preserve every bypass bit, including NaNs.
