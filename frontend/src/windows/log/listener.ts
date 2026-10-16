@@ -23,11 +23,17 @@ function receive(message: WindowMessage) {
       throw new Error(`ログ画面で不正な通知を受信しました: ${message.type}`);
   }
 }
+export function activeLogConnection() {
+  return windowConnection;
+}
 export function connectLogWindow() {
-  void windowConnection?.close().catch(reportError);
+  const previous = windowConnection?.close();
   void setLogging(false);
   useLogStore.getState().clear();
   windowConnection = connectWindow(receive, reportError);
+  void previous?.catch((error: unknown) => {
+    console.error(error);
+  });
   return windowConnection;
 }
 export function setLogging(logging: boolean) {

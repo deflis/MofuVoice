@@ -485,18 +485,9 @@ fn disconnect_window(
     state: State<'_, DesktopState>,
 ) -> Result<(), String> {
     let mut desktop = state.lock().map_err(|error| error.to_string())?;
-    if desktop.streams.disconnect(window.label(), &connection_id)
-        && window.label() == "settings"
-        && desktop.close_requests.pending
-    {
-        desktop.close_requests.cancel();
-        desktop.streams.send(
-            "main",
-            WindowMessage::Error {
-                error: "設定画面との接続が切れたため、終了を中止しました。".into(),
-            },
-        )?;
-    }
+    // Keep a pending application close across settings remounts so reconnect can
+    // re-send ApplicationClose; only Destroyed / explicit cancel aborts it.
+    let _ = desktop.streams.disconnect(window.label(), &connection_id);
     Ok(())
 }
 
@@ -744,7 +735,7 @@ async fn open_spectrum() -> Result<(), String> {
 }
 #[tauri::command]
 async fn close_application(app: tauri::AppHandle) -> Result<(), String> {
-    {
+    let mut session = {
         let state = app.state::<DesktopState>();
         let mut desktop = state.lock().map_err(|error| error.to_string())?;
         if desktop.closing {
@@ -753,13 +744,12 @@ async fn close_application(app: tauri::AppHandle) -> Result<(), String> {
         let options = desktop.settings.options()?;
         gui_settings::save(&desktop.path, &options).map_err(|error| error.to_string())?;
         desktop.closing = true;
+        desktop.close_requests.cancel();
         desktop.session.stop();
-    }
-    let mut session = {
-        let state = app.state::<DesktopState>();
-        let mut desktop = state.lock().map_err(|error| error.to_string())?;
         std::mem::take(&mut desktop.session)
     };
+    // After `closing` is set and the session is taken, failure is terminal: the
+    // status worker exits on `closing`, and the session cannot be restored.
     tauri::async_runtime::spawn_blocking(move || session.shutdown())
         .await
         .map_err(|error| error.to_string())?;
@@ -901,8 +891,12 @@ pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
                                     desktop.close_requests.cancel();
                                     return Err(error);
                                 }
+                                Ok(ClosePlan::None)
+                            } else {
+                                // Settings already received ApplicationClose but never finished;
+                                // a second close discards the draft and exits.
+                                Ok(ClosePlan::ShutdownWithPersisted)
                             }
-                            Ok(ClosePlan::None)
                         } else {
                             // Settings WebView exists but its channel is gone; do not block
                             // shutdown on a draft save that can never complete.
@@ -920,6 +914,9 @@ pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
                 })();
                 match result {
                     Ok(ClosePlan::ShutdownWithPersisted) => {
+                        if let Ok(mut desktop) = state.lock() {
+                            desktop.close_requests.cancel();
+                        }
                         if let Some(settings) = app.get_webview_window("settings") {
                             let _ = settings.destroy();
                         }

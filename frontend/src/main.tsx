@@ -2,9 +2,9 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import "./styles.css";
-import { connectMainWindow } from "./windows/main/listener";
-import { connectSettingsWindow } from "./windows/settings/listener";
-import { connectLogWindow, setLogging } from "./windows/log/listener";
+import { activeMainConnection, connectMainWindow } from "./windows/main/listener";
+import { activeSettingsConnection, connectSettingsWindow } from "./windows/settings/listener";
+import { activeLogConnection, connectLogWindow, setLogging } from "./windows/log/listener";
 const windowKind = new URLSearchParams(window.location.search).get("window");
 function connectCurrentWindow() {
   if (windowKind === "settings") {
@@ -15,14 +15,25 @@ function connectCurrentWindow() {
   }
   return connectMainWindow();
 }
-const connection = connectCurrentWindow();
+function activeConnection() {
+  if (windowKind === "settings") {
+    return activeSettingsConnection();
+  }
+  if (windowKind === "log") {
+    return activeLogConnection();
+  }
+  return activeMainConnection();
+}
+connectCurrentWindow();
 window.addEventListener(
   "pagehide",
   () => {
     if (windowKind === "log") {
       void setLogging(false);
     }
-    void connection.close().catch((error: unknown) => console.error(error));
+    void activeConnection()
+      ?.close()
+      .catch((error: unknown) => console.error(error));
   },
   { once: true },
 );

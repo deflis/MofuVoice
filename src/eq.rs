@@ -13,7 +13,7 @@ pub const MAX_BANDS: usize = 16;
 pub fn band_index(flag: &str) -> Option<usize> {
     let number = flag.strip_prefix("--eq-band")?;
     let index = number.parse::<usize>().ok()?.checked_sub(1)?;
-    (number == (index + 1).to_string()).then_some(index)
+    (number == (index + 1).to_string() && index < MAX_BANDS).then_some(index)
 }
 pub fn is_flag(flag: &str) -> bool {
     FLAGS.contains(&flag) || band_index(flag).is_some()
@@ -260,6 +260,11 @@ mod tests {
         }
         .build()
         .is_err());
+        assert_eq!(
+            band_index(&format!("--eq-band{MAX_BANDS}")),
+            Some(MAX_BANDS - 1)
+        );
+        assert_eq!(band_index(&format!("--eq-band{}", MAX_BANDS + 1)), None);
     }
     #[test]
     fn neutral_and_disabled_preserve_bits() {

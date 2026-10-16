@@ -69,7 +69,7 @@ export function NoiseGateSettings() {
             <label>
               アタック（ms）
               <NumberInput
-                min="0"
+                min="0.1"
                 step="any"
                 required
                 value={attackMs}
@@ -79,7 +79,7 @@ export function NoiseGateSettings() {
             <label>
               リリース（ms）
               <NumberInput
-                min="0"
+                min="0.1"
                 step="any"
                 required
                 value={releaseMs}
