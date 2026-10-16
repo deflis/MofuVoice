@@ -52,11 +52,17 @@ fn td_psola_keeps_voiced_glides_phase_continuous() {
 
 fn power(signal: &[f32], frequency: f64, rate: u32) -> f64 {
     let (mut re, mut im) = (0.0, 0.0);
+    let step = std::f64::consts::TAU * frequency / rate as f64;
+    let (cos_step, sin_step) = (step.cos(), step.sin());
+    let (mut phase_re, mut phase_im) = (1.0, 0.0);
     for (i, &value) in signal.iter().enumerate() {
-        let angle = std::f64::consts::TAU * frequency * i as f64 / rate as f64;
         let window = 0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / signal.len() as f64).cos();
-        re += value as f64 * window * angle.cos();
-        im += value as f64 * window * angle.sin();
+        re += value as f64 * window * phase_re;
+        im += value as f64 * window * phase_im;
+        (phase_re, phase_im) = (
+            phase_re * cos_step - phase_im * sin_step,
+            phase_re * sin_step + phase_im * cos_step,
+        );
     }
     re * re + im * im
 }
@@ -123,6 +129,32 @@ fn td_psola_handles_voicing_boundaries_retargeting_and_flush_without_stale_grain
     let mut output = vec![0.0; input.len()];
     dsp.process_block(&input, &mut output);
     assert_eq!(&input[1024..], &output[1024..]);
+}
+
+#[test]
+fn resampled_td_psola_handles_voicing_boundaries_and_flushes_cleanly() {
+    let mut seed = 19_u32;
+    let input: Vec<f32> = (0..48000)
+        .map(|i| {
+            let phase = std::f64::consts::TAU * 113.0 * i as f64 / 48000.0;
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            match i / 12000 {
+                0 => 0.0,
+                1 | 3 => (0.1 * phase.cos() + 0.03 * (3.0 * phase).cos()) as f32,
+                _ => (0.03 * (seed as f64 / u32::MAX as f64 - 0.5)) as f32,
+            }
+        })
+        .collect();
+    let mut dsp = PitchShifter::new(7.0, true, 2.53, PitchAlgorithm::TdPsolaResampled).unwrap();
+    let mut output = vec![0.0; input.len()];
+    for pitch in [7.0, -12.0, 12.0] {
+        dsp.set_semitones(pitch).unwrap();
+        dsp.process_block(&input, &mut output);
+        assert!(output.iter().all(|x| x.is_finite() && x.abs() <= 1.0));
+    }
+    let silence = vec![0.0_f32; 20000];
+    dsp.process_block(&silence, &mut output[..silence.len()]);
+    assert!(output[12000..silence.len()].iter().all(|&x| x == 0.0));
 }
 
 #[test]
@@ -210,11 +242,22 @@ fn td_psola_formant_settings_and_pipeline_latency_are_validated() {
     )
     .is_err());
     assert_eq!(PitchAlgorithm::TdPsola.latency(), 4608);
+    let resampled = Options::parse(
+        [
+            "--pitch-algorithm",
+            "td-psola-resampled",
+            "--formant-shift",
+            "2",
+        ]
+        .map(String::from),
+    )
+    .unwrap();
+    assert_eq!(resampled.pitch.latency(), 4608);
     assert_eq!(PitchAlgorithm::PhaseLocked.latency(), 512);
 }
 
 #[test]
-fn hybrid_formant_stage_keeps_td_pitch_and_moves_vowel_resonance() {
+fn resampled_grains_keep_td_pitch_and_move_vowel_resonance() {
     for rate in SAMPLE_RATES {
         let input: Vec<f32> = (0..rate as usize)
             .map(|i| {
@@ -232,7 +275,8 @@ fn hybrid_formant_stage_keeps_td_pitch_and_moves_vowel_resonance() {
         for pitch in [-3.0, 7.0, 12.0] {
             for shift in [-4.0, 2.53, 6.0] {
                 let mut dsp =
-                    PitchShifter::new(pitch, true, shift, PitchAlgorithm::TdPsola).unwrap();
+                    PitchShifter::new(pitch, true, shift, PitchAlgorithm::TdPsolaResampled)
+                        .unwrap();
                 let mut output = vec![0.0; input.len()];
                 dsp.process_block(&input, &mut output);
                 let signal = &output[16384..];
@@ -243,7 +287,7 @@ fn hybrid_formant_stage_keeps_td_pitch_and_moves_vowel_resonance() {
                     .filter(|f| (600.0..3500.0).contains(f))
                     .max_by(|&a, &b| power(signal, a, rate).total_cmp(&power(signal, b, rate)))
                     .unwrap();
-                eprintln!("hybrid rate={rate}, pitch={pitch}, shift={shift}: resonance={peak}, expected={expected_resonance}");
+                eprintln!("resampled TD rate={rate}, pitch={pitch}, shift={shift}: resonance={peak}, expected={expected_resonance}");
                 assert!((peak - expected_resonance).abs() < 280.0);
                 // A harmonic near the formant stays on the TD-PSOLA frequency grid.
                 let measured = (-8..=8)
@@ -258,7 +302,7 @@ fn hybrid_formant_stage_keeps_td_pitch_and_moves_vowel_resonance() {
 }
 
 #[test]
-fn hybrid_is_block_independent_during_pitch_changes() {
+fn resampled_grains_are_block_independent_during_pitch_changes() {
     let input: Vec<f32> = (0..24000)
         .map(|i| {
             let p = std::f64::consts::TAU * 113.0 * i as f64 / 48000.0;
@@ -267,7 +311,7 @@ fn hybrid_is_block_independent_during_pitch_changes() {
         .collect();
     let mut reference = None;
     for block in [24000, 1, 127, 512] {
-        let mut dsp = PitchShifter::new(7.0, true, 2.53, PitchAlgorithm::TdPsola).unwrap();
+        let mut dsp = PitchShifter::new(7.0, true, 2.53, PitchAlgorithm::TdPsolaResampled).unwrap();
         for pitch in [7.0, 0.0, -3.0] {
             dsp.set_semitones(pitch).unwrap();
             let mut output = vec![0.0; input.len()];
@@ -289,38 +333,111 @@ fn hybrid_is_block_independent_during_pitch_changes() {
 }
 
 #[test]
-fn hybrid_formant_only_path_has_the_reported_combined_delay() {
-    // Random noise is unvoiced: TD-PSOLA must copy it with its exact delay.
-    // Comparing against the standalone formant processor also checks that the
-    // hybrid path uses unity spectral pitch ratio instead of shifting twice.
-    let mut seed = 23_u32;
-    let input: Vec<f32> = (0..32000)
-        .map(|_| {
-            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
-            (0.02 * (seed as f64 / u32::MAX as f64 - 0.5)) as f32
+fn resampling_moves_unvoiced_resonance_without_changing_duration() {
+    for rate in SAMPLE_RATES {
+        let mut seed = 91_u32;
+        let radius = 0.94;
+        let coefficient = 2.0 * radius * (std::f64::consts::TAU * 1800.0 / rate as f64).cos();
+        let (mut a, mut b) = (0.0, 0.0);
+        let input: Vec<f32> = (0..rate as usize)
+            .map(|_| {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                let x = 0.005 * (seed as f64 / u32::MAX as f64 - 0.5) + coefficient * a
+                    - radius * radius * b;
+                b = a;
+                a = x;
+                x as f32
+            })
+            .collect();
+        let averaged_power = |signal: &[f32], frequency| {
+            signal
+                .windows(4096)
+                .step_by(2048)
+                .take(6)
+                .map(|block| {
+                    (-2..=2)
+                        .map(|bin| power(block, frequency + bin as f64 * 25.0, rate))
+                        .sum::<f64>()
+                })
+                .sum::<f64>()
+        };
+        let input_peak = (20..=180)
+            .map(|i| i as f64 * 25.0)
+            .max_by(|&a, &b| {
+                averaged_power(&input[16384..], a).total_cmp(&averaged_power(&input[16384..], b))
+            })
+            .unwrap();
+        for shift in [-12.0, -4.0, 2.53, 12.0] {
+            let mut output = vec![0.0; input.len()];
+            PitchShifter::new(0.0, true, shift, PitchAlgorithm::TdPsolaResampled)
+                .unwrap()
+                .process_block(&input, &mut output);
+            // Average multiple short spectra and neighbouring frequencies: a
+            // noise periodogram's narrow maxima do not track its broad peak.
+            let expected = input_peak * pitch_ratio(shift).unwrap();
+            let peak = (20..=180)
+                .map(|i| i as f64 * 25.0)
+                .max_by(|&a, &b| {
+                    averaged_power(&output[16384..], a)
+                        .total_cmp(&averaged_power(&output[16384..], b))
+                })
+                .unwrap();
+            eprintln!("unvoiced rate={rate}, shift={shift}, input resonance={input_peak}, output resonance={peak}, expected={expected}");
+            assert!((peak - expected).abs() < 350.0);
+            assert!(output.iter().all(|x| x.is_finite() && x.abs() < 1.0));
+        }
+    }
+}
+
+#[test]
+fn resampled_grains_keep_fixed_delay_and_flush_without_drifting() {
+    let impulse = 16384;
+    for shift in [-12.0, -4.0, 2.53, 12.0] {
+        let mut input = vec![0.0_f32; 48000];
+        input[impulse] = 0.25;
+        let mut output = vec![0.0; input.len()];
+        let mut dsp =
+            PitchShifter::new(0.0, true, shift, PitchAlgorithm::TdPsolaResampled).unwrap();
+        dsp.process_block(&input, &mut output);
+        let energy: f64 = output.iter().map(|&x| (x as f64).powi(2)).sum();
+        let centroid: f64 = output
+            .iter()
+            .enumerate()
+            .map(|(i, &x)| i as f64 * (x as f64).powi(2))
+            .sum::<f64>()
+            / energy;
+        eprintln!("formant={shift}: impulse centroid={centroid}");
+        assert!((centroid - (impulse + 4608) as f64).abs() < 2.0);
+        assert!(output[impulse + 4608 + 1024..].iter().all(|&x| x == 0.0));
+        for pitch in [-12.0, 12.0, 0.0] {
+            dsp.set_semitones(pitch).unwrap();
+            let silence = vec![0.0_f32; 48000];
+            dsp.process_block(&silence, &mut output);
+            assert!(output.iter().all(|&x| x == 0.0));
+        }
+    }
+}
+
+#[test]
+fn extreme_independent_ratios_remain_finite_across_many_ring_wraps() {
+    let input: Vec<f32> = (0..96000)
+        .map(|i| {
+            let p = std::f64::consts::TAU * 83.0 * i as f64 / 48000.0;
+            if i % 24000 < 16000 {
+                (0.07 * p.cos() + 0.03 * (3.0 * p).cos()) as f32
+            } else {
+                0.0
+            }
         })
         .collect();
-    let delay = PitchAlgorithm::TdPsola.latency();
-    let delayed: Vec<_> = (0..input.len())
-        .map(|i| if i < delay { 0.0 } else { input[i - delay] })
-        .collect();
-    let mut expected = vec![0.0; input.len()];
-    PitchShifter::new(0.0, true, 2.53, PitchAlgorithm::PhaseLocked)
-        .unwrap()
-        .process_block(&delayed, &mut expected);
-    for pitch in [0.0, 7.0, -12.0] {
-        let mut actual = vec![0.0; input.len()];
-        PitchShifter::new(pitch, true, 2.53, PitchAlgorithm::TdPsola)
-            .unwrap()
-            .process_block(&input, &mut actual);
-        let error = expected
-            .iter()
-            .zip(&actual)
-            .map(|(a, b)| (a - b).abs())
-            .fold(0.0_f32, f32::max);
-        assert!(
-            error < 1e-6,
-            "pitch={pitch}, delayed spectral error={error}"
-        );
+    for shift in [-12.0, 12.0] {
+        for pitch in [-12.0, 12.0] {
+            let mut dsp =
+                PitchShifter::new(pitch, true, shift, PitchAlgorithm::TdPsolaResampled).unwrap();
+            let mut output = vec![0.0; input.len()];
+            dsp.process_block(&input, &mut output);
+            assert!(output.iter().all(|x| x.is_finite() && x.abs() < 0.9));
+            assert!(output[16384..].iter().any(|x| x.abs() > 0.005));
+        }
     }
 }

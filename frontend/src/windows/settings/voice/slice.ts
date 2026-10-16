@@ -17,7 +17,9 @@ export const createVoiceSlice: StateCreator<SettingsStore, [], [], VoiceSlice> =
         voice: {
           ...state.voice,
           pitchAlgorithm: value,
-          ...(value === "td-psola" ? { preserveFormants: true } : {}),
+          ...(value === "td-psola" || value === "td-psola-resampled"
+            ? { preserveFormants: true }
+            : {}),
         },
       })),
     pitch: 0,

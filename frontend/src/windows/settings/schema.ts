@@ -21,7 +21,8 @@ export const settingsSchema = v.pipe(
     "フォルマントを独立調整しない場合、調整値は0にしてください。",
   ),
   v.check(
-    (settings) => settings.voice.pitchAlgorithm !== "td-psola" || settings.voice.preserveFormants,
+    (settings) =>
+      !settings.voice.pitchAlgorithm.startsWith("td-psola") || settings.voice.preserveFormants,
     "TD-PSOLAではフォルマント保持をオンにしてください。",
   ),
   v.check(
