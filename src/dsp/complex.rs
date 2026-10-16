@@ -6,6 +6,15 @@ pub(crate) struct Complex {
 }
 
 impl Complex {
+    /// Batch magnitudes through disjoint slice references so the loop can vectorize.
+    #[inline(always)]
+    pub(crate) fn magnitudes(input: &[Self], output: &mut [f64]) {
+        assert_eq!(input.len(), output.len());
+        for (value, magnitude) in input.iter().zip(output) {
+            *magnitude = (value.re * value.re + value.im * value.im).sqrt();
+        }
+    }
+
     #[inline(always)]
     pub(crate) fn butterfly(self, other: Self, root: Self) -> (Self, Self) {
         let product = other.mul(root);
@@ -50,6 +59,40 @@ impl Complex {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn batched_magnitudes_preserve_scalar_bits_and_slice_guards() {
+        let values: Vec<_> = (0..40)
+            .map(|i| Complex {
+                re: (i as f64 * 0.31).sin() * [0.0, 1e-160, 1.0, 1e160][i % 4],
+                im: (i as f64 * 0.17).cos() * [1e-160, 1.0, 1e160, 0.0][i % 4],
+            })
+            .collect();
+        for first in 0..4 {
+            for length in 0..=32 {
+                let mut output = vec![12345.0; first + length + 2];
+                Complex::magnitudes(
+                    &values[first..first + length],
+                    &mut output[first..first + length],
+                );
+                assert!(output[..first].iter().all(|&value| value == 12345.0));
+                assert!(output[first + length..]
+                    .iter()
+                    .all(|&value| value == 12345.0));
+                for (&actual, value) in output[first..first + length]
+                    .iter()
+                    .zip(&values[first..first + length])
+                {
+                    let expected = (value.re * value.re + value.im * value.im).sqrt();
+                    assert_eq!(actual.to_bits(), expected.to_bits());
+                }
+            }
+        }
+        assert!(std::panic::catch_unwind(|| {
+            Complex::magnitudes(&[Complex::default(); 2], &mut [0.0]);
+        })
+        .is_err());
+    }
 
     #[test]
     fn layout_matches_interleaved_f64_simd_contract() {

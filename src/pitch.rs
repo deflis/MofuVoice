@@ -670,10 +670,7 @@ impl PitchShifter {
             self.spectrum.as_mut_slice(),
             &mut self.fft_work,
         );
-        for i in 0..BINS {
-            let value = self.spectrum[i];
-            self.magnitude[i] = (value.re * value.re + value.im * value.im).sqrt();
-        }
+        Complex::magnitudes(self.spectrum.as_slice(), self.magnitude.as_mut_slice());
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         let vector = self.fft.avx2;
         #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
