@@ -188,19 +188,139 @@ fn td_psola_is_block_independent_and_preserves_neutral_sample_bits() {
 }
 
 #[test]
-fn unsupported_formant_settings_are_rejected_instead_of_using_spectral_processing() {
+fn td_psola_formant_settings_and_pipeline_latency_are_validated() {
     use rust_low_latency_voice_changer::cli::Options;
-    for (preserve, shift) in [(false, 0.0), (true, 3.0), (true, -3.0)] {
+    for (preserve, shift) in [(false, 0.0), (false, 3.0), (false, -3.0)] {
         assert!(PitchShifter::new(7.0, preserve, shift, PitchAlgorithm::TdPsola).is_err());
     }
-    assert!(Options::parse(
-        ["--pitch-algorithm", "td-psola", "--formant-shift", "2"].map(String::from)
-    )
-    .is_err());
+    let options =
+        Options::parse(["--pitch-algorithm", "td-psola", "--formant-shift", "2"].map(String::from))
+            .unwrap();
+    assert_eq!(options.pitch.latency(), 5120);
+    assert_eq!(
+        rust_low_latency_voice_changer::pitch::PitchSettings {
+            formant_shift: 0.0,
+            ..options.pitch
+        }
+        .latency(),
+        4608
+    );
     assert!(Options::parse(
         ["--pitch-algorithm", "td-psola", "--formant", "off"].map(String::from)
     )
     .is_err());
     assert_eq!(PitchAlgorithm::TdPsola.latency(), 4608);
     assert_eq!(PitchAlgorithm::PhaseLocked.latency(), 512);
+}
+
+#[test]
+fn hybrid_formant_stage_keeps_td_pitch_and_moves_vowel_resonance() {
+    for rate in SAMPLE_RATES {
+        let input: Vec<f32> = (0..rate as usize)
+            .map(|i| {
+                let phase = std::f64::consts::TAU * 100.0 * i as f64 / rate as f64;
+                (1..=60)
+                    .map(|h| {
+                        let frequency = h as f64 * 100.0;
+                        let amplitude = 0.003 / h as f64
+                            + 0.015 * (-0.5 * ((frequency - 1500.0) / 230.0).powi(2)).exp();
+                        amplitude * (phase * h as f64).cos()
+                    })
+                    .sum::<f64>() as f32
+            })
+            .collect();
+        for pitch in [-3.0, 7.0, 12.0] {
+            for shift in [-4.0, 2.53, 6.0] {
+                let mut dsp =
+                    PitchShifter::new(pitch, true, shift, PitchAlgorithm::TdPsola).unwrap();
+                let mut output = vec![0.0; input.len()];
+                dsp.process_block(&input, &mut output);
+                let signal = &output[16384..];
+                let fundamental = 100.0 * pitch_ratio(pitch).unwrap();
+                let expected_resonance = 1500.0 * pitch_ratio(shift).unwrap();
+                let peak = (1..=50)
+                    .map(|h| h as f64 * fundamental)
+                    .filter(|f| (600.0..3500.0).contains(f))
+                    .max_by(|&a, &b| power(signal, a, rate).total_cmp(&power(signal, b, rate)))
+                    .unwrap();
+                eprintln!("hybrid rate={rate}, pitch={pitch}, shift={shift}: resonance={peak}, expected={expected_resonance}");
+                assert!((peak - expected_resonance).abs() < 280.0);
+                // A harmonic near the formant stays on the TD-PSOLA frequency grid.
+                let measured = (-8..=8)
+                    .map(|i| peak + i as f64 * 0.25)
+                    .max_by(|&a, &b| power(signal, a, rate).total_cmp(&power(signal, b, rate)))
+                    .unwrap();
+                assert!((measured - peak).abs() <= 0.5);
+                assert!(output.iter().all(|x| x.is_finite() && x.abs() < 0.9));
+            }
+        }
+    }
+}
+
+#[test]
+fn hybrid_is_block_independent_during_pitch_changes() {
+    let input: Vec<f32> = (0..24000)
+        .map(|i| {
+            let p = std::f64::consts::TAU * 113.0 * i as f64 / 48000.0;
+            (0.1 * p.cos() + 0.03 * (3.0 * p).cos()) as f32
+        })
+        .collect();
+    let mut reference = None;
+    for block in [24000, 1, 127, 512] {
+        let mut dsp = PitchShifter::new(7.0, true, 2.53, PitchAlgorithm::TdPsola).unwrap();
+        for pitch in [7.0, 0.0, -3.0] {
+            dsp.set_semitones(pitch).unwrap();
+            let mut output = vec![0.0; input.len()];
+            for (a, b) in input.chunks(block).zip(output.chunks_mut(block)) {
+                dsp.process_block(a, b);
+            }
+            if block == 24000 {
+                reference.get_or_insert_with(Vec::new).push(output);
+            } else {
+                let index = match pitch {
+                    7.0 => 0,
+                    0.0 => 1,
+                    _ => 2,
+                };
+                assert_eq!(reference.as_ref().unwrap()[index], output);
+            }
+        }
+    }
+}
+
+#[test]
+fn hybrid_formant_only_path_has_the_reported_combined_delay() {
+    // Random noise is unvoiced: TD-PSOLA must copy it with its exact delay.
+    // Comparing against the standalone formant processor also checks that the
+    // hybrid path uses unity spectral pitch ratio instead of shifting twice.
+    let mut seed = 23_u32;
+    let input: Vec<f32> = (0..32000)
+        .map(|_| {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            (0.02 * (seed as f64 / u32::MAX as f64 - 0.5)) as f32
+        })
+        .collect();
+    let delay = PitchAlgorithm::TdPsola.latency();
+    let delayed: Vec<_> = (0..input.len())
+        .map(|i| if i < delay { 0.0 } else { input[i - delay] })
+        .collect();
+    let mut expected = vec![0.0; input.len()];
+    PitchShifter::new(0.0, true, 2.53, PitchAlgorithm::PhaseLocked)
+        .unwrap()
+        .process_block(&delayed, &mut expected);
+    for pitch in [0.0, 7.0, -12.0] {
+        let mut actual = vec![0.0; input.len()];
+        PitchShifter::new(pitch, true, 2.53, PitchAlgorithm::TdPsola)
+            .unwrap()
+            .process_block(&input, &mut actual);
+        let error = expected
+            .iter()
+            .zip(&actual)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0_f32, f32::max);
+        assert!(
+            error < 1e-6,
+            "pitch={pitch}, delayed spectral error={error}"
+        );
+    }
 }

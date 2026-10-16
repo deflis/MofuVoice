@@ -75,11 +75,11 @@ fn portable_processor_does_not_allocate_with_rumble_gate_pitch_eq_level_and_dees
 #[test]
 fn callback_does_not_allocate_including_first_frames_and_transitions() {
     for algorithm in PitchAlgorithm::ALL {
-        for preserve in [false, true] {
+        for (preserve, shift) in [(false, 0.0), (true, 0.0), (true, 2.53)] {
             if algorithm == PitchAlgorithm::TdPsola && !preserve {
                 continue;
             }
-            let mut dsp = PitchShifter::new(7.0, preserve, 0.0, algorithm).unwrap();
+            let mut dsp = PitchShifter::new(7.0, preserve, shift, algorithm).unwrap();
             let mut level = rust_low_latency_voice_changer::level::LevelSettings {
                 enabled: true,
                 compressor_enabled: true,

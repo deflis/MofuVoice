@@ -390,7 +390,7 @@ impl Options {
         crate::pitch::formant_ratio(self.pitch.formant_shift)?;
         self.pitch
             .algorithm
-            .validate_formants(self.pitch.preserve_formants, self.pitch.formant_shift)?;
+            .validate_formants(self.pitch.preserve_formants)?;
         if !self.pitch.preserve_formants && self.pitch.formant_shift != 0.0 {
             return Err(crate::pitch::InvalidFormant.into());
         }

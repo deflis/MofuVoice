@@ -39,7 +39,7 @@ export function VoiceSettings() {
         value={pitch}
         onChange={(value) => setPitch(value)}
       />
-      <fieldset className="settings" disabled={!preserveFormants || tdPsola}>
+      <fieldset className="settings" disabled={!preserveFormants}>
         <SemitonesInput
           label="声の響き（フォルマント）"
           lowerLabel="太く"
@@ -73,8 +73,8 @@ export function VoiceSettings() {
       </label>
       {tdPsola ? (
         <p>
-          TD-PSOLAは元の響きを保持します。独立した響きの移動には対応していません。解析のためDSP遅延は約85
-          ms（48 kHz）あります。
+          TD-PSOLAで高さを変え、響きの移動にはスペクトル処理を使います。DSP遅延は48 kHzで96
+          ms、響きの移動が0以外なら約106.7 msです。
         </p>
       ) : (
         <p>オフでは高さの変更に合わせて響きも変わります。響きの調整値は0に戻ります。</p>

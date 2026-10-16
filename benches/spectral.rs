@@ -58,7 +58,7 @@ fn main() {
         .collect();
     for algorithm in PitchAlgorithm::ALL {
         for pitch in [-12.0, -3.0, 0.0, 3.0, 7.0, 12.0] {
-            for preserve in [false, true] {
+            for (preserve, shift) in [(false, 0.0), (true, 0.0), (true, 2.53)] {
                 if algorithm == PitchAlgorithm::TdPsola && !preserve {
                     continue;
                 }
@@ -66,7 +66,7 @@ fn main() {
                     let mut times = Vec::new();
                     let mut worst_block = 0.0_f64;
                     for _ in 0..7 {
-                        let mut dsp = PitchShifter::new(pitch, preserve, 0.0, algorithm).unwrap();
+                        let mut dsp = PitchShifter::new(pitch, preserve, shift, algorithm).unwrap();
                         let mut level = LevelSettings {
                             enabled: auto_level,
                             compressor_enabled: auto_level,
@@ -88,7 +88,7 @@ fn main() {
                         times.push(start.elapsed().as_secs_f64());
                     }
                     times.sort_by(f64::total_cmp);
-                    println!("algorithm={}, pitch={pitch:+}, preserve={preserve}, auto_level={auto_level}: median={:.1} ns/sample, CPU/audio={:.2}%, worst observed 512-frame block={worst_block:.3} ms (deadline 10.667 ms)", algorithm.name(), times[3] * 1e9 / input.len() as f64, times[3] / 4.0 * 100.0);
+                    println!("algorithm={}, pitch={pitch:+}, preserve={preserve}, formant_shift={shift}, auto_level={auto_level}: median={:.1} ns/sample, CPU/audio={:.2}%, worst observed 512-frame block={worst_block:.3} ms (deadline 10.667 ms)", algorithm.name(), times[3] * 1e9 / input.len() as f64, times[3] / 4.0 * 100.0);
                 }
             }
         }

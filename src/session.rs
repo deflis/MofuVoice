@@ -271,7 +271,7 @@ fn run_audio(
             if options.pitch.semitones == 0.0 && options.pitch.formant_shift == 0.0 {
                 0.0
             } else {
-                options.pitch.algorithm.latency() as f64 * 1000.0 / configuration.sample_rate
+                options.pitch.latency() as f64 * 1000.0 / configuration.sample_rate
             },
         );
         info.input_latency_ms = input;
