@@ -14,6 +14,32 @@ pub(crate) fn amplitude_db(value: f64, floor: f64) -> f64 {
     20.0 * value.max(floor).log10()
 }
 
+/// Calibrate a nearby inverse-dB estimate to the exact floating-point boundary.
+/// Returns the largest adjacent positive value whose measured dB is <= threshold.
+/// This is setup work; per-sample gates can then use an ordinary comparison.
+pub(crate) fn upper_db_boundary(
+    mut candidate: f64,
+    threshold: f64,
+    measure: impl Fn(f64) -> f64,
+) -> f64 {
+    assert!(candidate.is_finite() && candidate > 0.0 && threshold.is_finite());
+    for _ in 0..128 {
+        let level = measure(candidate);
+        assert!(level.is_finite());
+        if level > threshold {
+            candidate = candidate.next_down();
+        } else {
+            let next = candidate.next_up();
+            let next_level = measure(next);
+            assert!(next_level.is_finite());
+            if next_level > threshold {
+                return candidate;
+            }
+            candidate = next;
+        }
+    }
+    panic!("inverse-dB estimate is not within 128 representable values of its boundary");
+}
 #[cfg(test)]
 mod tests {
     use super::*;
