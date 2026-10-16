@@ -748,29 +748,21 @@ async fn close_application(app: tauri::AppHandle) -> Result<(), String> {
         desktop.session.stop();
         std::mem::take(&mut desktop.session)
     };
-    if let Err(error) = tauri::async_runtime::spawn_blocking(move || session.shutdown())
+    // After `closing` is set and the session is taken, failure is terminal: the
+    // status worker exits on `closing`, and the session cannot be restored.
+    tauri::async_runtime::spawn_blocking(move || session.shutdown())
         .await
-        .map_err(|error| error.to_string())
-    {
-        if let Ok(mut desktop) = app.state::<DesktopState>().lock() {
-            desktop.closing = false;
-        }
-        return Err(error);
-    }
+        .map_err(|error| error.to_string())?;
     let exit_app = app.clone();
-    if let Err(error) = app.run_on_main_thread(move || {
+    app.run_on_main_thread(move || {
         // SAFETY: window destruction runs on its owning thread, after ASIO stops.
         #[cfg(windows)]
         unsafe {
             native_spectrum::shutdown()
         };
         exit_app.exit(0);
-    }) {
-        if let Ok(mut desktop) = app.state::<DesktopState>().lock() {
-            desktop.closing = false;
-        }
-        return Err(error.to_string());
-    }
+    })
+    .map_err(|error| error.to_string())?;
     Ok(())
 }
 pub fn initial_options(args: impl IntoIterator<Item = String>) -> Result<Options, Box<dyn Error>> {

@@ -59,15 +59,22 @@ async function flushClose(owner: Session, saved: boolean) {
     }
     try {
       if (owner.closeTarget === "application") {
-        owner.closeTarget = undefined;
         // Snapshot never loaded; exit with the last persisted backend settings.
         await settingsApi.closeApplication();
+        if (owner === session) {
+          owner.closeTarget = undefined;
+        }
       } else {
         owner.closeTarget = undefined;
         await settingsApi.hide();
       }
     } catch (error) {
       if (owner === session) {
+        try {
+          await cancelClose(owner);
+        } catch (failure) {
+          reportError(failure);
+        }
         reportError(error);
       }
     }

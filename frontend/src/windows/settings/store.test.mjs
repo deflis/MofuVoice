@@ -166,6 +166,21 @@ test("application close during load failure exits without saving a draft", async
   assert.equal(calls("cancel_application_close").length, 0);
   assert.equal(calls("close_application").length, 1);
 });
+test("failed application close during load failure cancels the pending shutdown", async () => {
+  handlers.set("settings_view", async () => {
+    throw new Error("load failed");
+  });
+  handlers.set("close_application", async () => {
+    throw new Error("cannot write settings");
+  });
+  await connect("settings").ready;
+  await tick();
+  push({ type: "applicationClose" });
+  await tick();
+  assert.equal(calls("close_application").length, 1);
+  assert.equal(calls("cancel_application_close").length, 1);
+  assert.match(useSettingsConnection.getState().error, /cannot write settings/);
+});
 test("old snapshot, notifications and saves cannot overwrite or hide a new connection", async () => {
   const loading = deferred();
   handlers.set("settings_view", () => loading.promise);
