@@ -1,5 +1,5 @@
-//! Split real/imaginary FFT storage: four complex butterflies per AVX2 vector.
-//! Callers select retained outputs; tables and arithmetic match the radix-2 FFT.
+//! Split real/imaginary FFT storage and sparse real-input seeds.
+//! Dense stages process four butterflies per AVX2 vector with radix-2 arithmetic.
 use super::complex::Complex;
 
 #[repr(C)]
@@ -20,6 +20,48 @@ impl<const N: usize> Default for SplitBuffer<N> {
     }
 }
 impl<const N: usize> SplitBuffer<N> {
+    /// Seed the first three forward FFT stages for a real signal supported on
+    /// 0..=2*KEEP and 2*N-2*KEEP..2*N. Imaginary input components are ignored.
+    /// Each bit-reversed eight-point block has at most one nonzero input:
+    /// position zero for the front support or position seven for the tail.
+    /// The next FFT stage must therefore have size 16.
+    #[inline(always)]
+    pub(crate) fn seed_sparse_real_eight<const KEEP: usize>(&mut self, time: &[Complex]) {
+        assert!(N >= 16 && N.is_power_of_two() && KEEP < N / 16);
+        assert_eq!(time.len(), 2 * N);
+        const Q: f64 = std::f64::consts::FRAC_1_SQRT_2;
+        const RE: [f64; 8] = [1.0, Q, 0.0, -Q, -1.0, -Q, 0.0, Q];
+        const IM: [f64; 8] = [0.0, Q, 1.0, Q, 0.0, -Q, -1.0, -Q];
+        for first in (0..N).step_by(8) {
+            let base = first.reverse_bits() >> (usize::BITS - N.ilog2());
+            if base <= KEEP {
+                let value = Complex {
+                    re: time[2 * base].re,
+                    im: time[2 * base + 1].re,
+                };
+                self.re[first..first + 8].fill(value.re);
+                self.im[first..first + 8].fill(value.im);
+            } else if base >= N / 8 - KEEP {
+                let source = base + 7 * N / 8;
+                let value = Complex {
+                    re: time[2 * source].re,
+                    im: time[2 * source + 1].re,
+                };
+                for k in 0..8 {
+                    self.set(
+                        first + k,
+                        value.mul(Complex {
+                            re: RE[k],
+                            im: IM[k],
+                        }),
+                    );
+                }
+            } else {
+                self.re[first..first + 8].fill(0.0);
+                self.im[first..first + 8].fill(0.0);
+            }
+        }
+    }
     #[inline(always)]
     pub(crate) fn get(&self, i: usize) -> Complex {
         Complex {
@@ -535,6 +577,14 @@ mod tests {
 
     #[test]
     fn rejects_invalid_plans_and_stage_ranges() {
+        assert!(std::panic::catch_unwind(|| {
+            SplitBuffer::<64>::default().seed_sparse_real_eight::<4>(&[Complex::default(); 128]);
+        })
+        .is_err());
+        assert!(std::panic::catch_unwind(|| {
+            SplitBuffer::<16>::default().seed_sparse_real_eight::<0>(&[Complex::default(); 31]);
+        })
+        .is_err());
         for size in [0, 1, 2, 6] {
             assert!(std::panic::catch_unwind(|| SplitRoots::new(size, false)).is_err());
         }

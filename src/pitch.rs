@@ -294,6 +294,24 @@ impl Fft {
             );
         }
         self.transform_half(work, false);
+        self.finish_real(time, work);
+    }
+
+    /// The lifter has zeroed all real samples outside +/- CEPSTRUM.
+    #[inline(always)]
+    fn forward_cepstrum(&self, time: &mut [Complex; WINDOW], work: &mut SplitBuffer<HALF>) {
+        work.seed_sparse_real_eight::<{ CEPSTRUM / 2 }>(time);
+        let roots = &self.forward_roots_half;
+        let vector = self.vector();
+        roots.stage::<HALF, 16, 0>(work, 0, 8, vector);
+        roots.pair::<HALF, 32, 64>(work, vector);
+        roots.pair::<HALF, 128, 256>(work, vector);
+        roots.pair::<HALF, 512, 1024>(work, vector);
+        self.finish_real(time, work);
+    }
+
+    #[inline(always)]
+    fn finish_real(&self, time: &mut [Complex; WINDOW], work: &SplitBuffer<HALF>) {
         let z0 = work.get(0);
         time[0] = Complex {
             re: z0.re + z0.im,
@@ -662,7 +680,7 @@ impl PitchShifter {
                 .inverse_real_partial(&mut self.envelope_work, &mut self.fft_work, true, false);
             self.envelope_work[CEPSTRUM + 1..WINDOW - CEPSTRUM].fill(Complex::default());
             self.fft
-                .forward_real(&mut self.envelope_work, &mut self.fft_work);
+                .forward_cepstrum(&mut self.envelope_work, &mut self.fft_work);
             for i in 0..BINS {
                 self.envelope[i] = self.envelope_work[i].re;
             }
@@ -1039,6 +1057,62 @@ impl PitchShifter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sparse_cepstrum_transform_matches_full_fft_and_direct_dft() {
+        for vector in [false, true] {
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            let mut fft = Fft::new();
+            #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+            let fft = Fft::new();
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            {
+                fft.avx2 = vector && std::is_x86_feature_detected!("avx2");
+            }
+            for pattern in 0..4 {
+                let input: [Complex; WINDOW] = std::array::from_fn(|i| {
+                    let re = match pattern {
+                        0 => f64::from(i == 0),
+                        1 => f64::from(i == CEPSTRUM),
+                        2 => f64::from(i == WINDOW - CEPSTRUM),
+                        _ if i <= CEPSTRUM || i >= WINDOW - CEPSTRUM => {
+                            (i as f64 * 0.31).sin() * [1e-12, 1.0, 1e6][i % 3]
+                        }
+                        _ => 0.0,
+                    };
+                    Complex { re, im: 0.0 }
+                });
+                let norm: f64 = input.iter().map(|v| v.re.abs()).sum();
+                let mut full = input;
+                let mut sparse = input;
+                let mut work = SplitBuffer::default();
+                fft.forward_real(&mut full, &mut work);
+                fft.forward_cepstrum(&mut sparse, &mut work);
+                for k in 0..BINS {
+                    let mut reference = Complex::default();
+                    for i in (0..=CEPSTRUM).chain(WINDOW - CEPSTRUM..WINDOW) {
+                        let root = Complex::polar(
+                            1.0,
+                            -std::f64::consts::TAU * ((k * i) % WINDOW) as f64 / WINDOW as f64,
+                        );
+                        reference.re += input[i].re * root.re;
+                        reference.im += input[i].re * root.im;
+                    }
+                    let tolerance = norm * 4e-15;
+                    for expected in [full[k], reference] {
+                        assert!(
+                            (sparse[k].re - expected.re).abs() <= tolerance,
+                            "real bin={k}, pattern={pattern}, vector={vector}"
+                        );
+                        assert!(
+                            (sparse[k].im - expected.im).abs() <= tolerance,
+                            "imag bin={k}, pattern={pattern}, vector={vector}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     #[test]
