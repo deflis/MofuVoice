@@ -137,12 +137,12 @@ impl DeEsser {
             if weight == 1.0 {
                 return self.minimum_gain;
             }
-            return 10.0_f64.powf(-self.parameters.range_db * weight / 20.0);
+            return amplitude(-self.parameters.range_db * weight);
         }
         let excess =
             (10.0 * self.high_power.max(1e-30).log10() - self.parameters.threshold_db).max(0.0);
         let reduction = (excess * 0.75).min(self.parameters.range_db) * weight;
-        10.0_f64.powf(-reduction / 20.0)
+        amplitude(-reduction)
     }
     pub fn process_in_place<T: Sample>(&mut self, samples: &mut [T]) {
         if !self.enabled {

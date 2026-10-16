@@ -216,6 +216,7 @@ mod tests {
     // Retain the former sample loop as an independent streaming reference.
     impl AutoLevel {
         fn process_reference<T: Sample>(&mut self, samples: &mut [T]) {
+            let amplitude = |db: f64| 10.0_f64.powf(db / 20.0);
             if !self.settings.enabled {
                 return;
             } // Preserve every bypass bit, including NaNs.
