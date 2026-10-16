@@ -31,6 +31,7 @@ fn gate_pitch_and_level_chain_is_independent_of_callback_boundaries() {
                 let mut shifter = PitchShifter::new(pitch, true, formant).unwrap();
                 let mut level = LevelSettings {
                     enabled: true,
+                    compressor_enabled: true,
                     ..Default::default()
                 }
                 .build()

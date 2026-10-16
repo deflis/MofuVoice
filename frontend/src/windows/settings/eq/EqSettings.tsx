@@ -4,6 +4,12 @@ import { DetailsPopup } from "../DetailsPopup";
 import { useId } from "react";
 import { useEqSettings } from "./hooks";
 
+const simpleBands = [
+  { title: "低域の厚み", left: "すっきり", right: "ふっくら" },
+  { title: "明瞭さ", left: "やわらかく", right: "くっきり" },
+  { title: "明るさ", left: "落ち着いた", right: "明るい" },
+] as const;
+
 export function EqSettings() {
   const eq = useEqSettings();
   const id = useId();
@@ -27,9 +33,9 @@ export function EqSettings() {
           {eq.bands.map((band, index) => (
             <EqSimpleBand
               key={index}
-              title={`バンド${index + 1}・${band.frequency} Hz`}
-              left="抑える"
-              right="強める"
+              title={index < simpleBands.length ? simpleBands[index].title : `バンド${index + 1}`}
+              left={index < simpleBands.length ? simpleBands[index].left : "抑える"}
+              right={index < simpleBands.length ? simpleBands[index].right : "強める"}
               value={band.gainDb}
               onChange={(value) => eq.setBandGainDb(index, value)}
             />

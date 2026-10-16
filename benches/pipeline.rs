@@ -88,6 +88,8 @@ fn main() {
                             "on".into(),
                             "--auto-level".into(),
                             "on".into(),
+                            "--compressor".into(),
+                            "on".into(),
                             "--deesser".into(),
                             "on".into(),
                             "--eq".into(),

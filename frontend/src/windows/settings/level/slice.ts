@@ -4,6 +4,7 @@ import type { LevelValues } from "./schema";
 
 type LevelState = LevelValues & {
   setEnabled: (value: LevelValues["enabled"]) => void;
+  setCompressorEnabled: (value: LevelValues["compressorEnabled"]) => void;
   setTargetDb: (value: LevelValues["targetDb"]) => void;
   setMaxGainDb: (value: LevelValues["maxGainDb"]) => void;
   setFloorDb: (value: LevelValues["floorDb"]) => void;
@@ -17,6 +18,7 @@ export type LevelSlice = { level: LevelState };
 export const createLevelSlice: StateCreator<SettingsStore, [], [], LevelSlice> = (set) => ({
   level: {
     enabled: false,
+    compressorEnabled: false,
     targetDb: -20,
     maxGainDb: 9,
     floorDb: -50,
@@ -26,6 +28,8 @@ export const createLevelSlice: StateCreator<SettingsStore, [], [], LevelSlice> =
     attackMs: 5,
     releaseMs: 150,
     setEnabled: (value) => set((state) => ({ level: { ...state.level, enabled: value } })),
+    setCompressorEnabled: (value) =>
+      set((state) => ({ level: { ...state.level, compressorEnabled: value } })),
     setTargetDb: (value) => set((state) => ({ level: { ...state.level, targetDb: value } })),
     setMaxGainDb: (value) => set((state) => ({ level: { ...state.level, maxGainDb: value } })),
     setFloorDb: (value) => set((state) => ({ level: { ...state.level, floorDb: value } })),

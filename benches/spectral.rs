@@ -61,6 +61,7 @@ fn main() {
                     let mut dsp = PitchShifter::new(pitch, preserve, 0.0).unwrap();
                     let mut level = LevelSettings {
                         enabled: auto_level,
+                        compressor_enabled: auto_level,
                         ..Default::default()
                     }
                     .build()

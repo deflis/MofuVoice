@@ -75,6 +75,7 @@ impl Options {
         let mut eq_given = std::collections::HashSet::new();
         let mut eq_bands = std::collections::BTreeMap::new();
         let mut level_given = false;
+        let mut compressor_given = false;
         let mut level_fields = [false; 8];
         let mut rumble_given = false;
         let mut deesser_given = false;
@@ -146,6 +147,14 @@ impl Options {
                         _ => return Err("--auto-level requires on or off".into()),
                     };
                     level_given = true;
+                }
+                "--compressor" if !compressor_given => {
+                    options.level.compressor_enabled = match args.next().as_deref() {
+                        Some("on") => true,
+                        Some("off") => false,
+                        _ => return Err("--compressor requires on or off".into()),
+                    };
+                    compressor_given = true;
                 }
                 flag if crate::level::FLAGS.contains(&flag) => {
                     let index = crate::level::FLAGS.iter().position(|f| *f == flag).unwrap();
@@ -341,6 +350,7 @@ impl Options {
                     || shift_given
                     || !eq_given.is_empty()
                     || level_given
+                    || compressor_given
                     || level_fields.iter().any(|given| *given)
                     || rumble_given
                     || deesser_given
@@ -357,7 +367,7 @@ impl Options {
                     || input_channel_given
                     || output_channels_given))
         {
-            return Err("Choose one CLI mode: --help, --list-devices, --inspect [--device NAME] [--frames N] [--sample-rate HZ], or [--device NAME] [--frames N] [--sample-rate HZ] [--seconds N] [--pitch SEMITONES] [--formant preserve|off] [--formant-shift SEMITONES] [--eq on|off] [--eq-mode simple|pro] [--eq-band1 HZ,DB,Q] [--eq-band2 HZ,DB,Q] [--eq-band3 HZ,DB,Q] [--eq-output DB] [--auto-level on|off] [--level-target DB] [--level-max-gain DB] [--level-floor DB] [--level-response MS] [--compress-threshold DB] [--compress-ratio N] [--compress-attack MS] [--compress-release MS] [--deesser on|off] [--deesser-mode simple|pro] [--deesser-frequency HZ] [--deesser-threshold DBFS] [--deesser-range DB] [--deesser-attack MS] [--deesser-release MS] [--rumble-filter on|off] [--gate on|off] [--gate-threshold auto|DB] [--gate-attack MS] [--gate-release MS]".into());
+            return Err("Choose one CLI mode: --help, --list-devices, --inspect [--device NAME] [--frames N] [--sample-rate HZ], or [--device NAME] [--frames N] [--sample-rate HZ] [--seconds N] [--pitch SEMITONES] [--formant preserve|off] [--formant-shift SEMITONES] [--eq on|off] [--eq-mode simple|pro] [--eq-bandN HZ,DB,Q] [--eq-output DB] [--auto-level on|off] [--compressor on|off] [--level-target DB] [--level-max-gain DB] [--level-floor DB] [--level-response MS] [--compress-threshold DB] [--compress-ratio N] [--compress-attack MS] [--compress-release MS] [--deesser on|off] [--deesser-mode simple|pro] [--deesser-frequency HZ] [--deesser-threshold DBFS] [--deesser-range DB] [--deesser-attack MS] [--deesser-release MS] [--rumble-filter on|off] [--gate on|off] [--gate-threshold auto|DB] [--gate-attack MS] [--gate-release MS]".into());
         }
         Ok(options)
     }
@@ -415,7 +425,7 @@ impl Options {
     pub fn parse_gui(args: impl IntoIterator<Item = String>) -> Result<Self, Box<dyn Error>> {
         let options = Self::parse(args)?;
         if options.seconds.is_some() || options.inspect || options.list {
-            return Err("GUI accepts device, buffer, pitch, formant, rumble filter, de-esser, gate, EQ and auto-level settings, or --help. Use the CLI for timed runs, inspection or device listing.".into());
+            return Err("GUI accepts device, buffer, pitch, formant, rumble filter, de-esser, gate, EQ, auto-level and compressor settings, or --help. Use the CLI for timed runs, inspection or device listing.".into());
         }
         Ok(options)
     }
@@ -505,6 +515,10 @@ mod tests {
     #[test]
     fn automatic_level_and_custom_parameters_are_validated() {
         assert!(!parse(&[]).unwrap().level.enabled);
+        assert!(!parse(&[]).unwrap().level.compressor_enabled);
+        let compressor = parse(&["--compressor", "on"]).unwrap();
+        assert!(compressor.level.compressor_enabled);
+        assert!(!compressor.level.enabled);
         let options = parse(&[
             "--auto-level",
             "on",
@@ -515,10 +529,16 @@ mod tests {
         ])
         .unwrap();
         assert!(options.level.enabled);
+        assert!(!options.level.compressor_enabled);
         assert_eq!(options.level.target_db, -18.0);
         assert_eq!(options.level.ratio, 4.0);
         for args in [
             vec!["--auto-level"],
+            vec!["--compressor"],
+            vec!["--compressor", "maybe"],
+            vec!["--compressor", "on", "--compressor", "off"],
+            vec!["--compressor", "on", "--inspect"],
+            vec!["--compressor", "off", "--help"],
             vec!["--auto-level", "maybe"],
             vec!["--auto-level", "on", "--auto-level", "off"],
             vec!["--compress-ratio", "3", "--compress-ratio", "4"],

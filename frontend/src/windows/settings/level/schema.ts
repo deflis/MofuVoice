@@ -3,6 +3,7 @@ import { numberRange } from "../validation";
 
 export const levelSchema = v.object({
   enabled: v.boolean(),
+  compressorEnabled: v.boolean(),
   targetDb: numberRange(-36, -6, "目標音量"),
   maxGainDb: numberRange(0, 18, "最大増幅量"),
   floorDb: numberRange(-90, -30, "音声検出しきい値"),

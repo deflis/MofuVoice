@@ -59,13 +59,22 @@ async function flushClose(owner: Session, saved: boolean) {
     }
     try {
       if (owner.closeTarget === "application") {
-        await cancelClose(owner);
+        // Snapshot never loaded; exit with the last persisted backend settings.
+        await settingsApi.closeApplication();
+        if (owner === session) {
+          owner.closeTarget = undefined;
+        }
       } else {
         owner.closeTarget = undefined;
         await settingsApi.hide();
       }
     } catch (error) {
       if (owner === session) {
+        try {
+          await cancelClose(owner);
+        } catch (failure) {
+          reportError(failure);
+        }
         reportError(error);
       }
     }
@@ -152,8 +161,11 @@ async function load(owner: Session) {
   }
   await flushClose(owner, false);
 }
+export function activeSettingsConnection() {
+  return session?.connection;
+}
 export function connectSettingsWindow() {
-  void session?.connection?.close().catch(reportError);
+  const previous = session?.connection?.close();
   const owner: Session = { loaded: false, closing: false };
   session = owner;
   useSettingsConnection.setState({ ...initial });
@@ -165,6 +177,11 @@ export function connectSettingsWindow() {
       }
     },
   );
+  void previous?.catch((error: unknown) => {
+    if (owner === session) {
+      console.error(error);
+    }
+  });
   void load(owner);
   return owner.connection;
 }
