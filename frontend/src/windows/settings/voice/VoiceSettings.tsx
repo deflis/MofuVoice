@@ -14,7 +14,8 @@ export function VoiceSettings() {
     setFormantShift,
     setPreserveFormants,
   } = useVoiceSettings();
-  const tdPsola = pitchAlgorithm === "td-psola";
+  const tdPsola = pitchAlgorithm === "td-psola" || pitchAlgorithm === "td-psola-resampled";
+  const resampledTdPsola = pitchAlgorithm === "td-psola-resampled";
   const fdPsola = pitchAlgorithm === "fd-psola";
   return (
     <section>
@@ -30,6 +31,7 @@ export function VoiceSettings() {
           <option value="phase-locked">フェーズロック（標準）</option>
           <option value="pvsola">PVSOLAアプローチ（実験）</option>
           <option value="td-psola">TD-PSOLA（実験）</option>
+          <option value="td-psola-resampled">TD-PSOLA＋時間伸縮リサンプリング（実験）</option>
           <option value="fd-psola">FD-PSOLA（実験）</option>
         </select>
       </label>
@@ -75,8 +77,9 @@ export function VoiceSettings() {
       </label>
       {tdPsola ? (
         <p>
-          TD-PSOLAで高さを変え、響きの移動にはスペクトル処理を使います。DSP遅延は48 kHzで96
-          ms、響きの移動が0以外なら約106.7 msです。
+          {resampledTdPsola
+            ? "TD-PSOLAの時間伸縮と帯域制限リサンプリングで高さと響きを独立して変えます。DSP遅延は48 kHzで96 msです。"
+            : "TD-PSOLAで高さを変え、響きの移動にはスペクトル処理を使います。DSP遅延は48 kHzで響きの移動時に約106.7 msです。"}
         </p>
       ) : fdPsola ? (
         <p>

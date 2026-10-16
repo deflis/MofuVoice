@@ -59,7 +59,7 @@ fn main() {
     for algorithm in PitchAlgorithm::ALL {
         for pitch in [-12.0, -3.0, 0.0, 3.0, 7.0, 12.0] {
             for (preserve, shift) in [(false, 0.0), (true, 0.0), (true, 2.53)] {
-                if algorithm == PitchAlgorithm::TdPsola && !preserve {
+                if algorithm.uses_td_psola() && !preserve {
                     continue;
                 }
                 for auto_level in [false, true] {

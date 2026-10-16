@@ -2,15 +2,24 @@
 //!
 //! Source pitch marks centre actual waveform grains. Synthesis marks select the
 //! nearest source mark; their spacing changes pitch, while grain sample spacing
-//! stays unchanged. Left/right Hann supports use the smaller adjacent source and
+//! stays unchanged at neutral formant. Left/right Hann supports use the smaller adjacent source and
 //! synthesis periods. Unvoiced intervals are copied with the same fixed delay.
-//! This is TD-PSOLA, not spectral peak mapping or phase correction.
+//! Independent formant ratio b uses TD pitch a/b and duration b, then resamples
+//! at speed b. These two stages are evaluated on the final output clock:
+//! synthesis period P/a, source reads at epoch + b * output_offset, and
+//! intermediate Hann supports divided by b. No growing intermediate buffer.
+//! Unvoiced time stretch uses fixed-hop overlap-add grains with the same reads.
+//! Reference: http://koigoemoe.g2.xrea.com/koigoe/technique.html
+//! This is TD-PSOLA and band-limited resampling, with no spectral processing.
 //!
 //! Pitch analysis uses an in-repository FIR decimator and YIN difference function.
 //! Pitch marks track a consistent waveform polarity near predicted epochs.
 //! Reference: https://praat.org/manual/overlap-add.html
 //! Pitch estimator: de Cheveigne & Kawahara, JASA 2002, doi:10.1121/1.1458024.
 use std::f64::consts::TAU;
+#[path = "td_resampler.rs"]
+mod resampler;
+const UNVOICED_RADIUS: usize = 256;
 
 pub const LATENCY: usize = 4608;
 const RING: usize = 16384;
@@ -27,7 +36,9 @@ const MIN_LAG: usize = MIN_PERIOD / DECIMATION;
 const MARKS: usize = 128;
 // Analysis, both neighbouring epochs, the largest tracked grain support, and
 // one analysis hop must all fit before any output sample is consumed.
-const _: () = assert!(LATENCY >= LOOKAHEAD + 2 * MAX_PERIOD + 6 * MAX_PERIOD / 5 + HOP + 2);
+const _: () = assert!(
+    LATENCY >= LOOKAHEAD + 2 * MAX_PERIOD + 6 * MAX_PERIOD / 5 + HOP + resampler::RADIUS + 2
+);
 
 #[derive(Clone, Copy, Default)]
 struct Mark {
@@ -36,26 +47,21 @@ struct Mark {
     segment: u64,
 }
 
-#[derive(Clone, Copy)]
-struct Grain {
-    source: f64,
-    destination: f64,
-    left: f64,
-    right: f64,
-    gain: f64,
-    ratio: f64,
-    preserve_formants: bool,
-}
-
 pub(crate) struct TdPsola {
     input: Box<[f64; RING]>,
+    formant_ratio: f64,
+    resampler: Option<resampler::Resampler>,
+    unvoiced: Option<Box<[f64; RING]>>,
+    unvoiced_weight: Option<Box<[f64; RING]>>,
+    next_unvoiced: usize,
     output: Box<[f64; RING]>,
-    coverage: Box<[bool; RING]>,
-    voicing: Box<[f64; RING]>,
     weights: Box<[f64; RING]>,
     fd: Option<crate::fd_psola::FdFrameTransform>,
     fd_input: Box<[f64; crate::fd_psola::FRAME]>,
     fd_output: Box<[f64; crate::fd_psola::FRAME]>,
+    preserve_formants: bool,
+    coverage: Box<[bool; RING]>,
+    voicing: Box<[f64; RING]>,
     filtered: Box<[f64; FILTERED]>,
     analysis: Box<[f64; FILTERED]>,
     difference: [f64; MAX_LAG + 2],
@@ -72,19 +78,18 @@ pub(crate) struct TdPsola {
     polarity: f64,
     segment: u64,
     voiced_mix: f64,
-    preserve_formants: bool,
 }
 
 impl TdPsola {
-    pub fn new() -> Self {
-        Self::new_inner(false)
+    pub fn new(formant_ratio: f64) -> Self {
+        Self::new_inner(formant_ratio, false)
     }
 
     pub fn new_fd() -> Self {
-        Self::new_inner(true)
+        Self::new_inner(1.0, true)
     }
 
-    fn new_inner(frequency_domain: bool) -> Self {
+    fn new_inner(formant_ratio: f64, frequency_domain: bool) -> Self {
         let mut taps = std::array::from_fn(|i| {
             let distance = i as f64 - (TAPS / 2) as f64;
             let sinc = if distance == 0.0 {
@@ -100,13 +105,19 @@ impl TdPsola {
         }
         Self {
             input: Box::new([0.0; RING]),
+            formant_ratio,
+            resampler: (formant_ratio != 1.0).then(|| resampler::Resampler::new(formant_ratio)),
+            unvoiced: (formant_ratio != 1.0).then(|| Box::new([0.0; RING])),
+            unvoiced_weight: (formant_ratio != 1.0).then(|| Box::new([0.0; RING])),
+            next_unvoiced: 0,
             output: Box::new([0.0; RING]),
-            coverage: Box::new([false; RING]),
-            voicing: Box::new([0.0; RING]),
             weights: Box::new([0.0; RING]),
             fd: frequency_domain.then(crate::fd_psola::FdFrameTransform::new),
             fd_input: Box::new([0.0; crate::fd_psola::FRAME]),
             fd_output: Box::new([0.0; crate::fd_psola::FRAME]),
+            preserve_formants: true,
+            coverage: Box::new([false; RING]),
+            voicing: Box::new([0.0; RING]),
             filtered: Box::new([0.0; FILTERED]),
             analysis: Box::new([0.0; FILTERED]),
             difference: [0.0; MAX_LAG + 2],
@@ -123,11 +134,9 @@ impl TdPsola {
             polarity: 1.0,
             segment: 0,
             voiced_mix: 0.0,
-            preserve_formants: true,
         }
     }
 
-    #[cfg(test)]
     pub fn push(&mut self, sample: f64, ratio: f64) -> f64 {
         self.push_with_formants(sample, ratio, true)
     }
@@ -147,8 +156,17 @@ impl TdPsola {
         }
         let index = now % RING;
         let wet = if let Some(source) = now.checked_sub(LATENCY) {
-            let dry = self.input[source % RING];
-            let mix = if self.coverage[index] {
+            let dry = if self.resampler.is_some() {
+                let weight = self.unvoiced_weight.as_ref().unwrap()[index];
+                if weight > 1e-12 {
+                    self.unvoiced.as_ref().unwrap()[index] / weight
+                } else {
+                    0.0
+                }
+            } else {
+                self.input[source % RING]
+            };
+            let mix = if self.coverage[index] || self.resampler.is_some() {
                 self.voicing[source % RING]
             } else {
                 0.0
@@ -163,8 +181,12 @@ impl TdPsola {
             0.0
         };
         self.output[index] = 0.0;
-        self.coverage[index] = false;
         self.weights[index] = 0.0;
+        if let Some(unvoiced) = &mut self.unvoiced {
+            unvoiced[index] = 0.0;
+            self.unvoiced_weight.as_mut().unwrap()[index] = 0.0;
+        }
+        self.coverage[index] = false;
         self.clock += 1;
         if self.clock.is_multiple_of(HOP) && self.clock > LOOKAHEAD {
             self.frame(ratio);
@@ -318,6 +340,23 @@ impl TdPsola {
         // its following mark must also be known before choosing the right window.
         // Do not advance the synthesis clock just because that neighbour is pending.
         let safe = center.saturating_sub(2 * MAX_PERIOD) as f64;
+        if self.resampler.is_some() {
+            // Each unvoiced grain is centred at the matching source/output
+            // time. Its stretched support and resampling kernel must be ready.
+            let source_safe = (self.clock as f64
+                - self.formant_ratio * UNVOICED_RADIUS as f64
+                - resampler::RADIUS as f64
+                - 2.0)
+                .max(0.0);
+            while (self.next_unvoiced as f64) <= source_safe
+                && self.next_unvoiced + LATENCY + UNVOICED_RADIUS < self.clock + RING
+                && (self.next_unvoiced + LATENCY).saturating_sub(UNVOICED_RADIUS)
+                    >= self.clock.saturating_sub(1)
+            {
+                self.unvoiced_grain(self.next_unvoiced);
+                self.next_unvoiced += HOP;
+            }
+        }
         while self.next_synthesis <= safe {
             let nearest = (0..self.count).min_by(|&a, &b| {
                 (self.mark(a).position - self.next_synthesis)
@@ -332,28 +371,32 @@ impl TdPsola {
                     && next.segment == mark.segment
                     && (mark.position - self.next_synthesis).abs() < mark.period * 0.75
                 {
+                    let intermediate_ratio = ratio / self.formant_ratio;
+                    let intermediate_period = mark.period / intermediate_ratio;
                     let synthesis_period = if self.fd.is_some() {
                         mark.period
                     } else {
-                        mark.period / ratio
+                        intermediate_period / self.formant_ratio
                     };
-                    let left = (mark.position - previous.position).min(
+                    // Intermediate clock is stretched by b; mapping it back divides
+                    // both source window supports and target periods by b.
+                    let left = ((mark.position - previous.position) / self.formant_ratio).min(
                         if self.previous_synthesis_period > 0.0 {
                             self.previous_synthesis_period
                         } else {
                             synthesis_period
                         },
                     );
-                    let right = (next.position - mark.position).min(synthesis_period);
-                    self.grain(Grain {
-                        source: mark.position,
-                        destination: self.next_synthesis + LATENCY as f64,
+                    let right = ((next.position - mark.position) / self.formant_ratio)
+                        .min(synthesis_period);
+                    self.grain(
+                        mark.position,
+                        self.next_synthesis + LATENCY as f64,
                         left,
                         right,
-                        gain: synthesis_period / ((left + right) * 0.5),
+                        synthesis_period / ((left + right) * 0.5),
                         ratio,
-                        preserve_formants: self.preserve_formants,
-                    });
+                    );
                     self.next_synthesis += synthesis_period;
                     self.previous_synthesis_period = synthesis_period;
                     continue;
@@ -361,6 +404,32 @@ impl TdPsola {
             }
             self.next_synthesis += HOP as f64;
             self.previous_synthesis_period = 0.0;
+        }
+    }
+
+    fn read(&self, position: f64) -> f64 {
+        if let Some(resampler) = &self.resampler {
+            resampler.sample(&self.input, self.clock, position)
+        } else {
+            self.interpolate(position)
+        }
+    }
+
+    fn unvoiced_grain(&mut self, source: usize) {
+        let destination = source + LATENCY;
+        let first = destination.saturating_sub(UNVOICED_RADIUS).max(self.clock);
+        assert!(
+            first >= self.clock.saturating_sub(1),
+            "unvoiced grain missed its synthesis deadline"
+        );
+        assert!(destination + UNVOICED_RADIUS < self.clock + RING);
+        let input_center = source as f64;
+        for target in first..=destination + UNVOICED_RADIUS {
+            let offset = target as f64 - destination as f64;
+            let window = 0.5 + 0.5 * (std::f64::consts::PI * offset / UNVOICED_RADIUS as f64).cos();
+            self.unvoiced.as_mut().unwrap()[target % RING] +=
+                self.read(input_center + offset * self.formant_ratio) * window;
+            self.unvoiced_weight.as_mut().unwrap()[target % RING] += window;
         }
     }
 
@@ -380,16 +449,15 @@ impl TdPsola {
                 + fraction * (2.0 * a - 5.0 * b + 4.0 * c - d + fraction * (3.0 * (b - c) + d - a)))
     }
 
-    fn grain(&mut self, grain: Grain) {
-        let Grain {
-            source,
-            destination,
-            left,
-            right,
-            gain,
-            ratio,
-            preserve_formants,
-        } = grain;
+    fn grain(
+        &mut self,
+        source: f64,
+        destination: f64,
+        left: f64,
+        right: f64,
+        gain: f64,
+        ratio: f64,
+    ) {
         let half = crate::fd_psola::FRAME / 2;
         if self.fd.is_some() {
             let support = ((left + right).ceil() as usize).clamp(128, half);
@@ -398,18 +466,16 @@ impl TdPsola {
                 if offset.unsigned_abs() > support {
                     self.fd_input[i] = 0.0;
                 } else {
-                    let phase = std::f64::consts::PI * offset as f64 / support as f64;
-                    let window = 0.5 + 0.5 * phase.cos();
+                    let window =
+                        0.5 + 0.5 * (std::f64::consts::PI * offset as f64 / support as f64).cos();
                     self.fd_input[i] = self.interpolate(source + offset as f64) * window;
                 }
             }
-        }
-        if let Some(fd) = &mut self.fd {
-            fd.process_grain(
+            self.fd.as_mut().unwrap().process_grain(
                 &self.fd_input,
                 &mut self.fd_output,
                 ratio,
-                preserve_formants,
+                self.preserve_formants,
             );
             let first = (destination - half as f64).floor().max(self.clock as f64) as usize;
             let last = (destination + half as f64).ceil() as usize;
@@ -451,7 +517,8 @@ impl TdPsola {
             let radius = if offset < 0.0 { left } else { right };
             let normalized = (offset / radius).clamp(-1.0, 1.0);
             let window = 0.5 + 0.5 * (std::f64::consts::PI * normalized).cos();
-            self.output[output % RING] += self.interpolate(source + offset) * window * gain;
+            self.output[output % RING] +=
+                self.read(source + self.formant_ratio * offset) * window * gain;
             self.coverage[output % RING] = true;
             self.weights[output % RING] += window;
         }
@@ -464,7 +531,7 @@ mod tests {
 
     #[test]
     fn low_voice_f32_period_does_not_drift() {
-        let mut dsp = TdPsola::new();
+        let mut dsp = TdPsola::new(1.0);
         let ratio = 2.0_f64.powf(3.0 / 12.0);
         let mut output = Vec::new();
         let mut missing = 0;
@@ -502,7 +569,7 @@ mod tests {
     fn yin_tracks_voice_periods_and_marks_the_actual_waveform_peaks() {
         for rate in crate::SAMPLE_RATES {
             for frequency in [60.0, 80.0, 113.0, 203.0, 350.0] {
-                let mut dsp = TdPsola::new();
+                let mut dsp = TdPsola::new(1.0);
                 for i in 0..16384 {
                     let phase = TAU * frequency * i as f64 / rate as f64;
                     dsp.push(0.1 * phase.cos() + 0.04 * (3.0 * phase).cos(), 1.5);
@@ -523,7 +590,7 @@ mod tests {
 
     #[test]
     fn unvoiced_noise_is_copied_at_the_declared_sample_delay() {
-        let mut dsp = TdPsola::new();
+        let mut dsp = TdPsola::new(1.0);
         let mut seed = 17_u32;
         let input: Vec<_> = (0..RING * 3)
             .map(|_| {
