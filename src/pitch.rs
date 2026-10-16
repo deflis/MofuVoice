@@ -499,6 +499,8 @@ pub struct PitchShifter {
     lobes: Box<[Lobe; BINS]>,
     rotation_angles: Box<[f64; BINS]>,
     rotations: Box<[Complex; BINS]>,
+    phase_input: Box<[Complex; 2 * BINS]>,
+    phase_result: Box<[f64; 2 * BINS]>,
     phase: Box<[f64; BINS]>,
     // Portable processors retain peak-only scalar analysis; evaluating every
     // bin is advantageous only with four-wide phase math.
@@ -506,6 +508,7 @@ pub struct PitchShifter {
     previous_spectrum: Box<[Complex; BINS]>,
     #[cfg(test)]
     eager_phase: bool,
+    #[cfg(test)]
     previous_phase: Box<[f64; BINS]>,
     synthesis_phase: Box<[f64; BINS]>,
     previous_synthesis_phase: Box<[f64; BINS]>,
@@ -570,11 +573,14 @@ impl PitchShifter {
             lobes: Box::new([Lobe::default(); BINS]),
             rotation_angles: Box::new([0.0; BINS]),
             rotations: Box::new([Complex::default(); BINS]),
+            phase_input: Box::new([Complex::default(); 2 * BINS]),
+            phase_result: Box::new([0.0; 2 * BINS]),
             phase: Box::new([0.0; BINS]),
             phase_valid: Box::new([true; BINS]),
             previous_spectrum: Box::new([Complex::default(); BINS]),
             #[cfg(test)]
             eager_phase: false,
+            #[cfg(test)]
             previous_phase: Box::new([0.0; BINS]),
             synthesis_phase: Box::new([0.0; BINS]),
             previous_synthesis_phase: Box::new([0.0; BINS]),
@@ -679,40 +685,39 @@ impl PitchShifter {
                 count += 1;
             }
         }
-        // Batch independent phases, including bins that may become peaks in the
-        // next frame. This replaces scalar atan2 calls and complex history with
-        // four-wide double-precision arithmetic and a real phase history.
+        // Batch current peaks and missing previous phases. Keep history for
+        // every bin so moving/new peaks retain their actual previous-frame phase.
         #[cfg(test)]
         let eager = self.eager_phase;
         #[cfg(not(test))]
         let eager = false;
-        let batched = vector || eager;
-        if batched {
-            phase::angles(
-                &self.spectrum[..BINS],
-                self.phase.as_mut_slice(),
-                vector && !eager,
-            );
-        }
-        if count == 0 {
+        if eager {
+            #[cfg(test)]
+            for i in 0..BINS {
+                let value = self.spectrum[i];
+                self.phase[i] = value.im.atan2(value.re);
+                let advance = self.nominal_advance[i];
+                self.phase_advance[i] =
+                    advance + wrap(self.phase[i] - self.previous_phase[i] - advance);
+                self.previous_phase[i] = self.phase[i];
+            }
+        } else if vector {
+            self.analyze_peaks(count, vector);
+        } else if count == 0 {
             // A spectrum without local maxima uses each bin as its own peak.
             for i in 1..BINS - 1 {
-                self.analyze_phase(i, batched);
+                self.analyze_phase(i);
             }
         } else {
             for p in 0..count {
-                self.analyze_phase(self.peaks[p], batched);
+                self.analyze_phase(self.peaks[p]);
             }
         }
-        if batched {
-            self.previous_phase.copy_from_slice(self.phase.as_slice());
-        } else {
-            self.previous_spectrum
-                .copy_from_slice(&self.spectrum[..BINS]);
-            self.phase_valid.fill(count == 0);
-            for &peak in &self.peaks[..count] {
-                self.phase_valid[peak] = true;
-            }
+        self.previous_spectrum
+            .copy_from_slice(&self.spectrum[..BINS]);
+        self.phase_valid.fill(count == 0 || eager);
+        for &peak in &self.peaks[..count] {
+            self.phase_valid[peak] = true;
         }
         self.previous_synthesis_phase
             .copy_from_slice(self.synthesis_phase.as_slice());
@@ -861,8 +866,10 @@ impl PitchShifter {
             // A lobe often contains fewer than four bins. Batch all independent
             // corrections so SIMD does not devolve into scalar exp tails per peak.
             // Unused bins have log-gain zero and do not enter synthesis.
-            if preserve {
-                math::exp(self.gains.as_mut_slice(), vector);
+            if preserve && lobe_count != 0 {
+                let first = self.lobes[0].first;
+                let last = self.lobes[lobe_count - 1].last;
+                math::exp(&mut self.gains[first..last], vector);
             }
             for lobe in &self.lobes[..lobe_count] {
                 let Lobe {
@@ -947,20 +954,54 @@ impl PitchShifter {
     }
 
     #[inline]
-    fn analyze_phase(&mut self, bin: usize, batched: bool) {
-        if !batched {
-            let previous = self.previous_spectrum[bin];
-            self.previous_phase[bin] = if self.phase_valid[bin] {
+    fn analyze_phase(&mut self, bin: usize) {
+        let previous = self.previous_spectrum[bin];
+        let previous_phase = if self.phase_valid[bin] {
+            self.phase[bin]
+        } else {
+            previous.im.atan2(previous.re)
+        };
+        let value = self.spectrum[bin];
+        self.phase[bin] = value.im.atan2(value.re);
+        let advance = self.nominal_advance[bin];
+        self.phase_advance[bin] = advance + wrap(self.phase[bin] - previous_phase - advance);
+    }
+
+    fn analyze_peaks(&mut self, count: usize, vector: bool) {
+        let active = if count == 0 {
+            for (i, bin) in self.peaks[..BINS - 2].iter_mut().enumerate() {
+                *bin = i + 1;
+            }
+            BINS - 2
+        } else {
+            count
+        };
+        let mut length = active;
+        for (i, &bin) in self.peaks[..active].iter().enumerate() {
+            self.phase_input[i] = self.spectrum[bin];
+            if !self.phase_valid[bin] {
+                self.phase_input[length] = self.previous_spectrum[bin];
+                length += 1;
+            }
+        }
+        phase::angles(
+            &self.phase_input[..length],
+            &mut self.phase_result[..length],
+            vector,
+        );
+        let mut previous_index = active;
+        for (i, &bin) in self.peaks[..active].iter().enumerate() {
+            let previous = if self.phase_valid[bin] {
                 self.phase[bin]
             } else {
-                previous.im.atan2(previous.re)
+                let phase = self.phase_result[previous_index];
+                previous_index += 1;
+                phase
             };
-            let value = self.spectrum[bin];
-            self.phase[bin] = value.im.atan2(value.re);
+            self.phase[bin] = self.phase_result[i];
+            let advance = self.nominal_advance[bin];
+            self.phase_advance[bin] = advance + wrap(self.phase[bin] - previous - advance);
         }
-        let advance = self.nominal_advance[bin];
-        self.phase_advance[bin] =
-            advance + wrap(self.phase[bin] - self.previous_phase[bin] - advance);
     }
 
     /// Equal-length blocks; callback storage and FFT tables are never allocated here.
