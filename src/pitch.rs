@@ -1,7 +1,7 @@
 //! Monophonic pitch shifting: spectral phase locking or waveform TD-PSOLA.
 //! All FFT tables, windows, and overlap storage are allocated before streaming.
 //! The spectral stage uses a long analysis window and a short right-aligned synthesis window,
-//! with SYNTHESIS samples of delay, optionally after TD-PSOLA for formant shifting.
+//! with SYNTHESIS samples of delay. TD-PSOLA uses waveform grains and resampling.
 //! The neutral setting bypasses exactly.
 #[cfg(test)]
 use crate::dsp::fft_kernel::FftKernel;
@@ -122,11 +122,6 @@ impl PitchSettings {
     /// Buffered delay of the configured wet path; neutral bypass is handled by callers.
     pub fn latency(self) -> usize {
         self.algorithm.latency()
-            + if self.algorithm == PitchAlgorithm::TdPsola && self.formant_shift != 0.0 {
-                LATENCY
-            } else {
-                0
-            }
     }
 
     pub fn build(self) -> Result<PitchShifter, Box<dyn Error>> {
@@ -638,7 +633,8 @@ impl PitchShifter {
             std::f64::consts::TAU * HOP as f64 * bin as f64 / WINDOW as f64
         }));
         Ok(Self {
-            td_psola: (algorithm == PitchAlgorithm::TdPsola).then(crate::td_psola::TdPsola::new),
+            td_psola: (algorithm == PitchAlgorithm::TdPsola)
+                .then(|| crate::td_psola::TdPsola::new(formant_ratio)),
             algorithm,
             synchronizer: sync::Synchronizer::new(),
             fft: Fft::new(),
@@ -720,13 +716,7 @@ impl PitchShifter {
 
     #[inline(always)]
     fn frame_inner(&mut self) {
-        // TD-PSOLA owns the pitch change. Its optional spectral post-filter changes
-        // only the envelope, with unity pitch ratio and the input spectral phases.
-        let ratio = if self.td_psola.is_some() {
-            1.0
-        } else {
-            self.ratio
-        };
+        let ratio = self.ratio;
         let clock = self.clock;
         self.fft.forward_windowed_ring(
             &self.input,
@@ -1118,7 +1108,7 @@ impl PitchShifter {
                 dry
             };
             self.input[self.clock % WINDOW] = source;
-            let wet = if self.td_psola.is_some() && self.formant_shift == 0.0 {
+            let wet = if self.td_psola.is_some() {
                 source
             } else {
                 self.output[self.clock % QUEUE]
@@ -1146,7 +1136,7 @@ impl PitchShifter {
             self.clock = (self.clock + 1) % QUEUE;
             self.until_frame -= 1;
             if self.until_frame == 0 {
-                if self.td_psola.is_none() || self.formant_shift != 0.0 {
+                if self.td_psola.is_none() {
                     self.frame();
                 }
                 self.until_frame = HOP;
