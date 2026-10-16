@@ -41,6 +41,21 @@ impl Fft {
             size *= 2;
         }
     }
+
+    /// In-place inverse transform. The forward transform is unscaled, so the
+    /// inverse applies 1/N after conjugating the input and output.
+    pub(crate) fn inverse(&self, data: &mut [Complex]) {
+        assert_eq!(data.len(), self.size);
+        for value in data.iter_mut() {
+            value.im = -value.im;
+        }
+        self.forward(data);
+        let scale = 1.0 / self.size as f64;
+        for value in data.iter_mut() {
+            value.re *= scale;
+            value.im *= -scale;
+        }
+    }
 }
 
 #[cfg(test)]

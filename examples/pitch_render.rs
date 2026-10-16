@@ -101,7 +101,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     if args.len() != 5 {
         return Err(
-            "Usage: pitch_render INPUT.wav OUTPUT_DIRECTORY PITCH_SEMITONES FORMANT_SEMITONES phase-locked|pvsola|td-psola"
+            "Usage: pitch_render INPUT.wav OUTPUT_DIRECTORY PITCH_SEMITONES FORMANT_SEMITONES phase-locked|pvsola|td-psola|fd-psola"
                 .into(),
         );
     }

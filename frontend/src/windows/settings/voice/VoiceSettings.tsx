@@ -15,6 +15,7 @@ export function VoiceSettings() {
     setPreserveFormants,
   } = useVoiceSettings();
   const tdPsola = pitchAlgorithm === "td-psola";
+  const fdPsola = pitchAlgorithm === "fd-psola";
   return (
     <section>
       <h2>声の変換</h2>
@@ -29,6 +30,7 @@ export function VoiceSettings() {
           <option value="phase-locked">フェーズロック（標準）</option>
           <option value="pvsola">PVSOLAアプローチ（実験）</option>
           <option value="td-psola">TD-PSOLA（実験）</option>
+          <option value="fd-psola">FD-PSOLA（実験）</option>
         </select>
       </label>
       <p>同じピッチ・響きの設定で聞き比べてください。変更は保存後、次の音声開始時に反映します。</p>
@@ -75,6 +77,10 @@ export function VoiceSettings() {
         <p>
           TD-PSOLAで高さを変え、響きの移動にはスペクトル処理を使います。DSP遅延は48 kHzで96
           ms、響きの移動が0以外なら約106.7 msです。
+        </p>
+      ) : fdPsola ? (
+        <p>
+          FD-PSOLAはピッチ同期フレームのスペクトルを変換します。フォルマント保持を有効にすると響きの包絡を維持します。DSP遅延は48 kHzで96 msです。
         </p>
       ) : (
         <p>オフでは高さの変更に合わせて響きも変わります。響きの調整値は0に戻ります。</p>

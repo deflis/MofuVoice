@@ -18,9 +18,9 @@ const ANALYSIS: usize = 3072;
 const HOP: usize = 128;
 const DECIMATION: usize = 4;
 const TAPS: usize = 33;
-const LOOKAHEAD: usize = ANALYSIS / 2 + TAPS / 2;
+pub(crate) const LOOKAHEAD: usize = ANALYSIS / 2 + TAPS / 2;
 const MIN_PERIOD: usize = 80;
-const MAX_PERIOD: usize = 800;
+pub(crate) const MAX_PERIOD: usize = 800;
 const FILTERED: usize = ANALYSIS / DECIMATION;
 const MAX_LAG: usize = MAX_PERIOD / DECIMATION;
 const MIN_LAG: usize = MIN_PERIOD / DECIMATION;
@@ -36,11 +36,26 @@ struct Mark {
     segment: u64,
 }
 
+#[derive(Clone, Copy)]
+struct Grain {
+    source: f64,
+    destination: f64,
+    left: f64,
+    right: f64,
+    gain: f64,
+    ratio: f64,
+    preserve_formants: bool,
+}
+
 pub(crate) struct TdPsola {
     input: Box<[f64; RING]>,
     output: Box<[f64; RING]>,
     coverage: Box<[bool; RING]>,
     voicing: Box<[f64; RING]>,
+    weights: Box<[f64; RING]>,
+    fd: Option<crate::fd_psola::FdFrameTransform>,
+    fd_input: Box<[f64; crate::fd_psola::FRAME]>,
+    fd_output: Box<[f64; crate::fd_psola::FRAME]>,
     filtered: Box<[f64; FILTERED]>,
     analysis: Box<[f64; FILTERED]>,
     difference: [f64; MAX_LAG + 2],
@@ -57,10 +72,19 @@ pub(crate) struct TdPsola {
     polarity: f64,
     segment: u64,
     voiced_mix: f64,
+    preserve_formants: bool,
 }
 
 impl TdPsola {
     pub fn new() -> Self {
+        Self::new_inner(false)
+    }
+
+    pub fn new_fd() -> Self {
+        Self::new_inner(true)
+    }
+
+    fn new_inner(frequency_domain: bool) -> Self {
         let mut taps = std::array::from_fn(|i| {
             let distance = i as f64 - (TAPS / 2) as f64;
             let sinc = if distance == 0.0 {
@@ -79,6 +103,10 @@ impl TdPsola {
             output: Box::new([0.0; RING]),
             coverage: Box::new([false; RING]),
             voicing: Box::new([0.0; RING]),
+            weights: Box::new([0.0; RING]),
+            fd: frequency_domain.then(crate::fd_psola::FdFrameTransform::new),
+            fd_input: Box::new([0.0; crate::fd_psola::FRAME]),
+            fd_output: Box::new([0.0; crate::fd_psola::FRAME]),
             filtered: Box::new([0.0; FILTERED]),
             analysis: Box::new([0.0; FILTERED]),
             difference: [0.0; MAX_LAG + 2],
@@ -95,10 +123,17 @@ impl TdPsola {
             polarity: 1.0,
             segment: 0,
             voiced_mix: 0.0,
+            preserve_formants: true,
         }
     }
 
+    #[cfg(test)]
     pub fn push(&mut self, sample: f64, ratio: f64) -> f64 {
+        self.push_with_formants(sample, ratio, true)
+    }
+
+    pub fn push_with_formants(&mut self, sample: f64, ratio: f64, preserve_formants: bool) -> f64 {
+        self.preserve_formants = preserve_formants;
         let now = self.clock;
         self.input[now % RING] = sample;
         if now.is_multiple_of(DECIMATION) {
@@ -118,12 +153,18 @@ impl TdPsola {
             } else {
                 0.0
             };
-            dry * (1.0 - mix) + self.output[index] * mix
+            let wet = if self.fd.is_some() && self.weights[index] > 1e-12 {
+                self.output[index] / self.weights[index]
+            } else {
+                self.output[index]
+            };
+            dry * (1.0 - mix) + wet * mix
         } else {
             0.0
         };
         self.output[index] = 0.0;
         self.coverage[index] = false;
+        self.weights[index] = 0.0;
         self.clock += 1;
         if self.clock.is_multiple_of(HOP) && self.clock > LOOKAHEAD {
             self.frame(ratio);
@@ -291,7 +332,11 @@ impl TdPsola {
                     && next.segment == mark.segment
                     && (mark.position - self.next_synthesis).abs() < mark.period * 0.75
                 {
-                    let synthesis_period = mark.period / ratio;
+                    let synthesis_period = if self.fd.is_some() {
+                        mark.period
+                    } else {
+                        mark.period / ratio
+                    };
                     let left = (mark.position - previous.position).min(
                         if self.previous_synthesis_period > 0.0 {
                             self.previous_synthesis_period
@@ -300,13 +345,15 @@ impl TdPsola {
                         },
                     );
                     let right = (next.position - mark.position).min(synthesis_period);
-                    self.grain(
-                        mark.position,
-                        self.next_synthesis + LATENCY as f64,
+                    self.grain(Grain {
+                        source: mark.position,
+                        destination: self.next_synthesis + LATENCY as f64,
                         left,
                         right,
-                        synthesis_period / ((left + right) * 0.5),
-                    );
+                        gain: synthesis_period / ((left + right) * 0.5),
+                        ratio,
+                        preserve_formants: self.preserve_formants,
+                    });
                     self.next_synthesis += synthesis_period;
                     self.previous_synthesis_period = synthesis_period;
                     continue;
@@ -333,7 +380,62 @@ impl TdPsola {
                 + fraction * (2.0 * a - 5.0 * b + 4.0 * c - d + fraction * (3.0 * (b - c) + d - a)))
     }
 
-    fn grain(&mut self, source: f64, destination: f64, left: f64, right: f64, gain: f64) {
+    fn grain(&mut self, grain: Grain) {
+        let Grain {
+            source,
+            destination,
+            left,
+            right,
+            gain,
+            ratio,
+            preserve_formants,
+        } = grain;
+        let half = crate::fd_psola::FRAME / 2;
+        if self.fd.is_some() {
+            let support = ((left + right).ceil() as usize).clamp(128, half);
+            for i in 0..crate::fd_psola::FRAME {
+                let offset = i as isize - half as isize;
+                if offset.unsigned_abs() > support {
+                    self.fd_input[i] = 0.0;
+                } else {
+                    let phase = std::f64::consts::PI * offset as f64 / support as f64;
+                    let window = 0.5 + 0.5 * phase.cos();
+                    self.fd_input[i] = self.interpolate(source + offset as f64) * window;
+                }
+            }
+        }
+        if let Some(fd) = &mut self.fd {
+            fd.process_grain(
+                &self.fd_input,
+                &mut self.fd_output,
+                ratio,
+                preserve_formants,
+            );
+            let first = (destination - half as f64).floor().max(self.clock as f64) as usize;
+            let last = (destination + half as f64).ceil() as usize;
+            assert!(
+                first >= self.clock,
+                "FD-PSOLA grain missed its synthesis deadline"
+            );
+            assert!(
+                last < self.clock + RING,
+                "FD-PSOLA synthesis exceeded its preallocated queue"
+            );
+            for output in first..=last {
+                let frame_index = (output as f64 - (destination - half as f64))
+                    .round()
+                    .clamp(0.0, (crate::fd_psola::FRAME - 1) as f64)
+                    as usize;
+                let phase = std::f64::consts::TAU * frame_index as f64
+                    / (crate::fd_psola::FRAME - 1) as f64;
+                let window = 0.5 - 0.5 * phase.cos();
+                let index = output % RING;
+                self.output[index] += self.fd_output[frame_index] * window * gain;
+                self.weights[index] += window * window;
+                self.coverage[index] = true;
+            }
+            return;
+        }
         assert!(
             destination - left >= self.clock as f64 - 1.0,
             "TD-PSOLA grain missed its synthesis deadline"
@@ -351,6 +453,7 @@ impl TdPsola {
             let window = 0.5 + 0.5 * (std::f64::consts::PI * normalized).cos();
             self.output[output % RING] += self.interpolate(source + offset) * window * gain;
             self.coverage[output % RING] = true;
+            self.weights[output % RING] += window;
         }
     }
 }

@@ -11,6 +11,7 @@ mod cpal_backend;
 pub mod deesser;
 pub mod dsp;
 pub mod eq;
+mod fd_psola;
 pub mod gate;
 #[cfg(feature = "desktop")]
 pub mod gui;
