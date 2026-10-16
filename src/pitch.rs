@@ -220,14 +220,10 @@ impl Fft {
         };
         let vector = self.vector();
         roots.first_four(work, vector);
-        roots.stage::<HALF, 8, 0>(work, 0, 4, vector);
-        roots.stage::<HALF, 16, 0>(work, 0, 8, vector);
-        roots.stage::<HALF, 32, 0>(work, 0, 16, vector);
-        roots.stage::<HALF, 64, 0>(work, 0, 32, vector);
-        roots.stage::<HALF, 128, 0>(work, 0, 64, vector);
-        roots.stage::<HALF, 256, 0>(work, 0, 128, vector);
-        roots.stage::<HALF, 512, 0>(work, 0, 256, vector);
-        roots.stage::<HALF, 1024, 0>(work, 0, 512, vector);
+        roots.pair::<HALF, 8, 16>(work, vector);
+        roots.pair::<HALF, 32, 64>(work, vector);
+        roots.pair::<HALF, 128, 256>(work, vector);
+        roots.pair::<HALF, 512, 1024>(work, vector);
         if inverse {
             work.scale(1.0 / HALF as f64);
         }
@@ -235,22 +231,17 @@ impl Fft {
 
     fn synthesis_stages(roots: &SplitRoots, data: &mut SplitBuffer<HALF>, vector: bool) {
         roots.first_four(data, vector);
-        roots.stage::<HALF, 8, 0>(data, 0, 4, vector);
-        roots.stage::<HALF, 16, 0>(data, 0, 8, vector);
-        roots.stage::<HALF, 32, 0>(data, 0, 16, vector);
-        roots.stage::<HALF, 64, 0>(data, 0, 32, vector);
-        roots.stage::<HALF, 128, 0>(data, 0, 64, vector);
-        roots.stage::<HALF, 256, 0>(data, 0, 128, vector);
+        roots.pair::<HALF, 8, 16>(data, vector);
+        roots.pair::<HALF, 32, 64>(data, vector);
+        roots.pair::<HALF, 128, 256>(data, vector);
         roots.stage::<HALF, 512, 2>(data, 0, 256, vector);
         roots.stage::<HALF, 1024, 2>(data, 256, 512, vector);
     }
 
     fn envelope_stages(roots: &SplitRoots, data: &mut SplitBuffer<HALF>, vector: bool) {
         roots.first_four(data, vector);
-        roots.stage::<HALF, 8, 0>(data, 0, 4, vector);
-        roots.stage::<HALF, 16, 0>(data, 0, 8, vector);
-        roots.stage::<HALF, 32, 0>(data, 0, 16, vector);
-        roots.stage::<HALF, 64, 0>(data, 0, 32, vector);
+        roots.pair::<HALF, 8, 16>(data, vector);
+        roots.pair::<HALF, 32, 64>(data, vector);
         Self::envelope_stage::<128>(roots, data, vector);
         Self::envelope_stage::<256>(roots, data, vector);
         Self::envelope_stage::<512>(roots, data, vector);

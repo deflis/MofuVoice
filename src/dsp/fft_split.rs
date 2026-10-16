@@ -2,14 +2,19 @@
 //! Callers select retained outputs; tables and arithmetic match the radix-2 FFT.
 use super::complex::Complex;
 
+#[repr(C)]
 pub(crate) struct SplitBuffer<const N: usize> {
     re: [f64; N],
+    // Offset the components by a cache line instead of a power-of-two stride.
+    // This avoids competing for the same L1 sets in large paired stages.
+    _padding: [f64; 8],
     im: [f64; N],
 }
 impl<const N: usize> Default for SplitBuffer<N> {
     fn default() -> Self {
         Self {
             re: [0.0; N],
+            _padding: [0.0; 8],
             im: [0.0; N],
         }
     }
@@ -43,6 +48,105 @@ pub(crate) struct SplitRoots {
     im: Vec<f64>,
 }
 impl SplitRoots {
+    /// Keep the intermediate results of two full stages in registers.
+    pub(crate) fn pair<const N: usize, const SMALL: usize, const LARGE: usize>(
+        &self,
+        data: &mut SplitBuffer<N>,
+        vector: bool,
+    ) {
+        assert!(
+            N.is_power_of_two()
+                && SMALL.is_power_of_two()
+                && SMALL >= 8
+                && LARGE == 2 * SMALL
+                && LARGE <= N
+        );
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        if vector {
+            // SAFETY: runtime AVX2 detection; the stage validates root/data ranges.
+            unsafe { self.pair_avx2::<N, SMALL, LARGE>(data) };
+            return;
+        }
+        let _ = vector;
+        self.stage::<N, SMALL, 0>(data, 0, SMALL / 2, false);
+        self.stage::<N, LARGE, 0>(data, 0, LARGE / 2, false);
+    }
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[target_feature(enable = "avx2")]
+    unsafe fn pair_avx2<const N: usize, const SMALL: usize, const LARGE: usize>(
+        &self,
+        data: &mut SplitBuffer<N>,
+    ) {
+        #[cfg(target_arch = "x86")]
+        use std::arch::x86::*;
+        #[cfg(target_arch = "x86_64")]
+        use std::arch::x86_64::*;
+        let half = SMALL / 2;
+        let wr = &self.re[half - 1..SMALL - 1];
+        let wi = &self.im[half - 1..SMALL - 1];
+        let vr = &self.re[SMALL - 1..LARGE - 1];
+        let vi = &self.im[SMALL - 1..LARGE - 1];
+        for (re, im) in data
+            .re
+            .as_chunks_mut::<LARGE>()
+            .0
+            .iter_mut()
+            .zip(data.im.as_chunks_mut::<LARGE>().0)
+        {
+            let (ab, cd) = re.split_at_mut(SMALL);
+            let (ar, br) = ab.split_at_mut(half);
+            let (cr, dr) = cd.split_at_mut(half);
+            let (ab, cd) = im.split_at_mut(SMALL);
+            let (ai, bi) = ab.split_at_mut(half);
+            let (ci, di) = cd.split_at_mut(half);
+            for j in (0..half).step_by(4) {
+                // SAFETY: half is a multiple of four. All component/root
+                // sub-slices have checked lengths and the outputs are disjoint.
+                unsafe {
+                    let w = _mm256_loadu_pd(wr[j..j + 4].as_ptr());
+                    let iw = _mm256_loadu_pd(wi[j..j + 4].as_ptr());
+                    let a = _mm256_loadu_pd(ar[j..j + 4].as_ptr());
+                    let ia = _mm256_loadu_pd(ai[j..j + 4].as_ptr());
+                    let b = _mm256_loadu_pd(br[j..j + 4].as_ptr());
+                    let ib = _mm256_loadu_pd(bi[j..j + 4].as_ptr());
+                    let pr = _mm256_sub_pd(_mm256_mul_pd(b, w), _mm256_mul_pd(ib, iw));
+                    let pi = _mm256_add_pd(_mm256_mul_pd(b, iw), _mm256_mul_pd(ib, w));
+                    let left0 = _mm256_add_pd(a, pr);
+                    let ileft0 = _mm256_add_pd(ia, pi);
+                    let left1 = _mm256_sub_pd(a, pr);
+                    let ileft1 = _mm256_sub_pd(ia, pi);
+                    let c = _mm256_loadu_pd(cr[j..j + 4].as_ptr());
+                    let ic = _mm256_loadu_pd(ci[j..j + 4].as_ptr());
+                    let d = _mm256_loadu_pd(dr[j..j + 4].as_ptr());
+                    let id = _mm256_loadu_pd(di[j..j + 4].as_ptr());
+                    let pr = _mm256_sub_pd(_mm256_mul_pd(d, w), _mm256_mul_pd(id, iw));
+                    let pi = _mm256_add_pd(_mm256_mul_pd(d, iw), _mm256_mul_pd(id, w));
+                    let right0 = _mm256_add_pd(c, pr);
+                    let iright0 = _mm256_add_pd(ic, pi);
+                    let right1 = _mm256_sub_pd(c, pr);
+                    let iright1 = _mm256_sub_pd(ic, pi);
+                    let w = _mm256_loadu_pd(vr[j..j + 4].as_ptr());
+                    let iw = _mm256_loadu_pd(vi[j..j + 4].as_ptr());
+                    let pr = _mm256_sub_pd(_mm256_mul_pd(right0, w), _mm256_mul_pd(iright0, iw));
+                    let pi = _mm256_add_pd(_mm256_mul_pd(right0, iw), _mm256_mul_pd(iright0, w));
+                    _mm256_storeu_pd(ar[j..j + 4].as_mut_ptr(), _mm256_add_pd(left0, pr));
+                    _mm256_storeu_pd(ai[j..j + 4].as_mut_ptr(), _mm256_add_pd(ileft0, pi));
+                    _mm256_storeu_pd(cr[j..j + 4].as_mut_ptr(), _mm256_sub_pd(left0, pr));
+                    _mm256_storeu_pd(ci[j..j + 4].as_mut_ptr(), _mm256_sub_pd(ileft0, pi));
+                    let w = _mm256_loadu_pd(vr[j + half..j + half + 4].as_ptr());
+                    let iw = _mm256_loadu_pd(vi[j + half..j + half + 4].as_ptr());
+                    let pr = _mm256_sub_pd(_mm256_mul_pd(right1, w), _mm256_mul_pd(iright1, iw));
+                    let pi = _mm256_add_pd(_mm256_mul_pd(right1, iw), _mm256_mul_pd(iright1, w));
+                    _mm256_storeu_pd(br[j..j + 4].as_mut_ptr(), _mm256_add_pd(left1, pr));
+                    _mm256_storeu_pd(bi[j..j + 4].as_mut_ptr(), _mm256_add_pd(ileft1, pi));
+                    _mm256_storeu_pd(dr[j..j + 4].as_mut_ptr(), _mm256_sub_pd(left1, pr));
+                    _mm256_storeu_pd(di[j..j + 4].as_mut_ptr(), _mm256_sub_pd(ileft1, pi));
+                }
+            }
+        }
+    }
+
     pub(crate) fn new(size: usize, inverse: bool) -> Self {
         assert!(size.is_power_of_two() && size >= 4);
         let sign = if inverse { 1.0 } else { -1.0 };
@@ -272,7 +376,7 @@ mod tests {
         }
     }
 
-    fn check<const N: usize>() {
+    fn check<const N: usize, const PAIRED: bool>() {
         let input: [Complex; N] = std::array::from_fn(|i| Complex {
             re: (i as f64 * 0.31).sin() * [1e-12, 1.0, 1e6][i % 3],
             im: (i as f64 * 0.17).cos(),
@@ -305,27 +409,43 @@ mod tests {
                 }
                 plan.first_four(&mut data, vector);
                 if N >= 8 {
-                    plan.stage::<N, 8, 0>(&mut data, 0, 4, vector);
+                    if PAIRED && N >= 16 {
+                        plan.pair::<N, 8, 16>(&mut data, vector);
+                    } else {
+                        plan.stage::<N, 8, 0>(&mut data, 0, 4, vector);
+                    }
                 }
-                if N >= 16 {
+                if N >= 16 && !PAIRED {
                     plan.stage::<N, 16, 0>(&mut data, 0, 8, vector);
                 }
                 if N >= 32 {
-                    plan.stage::<N, 32, 0>(&mut data, 0, 16, vector);
+                    if PAIRED && N >= 64 {
+                        plan.pair::<N, 32, 64>(&mut data, vector);
+                    } else {
+                        plan.stage::<N, 32, 0>(&mut data, 0, 16, vector);
+                    }
                 }
-                if N >= 64 {
+                if N >= 64 && !PAIRED {
                     plan.stage::<N, 64, 0>(&mut data, 0, 32, vector);
                 }
                 if N >= 128 {
-                    plan.stage::<N, 128, 0>(&mut data, 0, 64, vector);
+                    if PAIRED && N >= 256 {
+                        plan.pair::<N, 128, 256>(&mut data, vector);
+                    } else {
+                        plan.stage::<N, 128, 0>(&mut data, 0, 64, vector);
+                    }
                 }
-                if N >= 256 {
+                if N >= 256 && !PAIRED {
                     plan.stage::<N, 256, 0>(&mut data, 0, 128, vector);
                 }
                 if N >= 512 {
-                    plan.stage::<N, 512, 0>(&mut data, 0, 256, vector);
+                    if PAIRED && N >= 1024 {
+                        plan.pair::<N, 512, 1024>(&mut data, vector);
+                    } else {
+                        plan.stage::<N, 512, 0>(&mut data, 0, 256, vector);
+                    }
                 }
-                if N >= 1024 {
+                if N >= 1024 && !PAIRED {
                     plan.stage::<N, 1024, 0>(&mut data, 0, 512, vector);
                 }
                 for (i, reference) in expected.iter().enumerate() {
@@ -347,13 +467,20 @@ mod tests {
 
     #[test]
     fn split_scalar_and_vector_transforms_match_original_bits() {
-        check::<4>();
-        check::<8>();
-        check::<16>();
-        check::<32>();
-        check::<64>();
-        check::<256>();
-        check::<1024>();
+        check::<4, false>();
+        check::<4, true>();
+        check::<8, false>();
+        check::<8, true>();
+        check::<16, false>();
+        check::<16, true>();
+        check::<32, false>();
+        check::<32, true>();
+        check::<64, false>();
+        check::<64, true>();
+        check::<256, false>();
+        check::<256, true>();
+        check::<1024, false>();
+        check::<1024, true>();
     }
 
     #[test]
