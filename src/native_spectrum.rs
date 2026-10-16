@@ -169,8 +169,14 @@ unsafe fn draw_button(item: &DRAWITEMSTRUCT, state: &State, primary: bool) {
     let _ = DeleteObject(HGDIOBJ(brush.0));
     let _ = DeleteObject(HGDIOBJ(pen.0));
     let mut label = [0u16; 64];
-    GetWindowTextW(item.hwndItem, &mut label);
-    draw_label(item.hDC, state.font, text, item.rcItem, &mut label);
+    let length = GetWindowTextW(item.hwndItem, &mut label) as usize;
+    draw_label(
+        item.hDC,
+        state.font,
+        text,
+        item.rcItem,
+        &mut label[..length],
+    );
 }
 
 unsafe fn fill_meter_rect(dc: HDC, rect: RECT, color: COLORREF) {
