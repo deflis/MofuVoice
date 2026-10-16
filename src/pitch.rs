@@ -23,15 +23,32 @@ pub enum PitchAlgorithm {
     PhaseLocked,
     /// Experimental PVSOLA-inspired synchronization of directly mapped peaks.
     Pvsola,
+    TdPsola,
 }
 
 impl PitchAlgorithm {
-    pub const ALL: [Self; 2] = [Self::PhaseLocked, Self::Pvsola];
+    pub const ALL: [Self; 3] = [Self::PhaseLocked, Self::Pvsola, Self::TdPsola];
+    pub const SPECTRAL: [Self; 2] = [Self::PhaseLocked, Self::Pvsola];
+
+    pub fn latency(self) -> usize {
+        match self {
+            Self::TdPsola => crate::td_psola::LATENCY,
+            _ => LATENCY,
+        }
+    }
+
+    pub fn validate_formants(self, preserve: bool, shift: f64) -> Result<(), &'static str> {
+        if self == Self::TdPsola && (!preserve || shift != 0.0) {
+            return Err("TD-PSOLA requires formant preservation and formant shift 0; independent formant shifting is not implemented");
+        }
+        Ok(())
+    }
 
     pub fn name(self) -> &'static str {
         match self {
             Self::PhaseLocked => "phase-locked",
             Self::Pvsola => "pvsola",
+            Self::TdPsola => "td-psola",
         }
     }
 
@@ -39,7 +56,8 @@ impl PitchAlgorithm {
         match value {
             "phase-locked" => Ok(Self::PhaseLocked),
             "pvsola" => Ok(Self::Pvsola),
-            _ => Err("pitch algorithm must be phase-locked or pvsola"),
+            "td-psola" => Ok(Self::TdPsola),
+            _ => Err("pitch algorithm must be phase-locked, pvsola or td-psola"),
         }
     }
 }
@@ -526,6 +544,7 @@ struct Lobe {
 }
 
 pub struct PitchShifter {
+    td_psola: Option<crate::td_psola::TdPsola>,
     algorithm: PitchAlgorithm,
     synchronizer: sync::Synchronizer,
     fft: Fft,
@@ -590,6 +609,7 @@ impl PitchShifter {
     ) -> Result<Self, Box<dyn Error>> {
         let ratio = pitch_ratio(semitones)?;
         let formant_ratio = formant_ratio(formant_shift)?;
+        algorithm.validate_formants(preserve_formants, formant_shift)?;
         if !preserve_formants && formant_shift != 0.0 {
             return Err(InvalidFormant.into());
         }
@@ -607,6 +627,7 @@ impl PitchShifter {
             std::f64::consts::TAU * HOP as f64 * bin as f64 / WINDOW as f64
         }));
         Ok(Self {
+            td_psola: (algorithm == PitchAlgorithm::TdPsola).then(crate::td_psola::TdPsola::new),
             algorithm,
             synchronizer: sync::Synchronizer::new(),
             fft: Fft::new(),
@@ -1074,7 +1095,11 @@ impl PitchShifter {
             let value = sample.normalized();
             let dry = if value.is_finite() { value } else { 0.0 };
             self.input[self.clock % WINDOW] = dry;
-            let wet = self.output[self.clock % QUEUE];
+            let wet = if let Some(td_psola) = &mut self.td_psola {
+                td_psola.push(dry, self.ratio)
+            } else {
+                self.output[self.clock % QUEUE]
+            };
             self.output[self.clock % QUEUE] = 0.0;
             if self.remaining != 0 {
                 self.ratio += self.ratio_step;
@@ -1098,7 +1123,9 @@ impl PitchShifter {
             self.clock = (self.clock + 1) % QUEUE;
             self.until_frame -= 1;
             if self.until_frame == 0 {
-                self.frame();
+                if self.td_psola.is_none() {
+                    self.frame();
+                }
                 self.until_frame = HOP;
             }
         }
@@ -1290,7 +1317,7 @@ mod tests {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     #[test]
     fn vector_frame_matches_portable_across_formant_and_pitch_transitions() {
-        for algorithm in PitchAlgorithm::ALL {
+        for algorithm in PitchAlgorithm::SPECTRAL {
             if !std::is_x86_feature_detected!("avx2") {
                 return;
             }
@@ -1333,7 +1360,7 @@ mod tests {
 
     #[test]
     fn batched_phase_analysis_matches_system_reference() {
-        for algorithm in PitchAlgorithm::ALL {
+        for algorithm in PitchAlgorithm::SPECTRAL {
             let mut seed = 17_u32;
             let input: Vec<f32> = (0..16_384)
                 .map(|i| {
@@ -1410,7 +1437,7 @@ mod tests {
 
     #[test]
     fn shared_phase_rotation_matches_polar_reference_across_retargeting() {
-        for algorithm in PitchAlgorithm::ALL {
+        for algorithm in PitchAlgorithm::SPECTRAL {
             let input: Vec<f32> = (0..8192)
                 .map(|i| {
                     let phase = 0.013 * i as f64 + 0.000002 * (i * i) as f64;

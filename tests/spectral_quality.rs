@@ -14,7 +14,7 @@ fn tone_at_rate(frequency: f64, count: usize, rate: u32) -> Vec<f32> {
 
 #[test]
 fn pitch_lobes_above_nyquist_are_discarded_without_aliasing() {
-    for algorithm in PitchAlgorithm::ALL {
+    for algorithm in PitchAlgorithm::SPECTRAL {
         for pitch in [7.0, 12.0] {
             for preserve in [false, true] {
                 let input = tone(18_000.0, 24_000);
@@ -34,7 +34,7 @@ fn pitch_lobes_above_nyquist_are_discarded_without_aliasing() {
 
 #[test]
 fn moving_pitch_keeps_amplitude_and_phase_continuous() {
-    for algorithm in PitchAlgorithm::ALL {
+    for algorithm in PitchAlgorithm::SPECTRAL {
         let count = 96_000;
         let mut phase = 0.0_f64;
         let mut phases = Vec::with_capacity(count);
@@ -116,7 +116,7 @@ fn power_at_rate(signal: &[f32], frequency: f64, rate: u32) -> f64 {
 
 #[test]
 fn low_voice_tones_have_accurate_pitch_without_subharmonic_energy() {
-    for algorithm in PitchAlgorithm::ALL {
+    for algorithm in PitchAlgorithm::SPECTRAL {
         for rate in rust_low_latency_voice_changer::SAMPLE_RATES {
             low_voice_quality_at_rate(rate, algorithm);
         }
@@ -157,7 +157,7 @@ fn low_voice_quality_at_rate(rate: u32, algorithm: PitchAlgorithm) {
 
 #[test]
 fn preservation_and_shift_move_a_broadband_resonance_independently_of_pitch() {
-    for algorithm in PitchAlgorithm::ALL {
+    for algorithm in PitchAlgorithm::SPECTRAL {
         for rate in rust_low_latency_voice_changer::SAMPLE_RATES {
             formant_quality_at_rate(rate, algorithm);
         }
@@ -230,7 +230,7 @@ fn formant_quality_at_rate(rate: u32, algorithm: PitchAlgorithm) {
 
 #[test]
 fn low_components_are_suppressed_with_formants_enabled() {
-    for algorithm in PitchAlgorithm::ALL {
+    for algorithm in PitchAlgorithm::SPECTRAL {
         let input = tone(100.0, 48_000);
         for shift in [0.0, 3.0] {
             let mut output = vec![0.0; input.len()];
@@ -249,7 +249,7 @@ fn low_components_are_suppressed_with_formants_enabled() {
 
 #[test]
 fn block_boundaries_formats_bypass_and_retargeting() {
-    for algorithm in PitchAlgorithm::ALL {
+    for algorithm in PitchAlgorithm::SPECTRAL {
         let input = tone(113.0, 12_000);
         for (pitch, preserve, shift) in [(7.0, false, 0.0), (7.0, true, 3.0), (0.0, true, 3.0)] {
             let mut whole = vec![0.0; input.len()];
@@ -290,7 +290,7 @@ fn block_boundaries_formats_bypass_and_retargeting() {
 
 #[test]
 fn silence_and_impulse_delay_and_invalid_settings() {
-    for algorithm in PitchAlgorithm::ALL {
+    for algorithm in PitchAlgorithm::SPECTRAL {
         for preserve in [false, true] {
             let mut dsp = PitchShifter::new(7.0, preserve, 0.0, algorithm).unwrap();
             let mut output = vec![1.0; 8192];

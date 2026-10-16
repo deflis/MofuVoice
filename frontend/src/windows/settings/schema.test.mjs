@@ -11,11 +11,27 @@ import {
 const { settingsSchema } = await import("./schema.ts");
 const { settingsApi } = await import("./api.ts");
 
+test("TD-PSOLA selection clears unsupported formant settings and validates IPC", async () => {
+  settingsStore.getState().voice.setFormantShift(2.53);
+  settingsStore.getState().voice.setPreserveFormants(false);
+  settingsStore.getState().voice.setPitchAlgorithm("td-psola");
+  assert.equal(settingsStore.getState().voice.formantShift, 0);
+  assert.equal(settingsStore.getState().voice.preserveFormants, true);
+  await settingsStore.getState().save();
+  assert.equal(calls("save_settings")[0].arguments[1].settings.voice.pitchAlgorithm, "td-psola");
+  for (const voice of [
+    { ...settings.voice, pitchAlgorithm: "td-psola", formantShift: 2 },
+    { ...settings.voice, pitchAlgorithm: "td-psola", preserveFormants: false },
+  ]) {
+    assert.equal(v.safeParse(settingsSchema, { ...settings, voice }).success, false);
+  }
+});
+
 test("pitch algorithm selection is validated and saved", async () => {
   settingsStore.getState().voice.setPitchAlgorithm("pvsola");
   await settingsStore.getState().save();
   assert.equal(calls("save_settings")[0].arguments[1].settings.voice.pitchAlgorithm, "pvsola");
-  for (const pitchAlgorithm of ["phase-locked", "pvsola"]) {
+  for (const pitchAlgorithm of ["phase-locked", "pvsola", "td-psola"]) {
     assert.equal(
       v.safeParse(settingsSchema, { ...settings, voice: { ...settings.voice, pitchAlgorithm } })
         .success,

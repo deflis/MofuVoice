@@ -23,7 +23,7 @@ fn voiced_glides_keep_the_fundamental_phase_continuous() {
         .collect();
     for pitch in [3.0, 7.0, 12.0] {
         let ratio = pitch_ratio(pitch).unwrap();
-        for algorithm in PitchAlgorithm::ALL {
+        for algorithm in PitchAlgorithm::SPECTRAL {
             let mut output = vec![0.0; input.len()];
             PitchShifter::new(pitch, false, 0.0, algorithm)
                 .unwrap()
@@ -103,7 +103,8 @@ fn voiced_harmonics_keep_their_relative_phase_shape() {
                         })
                         .collect();
                     let mut errors = [0.0; 2];
-                    for (algorithm, error) in PitchAlgorithm::ALL.into_iter().zip(&mut errors) {
+                    for (algorithm, error) in PitchAlgorithm::SPECTRAL.into_iter().zip(&mut errors)
+                    {
                         let mut output = vec![0.0; input.len()];
                         PitchShifter::new(pitch, preserve, 0.0, algorithm)
                             .unwrap()

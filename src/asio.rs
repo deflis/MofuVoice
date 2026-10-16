@@ -1,5 +1,5 @@
 //! Direct ASIO buffer callbacks. asio-sys is used only to load/unload the driver.
-use crate::{audio::DspChain, dsp::Sample, pitch::LATENCY, RATE};
+use crate::{audio::DspChain, dsp::Sample, RATE};
 use asio_sys::{bindings::asio_import as ffi, Driver};
 use std::{
     cell::UnsafeCell,
@@ -469,6 +469,7 @@ pub(crate) fn supported_sample_rates() -> Result<Vec<u32>> {
 
 pub use crate::audio::DspSettings;
 pub struct Engine {
+    pitch_latency: usize,
     configuration: crate::backend::AudioConfiguration,
     details: String,
     driver: Driver,
@@ -503,6 +504,7 @@ impl Engine {
         let input_channel = routing.input_channel;
         let mut output_channels = routing.output_channels.clone();
         output_channels.sort_unstable();
+        let pitch_latency = dsp.pitch.algorithm.latency();
         let dsp = DspChain::with_sample_rate(dsp, rate)?;
         let mut buffers = Vec::with_capacity(config.inputs + config.outputs);
         for (input, channels) in [(true, config.inputs), (false, config.outputs)] {
@@ -531,6 +533,7 @@ impl Engine {
             scratch: UnsafeCell::new(vec![0.0; frames as usize]),
         });
         let mut engine = Self {
+            pitch_latency,
             configuration: config.audio_configuration(),
             details: config.summary(),
             driver,
@@ -603,7 +606,8 @@ impl Engine {
     }
     pub fn summary(&self) -> String {
         let metrics = &self.state.metrics;
-        format!("duplex blocks={}; frames={}; spectral wet DSP={LATENCY} samples ({:.2} ms), neutral bypass=0; nonzero input samples={}; max callback={:.3} us; deadline misses={}; timestamp blocks={}; sample-position gaps={}; fault flags=0x{:x}", self.blocks(), self.state.frames, LATENCY as f64 * 1000.0 / self.configuration.sample_rate, metrics.nonzero.load(Ordering::Relaxed), metrics.max_ns.load(Ordering::Relaxed) as f64 / 1000.0, metrics.late.load(Ordering::Relaxed), metrics.timestamp_blocks.load(Ordering::Relaxed), metrics.gaps.load(Ordering::Relaxed), metrics.faults.load(Ordering::Relaxed))
+        let latency = self.pitch_latency;
+        format!("duplex blocks={}; frames={}; wet DSP={latency} samples ({:.2} ms), neutral bypass=0; nonzero input samples={}; max callback={:.3} us; deadline misses={}; timestamp blocks={}; sample-position gaps={}; fault flags=0x{:x}", self.blocks(), self.state.frames, latency as f64 * 1000.0 / self.configuration.sample_rate, metrics.nonzero.load(Ordering::Relaxed), metrics.max_ns.load(Ordering::Relaxed) as f64 / 1000.0, metrics.late.load(Ordering::Relaxed), metrics.timestamp_blocks.load(Ordering::Relaxed), metrics.gaps.load(Ordering::Relaxed), metrics.faults.load(Ordering::Relaxed))
     }
     pub fn print_latencies(&self) -> Result<()> {
         println!("{}", self.latency_summary()?);

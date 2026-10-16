@@ -59,6 +59,9 @@ fn main() {
     for algorithm in PitchAlgorithm::ALL {
         for pitch in [-12.0, -3.0, 0.0, 3.0, 7.0, 12.0] {
             for preserve in [false, true] {
+                if algorithm == PitchAlgorithm::TdPsola && !preserve {
+                    continue;
+                }
                 for auto_level in [false, true] {
                     let mut times = Vec::new();
                     let mut worst_block = 0.0_f64;

@@ -14,6 +14,7 @@ export function VoiceSettings() {
     setFormantShift,
     setPreserveFormants,
   } = useVoiceSettings();
+  const tdPsola = pitchAlgorithm === "td-psola";
   return (
     <section>
       <h2>声の変換</h2>
@@ -27,6 +28,7 @@ export function VoiceSettings() {
         >
           <option value="phase-locked">フェーズロック（標準）</option>
           <option value="pvsola">PVSOLAアプローチ（実験）</option>
+          <option value="td-psola">TD-PSOLA（実験）</option>
         </select>
       </label>
       <p>同じピッチ・響きの設定で聞き比べてください。変更は保存後、次の音声開始時に反映します。</p>
@@ -37,7 +39,7 @@ export function VoiceSettings() {
         value={pitch}
         onChange={(value) => setPitch(value)}
       />
-      <fieldset className="settings" disabled={!preserveFormants}>
+      <fieldset className="settings" disabled={!preserveFormants || tdPsola}>
         <SemitonesInput
           label="声の響き（フォルマント）"
           lowerLabel="太く"
@@ -59,6 +61,7 @@ export function VoiceSettings() {
         <input
           type="checkbox"
           checked={preserveFormants}
+          disabled={tdPsola}
           onChange={(event) => {
             setPreserveFormants(event.target.checked);
             if (!event.target.checked) {
@@ -68,7 +71,14 @@ export function VoiceSettings() {
         />
         声の響きを独立して調整する
       </label>
-      <p>オフでは高さの変更に合わせて響きも変わります。響きの調整値は0に戻ります。</p>
+      {tdPsola ? (
+        <p>
+          TD-PSOLAは元の響きを保持します。独立した響きの移動には対応していません。解析のためDSP遅延は約85
+          ms（48 kHz）あります。
+        </p>
+      ) : (
+        <p>オフでは高さの変更に合わせて響きも変わります。響きの調整値は0に戻ります。</p>
+      )}
     </section>
   );
 }

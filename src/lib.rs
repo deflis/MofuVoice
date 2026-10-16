@@ -23,6 +23,7 @@ pub mod pitch;
 pub mod rumble;
 pub mod session;
 pub mod spectrum;
+mod td_psola;
 /// Default sample rate; runtime sessions carry their selected rate separately.
 pub const RATE: u32 = 48_000;
 // Keep the fixed-window pitch/formant engine near its validated 48 kHz design.

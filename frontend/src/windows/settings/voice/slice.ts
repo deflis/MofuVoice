@@ -13,7 +13,13 @@ export const createVoiceSlice: StateCreator<SettingsStore, [], [], VoiceSlice> =
   voice: {
     pitchAlgorithm: "phase-locked",
     setPitchAlgorithm: (value) =>
-      set((state) => ({ voice: { ...state.voice, pitchAlgorithm: value } })),
+      set((state) => ({
+        voice: {
+          ...state.voice,
+          pitchAlgorithm: value,
+          ...(value === "td-psola" ? { preserveFormants: true, formantShift: 0 } : {}),
+        },
+      })),
     pitch: 0,
     formantShift: 0,
     preserveFormants: true,

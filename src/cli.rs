@@ -136,11 +136,10 @@ impl Options {
                     formant_given = true;
                 }
                 "--pitch-algorithm" if !algorithm_given => {
-                    options.pitch.algorithm = crate::pitch::PitchAlgorithm::parse(
-                        &args
-                            .next()
-                            .ok_or("--pitch-algorithm requires phase-locked or pvsola")?,
-                    )?;
+                    options.pitch.algorithm =
+                        crate::pitch::PitchAlgorithm::parse(&args.next().ok_or(
+                            "--pitch-algorithm requires phase-locked, pvsola or td-psola",
+                        )?)?;
                     algorithm_given = true;
                 }
                 "--pitch" if !pitch_given => {
@@ -377,7 +376,7 @@ impl Options {
                     || input_channel_given
                     || output_channels_given))
         {
-            return Err("Choose one CLI mode: --help, --list-devices, --inspect [--device NAME] [--frames N] [--sample-rate HZ], or [--device NAME] [--frames N] [--sample-rate HZ] [--seconds N] [--pitch SEMITONES] [--pitch-algorithm phase-locked|pvsola] [--formant preserve|off] [--formant-shift SEMITONES] [--eq on|off] [--eq-mode simple|pro] [--eq-bandN HZ,DB,Q] [--eq-output DB] [--auto-level on|off] [--compressor on|off] [--level-target DB] [--level-max-gain DB] [--level-floor DB] [--level-response MS] [--compress-threshold DB] [--compress-ratio N] [--compress-attack MS] [--compress-release MS] [--deesser on|off] [--deesser-mode simple|pro] [--deesser-frequency HZ] [--deesser-threshold DBFS] [--deesser-range DB] [--deesser-attack MS] [--deesser-release MS] [--rumble-filter on|off] [--gate on|off] [--gate-threshold auto|DB] [--gate-attack MS] [--gate-release MS]".into());
+            return Err("Choose one CLI mode: --help, --list-devices, --inspect [--device NAME] [--frames N] [--sample-rate HZ], or [--device NAME] [--frames N] [--sample-rate HZ] [--seconds N] [--pitch SEMITONES] [--pitch-algorithm phase-locked|pvsola|td-psola] [--formant preserve|off] [--formant-shift SEMITONES] [--eq on|off] [--eq-mode simple|pro] [--eq-bandN HZ,DB,Q] [--eq-output DB] [--auto-level on|off] [--compressor on|off] [--level-target DB] [--level-max-gain DB] [--level-floor DB] [--level-response MS] [--compress-threshold DB] [--compress-ratio N] [--compress-attack MS] [--compress-release MS] [--deesser on|off] [--deesser-mode simple|pro] [--deesser-frequency HZ] [--deesser-threshold DBFS] [--deesser-range DB] [--deesser-attack MS] [--deesser-release MS] [--rumble-filter on|off] [--gate on|off] [--gate-threshold auto|DB] [--gate-attack MS] [--gate-release MS]".into());
         }
         Ok(options)
     }
@@ -389,6 +388,9 @@ impl Options {
         }
         crate::pitch::pitch_ratio(self.pitch.semitones)?;
         crate::pitch::formant_ratio(self.pitch.formant_shift)?;
+        self.pitch
+            .algorithm
+            .validate_formants(self.pitch.preserve_formants, self.pitch.formant_shift)?;
         if !self.pitch.preserve_formants && self.pitch.formant_shift != 0.0 {
             return Err(crate::pitch::InvalidFormant.into());
         }
