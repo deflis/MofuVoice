@@ -1,5 +1,5 @@
 //! Double-precision phase math, batched across independent spectral bins.
-//! SIMD uses range reduction and Taylor series, without FMA or f32 arithmetic.
+//! SIMD uses range reduction and Chebyshev interpolants, without FMA or f32 arithmetic.
 use super::complex::Complex;
 
 pub(crate) fn angles(input: &[Complex], output: &mut [f64], vector: bool) {
@@ -80,10 +80,17 @@ unsafe fn angles_avx2(input: &[Complex], output: &mut [f64]) {
                 _mm256_add_pd(one, _mm256_mul_pd(t, pivot)),
             );
             let z2 = _mm256_mul_pd(z, z);
-            // |z| <= tan(pi/16). The omitted term is <= |z|^25/25 < 1.2e-19.
-            let mut p = _mm256_set1_pd(-1.0 / 23.0);
-            for k in (1..11).rev() {
-                let coefficient = if k % 2 == 0 { 1.0 } else { -1.0 } / (2 * k + 1) as f64;
+            // Seven-point Chebyshev interpolation of (atan(z)-z)/z^3 on
+            // z^2 in [0,tan(pi/16)^2] gives a degree-15 odd atan polynomial.
+            let mut p = _mm256_set1_pd(-0.05909857213116147);
+            for coefficient in [
+                0.07652130942243261,
+                -0.09089837900709528,
+                0.11111096372965647,
+                -0.14285714188882723,
+                0.1999999999976099,
+                -0.33333333333333237,
+            ] {
                 p = _mm256_add_pd(_mm256_set1_pd(coefficient), _mm256_mul_pd(z2, p));
             }
             let a = _mm256_add_pd(
@@ -133,34 +140,32 @@ unsafe fn phasors_avx2(input: &[f64], output: &mut [Complex]) {
                 _mm256_mul_pd(n, _mm256_set1_pd(6.077100506506192e-11)),
             );
             let r2 = _mm256_mul_pd(r, r);
-            let mut s = _mm256_set1_pd(-1.0 / 121645100408832000.0);
+            // Interpolate (sin(r)-r)/r^3 and (cos(r)-1)/r^2 on
+            // r^2 in [0,(pi/4)^2], giving degrees 13 and 14 respectively.
+            // Tests include argument reduction and f64 evaluation error.
+            let mut s = _mm256_set1_pd(1.5918129294866608e-10);
             for coefficient in [
-                1.0 / 355687428096000.0,
-                -1.0 / 1307674368000.0,
-                1.0 / 6227020800.0,
-                -1.0 / 39916800.0,
-                1.0 / 362880.0,
-                -1.0 / 5040.0,
-                1.0 / 120.0,
-                -1.0 / 6.0,
+                -2.5051131845003624e-08,
+                2.755731610255244e-06,
+                -0.00019841269836758574,
+                0.008333333333330948,
+                -0.16666666666666666,
             ] {
                 s = _mm256_add_pd(_mm256_set1_pd(coefficient), _mm256_mul_pd(r2, s));
             }
             let s = _mm256_add_pd(r, _mm256_mul_pd(_mm256_mul_pd(r, r2), s));
-            let mut c = _mm256_set1_pd(-1.0 / 6402373705728000.0);
+            let mut c = _mm256_set1_pd(-1.1367998654022494e-11);
             for coefficient in [
-                1.0 / 20922789888000.0,
-                -1.0 / 87178291200.0,
-                1.0 / 479001600.0,
-                -1.0 / 3628800.0,
-                1.0 / 40320.0,
-                -1.0 / 720.0,
-                1.0 / 24.0,
+                2.0875886738047052e-09,
+                -2.7557315566341895e-07,
+                2.480158729369346e-05,
+                -0.0013888888888880775,
+                0.04166666666666664,
                 -0.5,
-                1.0,
             ] {
                 c = _mm256_add_pd(_mm256_set1_pd(coefficient), _mm256_mul_pd(r2, c));
             }
+            let c = _mm256_add_pd(_mm256_set1_pd(1.0), _mm256_mul_pd(r2, c));
             let quadrant = _mm256_cvtepi32_epi64(_mm256_cvttpd_epi32(n));
             let odd = _mm256_castsi256_pd(_mm256_cmpeq_epi64(
                 _mm256_and_si256(quadrant, _mm256_set1_epi64x(1)),
@@ -265,6 +270,35 @@ mod tests {
                         assert_eq!(actual.to_bits(), expected.to_bits());
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn atan_ratios_match_system_math_at_reduction_boundaries() {
+        let mut ratios: Vec<_> = (0..=16_384).map(|i| i as f64 / 16_384.0).collect();
+        for boundary in [0.198912367379658_f64, 0.6681786379192989, 1.0] {
+            for offset in -2_i64..=2 {
+                ratios.push(f64::from_bits(
+                    boundary.to_bits().wrapping_add_signed(offset),
+                ));
+            }
+        }
+        let mut input = Vec::new();
+        for ratio in ratios {
+            for x in [-1.0, 1.0] {
+                for sign in [-1.0, 1.0] {
+                    let y = ratio * sign;
+                    input.extend([Complex { re: x, im: y }, Complex { re: y, im: x }]);
+                }
+            }
+        }
+        for vector in [false, vector_available()] {
+            let mut output = vec![0.0; input.len()];
+            angles(&input, &mut output, vector);
+            for (value, actual) in input.iter().zip(output) {
+                let expected = value.im.atan2(value.re);
+                assert!((actual - expected).abs() <= 9e-16);
             }
         }
     }
