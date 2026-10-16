@@ -41,6 +41,10 @@ windows = { version = "0.61", features = [
 [build-dependencies]
 tauri-build = { version = "2", optional = true , features = [] }
 
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
 [[bench]]
 name = "spectral"
 harness = false
@@ -59,4 +63,8 @@ harness = false
 
 [[bench]]
 name = "level"
+harness = false
+
+[[bench]]
+name = "pipeline"
 harness = false
