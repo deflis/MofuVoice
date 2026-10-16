@@ -13,6 +13,7 @@ use streams::WindowStreams;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct LevelControls {
     enabled: bool,
+    compressor_enabled: bool,
     target_db: f64,
     max_gain_db: f64,
     floor_db: f64,
@@ -26,6 +27,7 @@ impl LevelControls {
     fn from_settings(settings: crate::level::LevelSettings) -> Self {
         Self {
             enabled: settings.enabled,
+            compressor_enabled: settings.compressor_enabled,
             target_db: settings.target_db,
             max_gain_db: settings.max_gain_db,
             floor_db: settings.floor_db,
@@ -39,6 +41,7 @@ impl LevelControls {
     fn settings(&self) -> crate::level::LevelSettings {
         crate::level::LevelSettings {
             enabled: self.enabled,
+            compressor_enabled: self.compressor_enabled,
             target_db: self.target_db,
             max_gain_db: self.max_gain_db,
             floor_db: self.floor_db,
@@ -1108,6 +1111,8 @@ mod tests {
                 "on",
                 "--auto-level",
                 "on",
+                "--compressor",
+                "on",
                 "--level-target",
                 "-18",
                 "--level-max-gain",
@@ -1135,6 +1140,7 @@ mod tests {
         gui_settings::save(&path, &controls.options().unwrap()).unwrap();
         assert_eq!(gui_settings::load(&path).unwrap(), options);
         controls.level.enabled = false;
+        assert!(controls.options().unwrap().level.compressor_enabled);
         assert_eq!(
             controls.options().unwrap().level.values(),
             options.level.values()

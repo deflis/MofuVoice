@@ -78,6 +78,7 @@ fn callback_does_not_allocate_including_first_frames_and_transitions() {
         let mut dsp = PitchShifter::new(7.0, preserve, 0.0).unwrap();
         let mut level = rust_low_latency_voice_changer::level::LevelSettings {
             enabled: true,
+            compressor_enabled: true,
             ..Default::default()
         }
         .build()

@@ -33,6 +33,35 @@ fn neutral_bypass_preserves_supported_sample_formats() {
 }
 
 #[test]
+fn level_and_compressor_switches_reach_the_audio_pipeline_in_all_formats() {
+    fn check<T: Sample + std::fmt::Debug>() {
+        let input: Vec<T> = (0..RATE as usize)
+            .map(|i| T::from_normalized(0.5 * (i as f64 * 0.03).sin()))
+            .collect();
+        for level in ["off", "on"] {
+            for compressor in ["off", "on"] {
+                let args = ["--auto-level", level, "--compressor", compressor];
+                let mut expected = input.clone();
+                settings(&args)
+                    .level
+                    .build()
+                    .unwrap()
+                    .process_in_place(&mut expected);
+                let mut processor = AudioProcessor::<T>::new(RATE, 63, settings(&args)).unwrap();
+                let mut actual = vec![T::default(); input.len()];
+                for (source, dest) in input.chunks(63).zip(actual.chunks_mut(63)) {
+                    processor.process_block(source, dest).unwrap();
+                }
+                assert_eq!(actual, expected, "level={level}, compressor={compressor}");
+            }
+        }
+    }
+    check::<f32>();
+    check::<i16>();
+    check::<i32>();
+}
+
+#[test]
 fn gate_only_silences_invalid_samples_without_losing_input_telemetry() {
     let input = [0.25_f32, f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0];
     let mut processor = AudioProcessor::new(RATE, 5, settings(&["--gate", "on"])).unwrap();

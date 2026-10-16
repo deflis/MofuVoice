@@ -34,6 +34,7 @@ pub const KEYS: [&str; 8] = [
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LevelSettings {
     pub enabled: bool,
+    pub compressor_enabled: bool,
     pub target_db: f64,
     pub max_gain_db: f64,
     pub floor_db: f64,
@@ -47,6 +48,7 @@ impl Default for LevelSettings {
     fn default() -> Self {
         Self {
             enabled: false,
+            compressor_enabled: false,
             target_db: -20.0,
             max_gain_db: 9.0,
             floor_db: -50.0,
@@ -122,6 +124,14 @@ impl LevelSettings {
             level_rate: update_rate(self.response_ms, sample_rate as f64),
             attack_rate: update_rate(self.attack_ms, sample_rate as f64),
             release_rate: update_rate(self.release_ms, sample_rate as f64),
+            guard_release_rate: update_rate(
+                if self.compressor_enabled {
+                    self.release_ms
+                } else {
+                    150.0
+                },
+                sample_rate as f64,
+            ),
         })
     }
 }
@@ -148,6 +158,7 @@ pub struct AutoLevel {
     level_rate: f64,
     attack_rate: f64,
     release_rate: f64,
+    guard_release_rate: f64,
 }
 impl AutoLevel {
     fn compression_target(&self) -> f64 {
@@ -164,7 +175,7 @@ impl AutoLevel {
         }
     }
     pub fn process_in_place<T: Sample>(&mut self, samples: &mut [T]) {
-        if !self.settings.enabled {
+        if !self.settings.enabled && !self.settings.compressor_enabled {
             return;
         } // Preserve every bypass bit, including NaNs.
         for sample in samples {
@@ -175,35 +186,41 @@ impl AutoLevel {
             } else {
                 0.0
             };
-            self.power += (input * input - self.power) * self.rms_rate;
-            let rms_db = amplitude_db(self.power.sqrt(), 1e-12);
-            if rms_db > self.settings.floor_db
-                && amplitude_db(input.abs(), 1e-12) > self.settings.floor_db
-            {
-                let target =
-                    (self.settings.target_db - rms_db).clamp(-18.0, self.settings.max_gain_db);
-                self.level_gain_db += (target - self.level_gain_db) * self.level_rate;
+            if self.settings.enabled {
+                self.power += (input * input - self.power) * self.rms_rate;
+                let rms_db = amplitude_db(self.power.sqrt(), 1e-12);
+                if rms_db > self.settings.floor_db
+                    && amplitude_db(input.abs(), 1e-12) > self.settings.floor_db
+                {
+                    let target =
+                        (self.settings.target_db - rms_db).clamp(-18.0, self.settings.max_gain_db);
+                    self.level_gain_db += (target - self.level_gain_db) * self.level_rate;
+                }
             }
             let leveled = input * amplitude(self.level_gain_db);
-            self.peak += (0.0 - self.peak) * self.rms_rate;
-            self.peak = self.peak.max(leveled.abs());
-            let target = self.compression_target();
-            let rate = if target > self.compression_db {
-                self.attack_rate
+            let compressed = if self.settings.compressor_enabled {
+                self.peak += (0.0 - self.peak) * self.rms_rate;
+                self.peak = self.peak.max(leveled.abs());
+                let target = self.compression_target();
+                let rate = if target > self.compression_db {
+                    self.attack_rate
+                } else {
+                    self.release_rate
+                };
+                self.compression_db += (target - self.compression_db) * rate;
+                // A zero target must still release existing attenuation. Skip the
+                // conversion only when the smoothed attenuation itself is zero.
+                if self.compression_db == 0.0 {
+                    leveled
+                } else {
+                    leveled * amplitude(-self.compression_db)
+                }
             } else {
-                self.release_rate
-            };
-            self.compression_db += (target - self.compression_db) * rate;
-            // A zero target must still release existing attenuation. Skip the
-            // conversion only when the smoothed attenuation itself is zero.
-            let compressed = if self.compression_db == 0.0 {
                 leveled
-            } else {
-                leveled * amplitude(-self.compression_db)
             };
             // Immediate peak guard followed by smooth recovery; no lookahead or delayed samples.
             let ceiling_gain = (amplitude(-1.0) / compressed.abs().max(1e-12)).min(1.0);
-            self.guard_gain += (1.0 - self.guard_gain) * self.release_rate;
+            self.guard_gain += (1.0 - self.guard_gain) * self.guard_release_rate;
             self.guard_gain = self.guard_gain.min(ceiling_gain);
             *sample = T::from_normalized(compressed * self.guard_gain);
         }
@@ -365,7 +382,70 @@ mod tests {
     fn active() -> LevelSettings {
         LevelSettings {
             enabled: true,
+            compressor_enabled: true,
             ..LevelSettings::default()
+        }
+    }
+    #[test]
+    fn level_and_compressor_run_independently_across_block_boundaries() {
+        let input = tone(0.5, 3);
+        for enabled in [false, true] {
+            for compressor_enabled in [false, true] {
+                let settings = LevelSettings {
+                    enabled,
+                    compressor_enabled,
+                    target_db: -12.0,
+                    threshold_db: -24.0,
+                    ..LevelSettings::default()
+                };
+                for rate in [44100, 48000] {
+                    let mut expected = input.clone();
+                    let mut dsp = settings.build_with_sample_rate(rate).unwrap();
+                    dsp.process_in_place(&mut expected);
+                    assert_eq!(dsp.level_gain_db != 0.0, enabled);
+                    assert_eq!(dsp.compression_db != 0.0, compressor_enabled);
+                    if !enabled && !compressor_enabled {
+                        assert_eq!(expected, input);
+                    } else {
+                        assert_ne!(expected, input);
+                    }
+                    for block in [1, 63, 512, 777] {
+                        let mut actual = input.clone();
+                        let mut chunked = settings.build_with_sample_rate(rate).unwrap();
+                        for chunk in actual.chunks_mut(block) {
+                            chunked.process_in_place(chunk);
+                        }
+                        assert_eq!(actual, expected);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn disabled_stage_parameters_do_not_affect_output() {
+        for enabled in [false, true] {
+            let settings = LevelSettings {
+                enabled,
+                compressor_enabled: !enabled,
+                ..LevelSettings::default()
+            };
+            let mut changed = settings;
+            if enabled {
+                changed.threshold_db = -36.0;
+                changed.ratio = 20.0;
+                changed.attack_ms = 0.1;
+                changed.release_ms = 2000.0;
+            } else {
+                changed.target_db = -6.0;
+                changed.max_gain_db = 18.0;
+                changed.response_ms = 100.0;
+            }
+            let mut expected = tone(0.5, 2);
+            let mut actual = expected.clone();
+            settings.build().unwrap().process_in_place(&mut expected);
+            changed.build().unwrap().process_in_place(&mut actual);
+            assert_eq!(actual, expected);
         }
     }
     fn tone(amplitude: f32, seconds: usize) -> Vec<f32> {
