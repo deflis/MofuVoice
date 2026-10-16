@@ -1,6 +1,10 @@
 //! Bounded, double-precision formant math. The portable path uses the system math.
 //! AVX2 evaluates four independent values; no FMA or reduced-precision arithmetic.
 
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[path = "pitch_exp_table.rs"]
+mod exp_table;
+
 pub(super) fn log(input: &[f64], output: &mut [f64], vector: bool) {
     assert_eq!(input.len(), output.len());
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -93,35 +97,26 @@ unsafe fn exp_avx2(values: &mut [f64]) {
                 _mm256_set1_pd(2.0),
             );
             let n = _mm256_round_pd::<{ _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC }>(
-                _mm256_mul_pd(x, _mm256_set1_pd(std::f64::consts::LOG2_E)),
+                _mm256_mul_pd(x, _mm256_set1_pd(32.0 * std::f64::consts::LOG2_E)),
             );
-            let r = _mm256_sub_pd(x, _mm256_mul_pd(n, _mm256_set1_pd(std::f64::consts::LN_2)));
-            // |r| <= ln(2)/2. Taylor degree 12 has relative error < 4e-16.
-            let mut p = _mm256_set1_pd(1.0 / 479001600.0);
-            for coefficient in [
-                1.0 / 39916800.0,
-                1.0 / 3628800.0,
-                1.0 / 362880.0,
-                1.0 / 40320.0,
-                1.0 / 5040.0,
-                1.0 / 720.0,
-                1.0 / 120.0,
-                1.0 / 24.0,
-                1.0 / 6.0,
-                0.5,
-                1.0,
-                1.0,
-            ] {
+            let integer = _mm256_cvttpd_epi32(n);
+            let index = _mm_and_si128(integer, _mm_set1_epi32(31));
+            let fraction = _mm256_i32gather_pd::<8>(exp_table::EXP2_FRAC.as_ptr(), index);
+            let r = _mm256_sub_pd(
+                _mm256_sub_pd(x, _mm256_mul_pd(n, _mm256_set1_pd(exp_table::EXP_STEP_HI))),
+                _mm256_mul_pd(n, _mm256_set1_pd(exp_table::EXP_STEP_LO)),
+            );
+            // |r| <= ln(2)/64. Degree six has truncation error below 4e-18.
+            let mut p = _mm256_set1_pd(1.0 / 720.0);
+            for coefficient in [1.0 / 120.0, 1.0 / 24.0, 1.0 / 6.0, 0.5, 1.0, 1.0] {
                 p = _mm256_add_pd(_mm256_set1_pd(coefficient), _mm256_mul_pd(r, p));
             }
             let exponent = _mm256_slli_epi64::<52>(_mm256_add_epi64(
-                _mm256_cvtepi32_epi64(_mm256_cvttpd_epi32(n)),
+                _mm256_cvtepi32_epi64(_mm_srai_epi32::<5>(integer)),
                 _mm256_set1_epi64x(1023),
             ));
-            _mm256_storeu_pd(
-                block.as_mut_ptr(),
-                _mm256_mul_pd(p, _mm256_castsi256_pd(exponent)),
-            );
+            let scale = _mm256_mul_pd(fraction, _mm256_castsi256_pd(exponent));
+            _mm256_storeu_pd(block.as_mut_ptr(), _mm256_mul_pd(p, scale));
         }
     }
     for value in tail {
@@ -132,6 +127,46 @@ unsafe fn exp_avx2(values: &mut [f64]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exp_matches_system_math_at_table_edges_and_unaligned_tails() {
+        let mut input = vec![-2.0, -0.0, 0.0, 2.0, f64::NEG_INFINITY, f64::INFINITY];
+        for cell in -94..=94 {
+            let edge = (cell as f64 + 0.5) * (std::f64::consts::LN_2 / 32.0);
+            for offset in -2_i64..=2 {
+                input.push(f64::from_bits(edge.to_bits().wrapping_add_signed(offset)));
+            }
+        }
+        for vector in [false, vector_available()] {
+            let mut actual = input.clone();
+            exp(&mut actual, vector);
+            for (&value, actual) in input.iter().zip(actual) {
+                let expected = value.clamp(-2.0, 2.0).exp();
+                assert!((actual - expected).abs() < 2e-15 * expected);
+                if value == 0.0 {
+                    assert_eq!(actual.to_bits(), 1.0_f64.to_bits());
+                }
+            }
+            for head in 1..=3 {
+                for length in 0..=12 {
+                    let mut buffer = vec![12345.0; head + length + 2];
+                    for i in 0..length {
+                        buffer[head + i] = input[(i * 73 + head) % input.len()];
+                    }
+                    let expected: Vec<_> = buffer[head..head + length]
+                        .iter()
+                        .map(|v| v.clamp(-2.0, 2.0).exp())
+                        .collect();
+                    exp(&mut buffer[head..head + length], vector);
+                    assert!(buffer[..head].iter().all(|&v| v == 12345.0));
+                    assert!(buffer[head + length..].iter().all(|&v| v == 12345.0));
+                    for (&actual, expected) in buffer[head..head + length].iter().zip(expected) {
+                        assert!((actual - expected).abs() < 2e-15 * expected);
+                    }
+                }
+            }
+        }
+    }
 
     fn vector_available() -> bool {
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
