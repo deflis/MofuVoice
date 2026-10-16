@@ -43,13 +43,19 @@ function receive(message: WindowMessage) {
   }
   void closeWhenReady();
 }
+export function activeMainConnection() {
+  return connection;
+}
 export function connectMainWindow() {
-  void connection?.close().catch(reportError);
+  const previous = connection?.close();
   closing = undefined;
   send({ type: "connect" });
   connection = connectWindow(receive, (error) =>
     send({ type: "connectionFailed", error: String(error) }),
   );
+  void previous?.catch((error: unknown) => {
+    console.error(error);
+  });
   return connection;
 }
 async function runAction(action: () => Promise<void>) {

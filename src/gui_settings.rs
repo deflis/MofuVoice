@@ -423,6 +423,22 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(decode(&format!("{text}eq-band9=1000,0,1\n")).is_err());
         assert!(decode(&text.replace("eq_band4=1000,2,1\n", "")).is_err());
+        assert!(decode(&format!("{text}eq_band17=1000,0,1\n")).is_err());
+        let mut too_many = Options::default();
+        too_many.eq.bands = vec![
+            crate::eq::Band {
+                frequency: 1000.0,
+                gain_db: 0.0,
+                q: 1.0
+            };
+            crate::eq::MAX_BANDS + 1
+        ];
+        assert!(save(&path, &too_many).is_err());
+        assert!(crate::cli::Options::parse(
+            (1..=crate::eq::MAX_BANDS + 1)
+                .flat_map(|i| [format!("--eq-band{i}"), "1000,0,1".into()])
+        )
+        .is_err());
         std::fs::remove_file(&path).unwrap();
         std::fs::remove_dir(&directory).unwrap();
     }
