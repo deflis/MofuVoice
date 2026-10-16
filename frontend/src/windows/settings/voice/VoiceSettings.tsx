@@ -15,10 +15,6 @@ export function VoiceSettings() {
     setPreserveFormants,
   } = useVoiceSettings();
   const tdPsola = pitchAlgorithm === "td-psola" || pitchAlgorithm === "td-psola-resampled";
-  const resampledTdPsola = pitchAlgorithm === "td-psola-resampled";
-  const fdPsola = pitchAlgorithm === "fd-psola";
-  const pvsola = pitchAlgorithm === "pvsola";
-  const pvsolaSync = pitchAlgorithm === "pvsola-sync";
   return (
     <section>
       <h2>声の変換</h2>
@@ -78,27 +74,24 @@ export function VoiceSettings() {
         />
         声の響きを独立して調整する
       </label>
-      {tdPsola ? (
-        <p>
-          {resampledTdPsola
-            ? "TD-PSOLAの時間伸縮と帯域制限リサンプリングで高さと響きを独立して変えます。DSP遅延は48 kHzで96 msです。"
-            : "TD-PSOLAで高さを変え、響きの移動にはスペクトル処理を使います。DSP遅延は48 kHzで響きの移動時に約106.7 msです。"}
-        </p>
-      ) : pvsola ? (
-        <p>
-          PVSOLA論文方式は位相ボコーダーで時間伸縮し、相互相関で整列した入力フレームを周期的に挿入してから再生速度を変えます。DSP遅延は48 kHzで約96 msです。響きの保持と独立調整に対応します。
-        </p>
-      ) : pvsolaSync ? (
-        <p>
-          スペクトル位相同期は既存の直接スペクトル変換方式です。主要な周波数成分の相関を使って位相を補正します。DSP遅延は48 kHzで約10.7 msです。
-        </p>
-      ) : fdPsola ? (
-        <p>
-          FD-PSOLAはピッチ同期フレームのスペクトルを変換します。フォルマント保持を有効にすると響きの包絡を維持します。DSP遅延は48 kHzで96 msです。
-        </p>
-      ) : (
-        <p>オフでは高さの変更に合わせて響きも変わります。響きの調整値は0に戻ります。</p>
-      )}
+      <p>{algorithmDescription(pitchAlgorithm)}</p>
     </section>
   );
+}
+
+function algorithmDescription(algorithm: string): string {
+  switch (algorithm) {
+    case "td-psola":
+      return "TD-PSOLAで高さを変え、響きの移動にはスペクトル処理を使います。DSP遅延は48 kHzで96 ms、響きの移動時に約106.7 msです。";
+    case "td-psola-resampled":
+      return "TD-PSOLAの時間伸縮と帯域制限リサンプリングで高さと響きを独立して変えます。DSP遅延は48 kHzで96 msです。";
+    case "pvsola":
+      return "PVSOLA論文方式は位相ボコーダーで時間伸縮し、相互相関で整列した入力フレームを周期的に挿入してから再生速度を変えます。DSP遅延は48 kHzで約96 msです。響きの保持と独立調整に対応します。";
+    case "pvsola-sync":
+      return "スペクトル位相同期は既存の直接スペクトル変換方式です。主要な周波数成分の相関を使って位相を補正します。DSP遅延は48 kHzで約10.7 msです。";
+    case "fd-psola":
+      return "FD-PSOLAはピッチ同期フレームのスペクトルを変換します。フォルマント保持を有効にすると響きの包絡を維持します。DSP遅延は48 kHzで96 ms、響きの移動時に約106.7 msです。";
+    default:
+      return "オフでは高さの変更に合わせて響きも変わります。響きの調整値は0に戻ります。";
+  }
 }

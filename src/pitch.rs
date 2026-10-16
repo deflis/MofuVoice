@@ -1148,6 +1148,7 @@ impl PitchShifter {
             let dry = if value.is_finite() { value } else { 0.0 };
             let pvsola_wet = self.pvsola.as_mut().map(|pvsola| {
                 if self.ratio == 1.0 && self.formant_ratio == 1.0 {
+                    pvsola.reset();
                     dry
                 } else {
                     pvsola.push(dry, self.ratio, self.preserve_formants, self.formant_ratio)

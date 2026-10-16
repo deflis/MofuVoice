@@ -137,6 +137,7 @@ impl TdPsola {
         }
     }
 
+    #[cfg(test)]
     pub fn push(&mut self, sample: f64, ratio: f64) -> f64 {
         self.push_with_formants(sample, ratio, true)
     }
@@ -471,12 +472,14 @@ impl TdPsola {
                     self.fd_input[i] = self.interpolate(source + offset as f64) * window;
                 }
             }
-            self.fd.as_mut().unwrap().process_grain(
-                &self.fd_input,
-                &mut self.fd_output,
-                ratio,
-                self.preserve_formants,
-            );
+            if let Some(fd) = &mut self.fd {
+                fd.process_grain(
+                    &self.fd_input,
+                    &mut self.fd_output,
+                    ratio,
+                    self.preserve_formants,
+                );
+            }
             let first = (destination - half as f64).floor().max(self.clock as f64) as usize;
             let last = (destination + half as f64).ceil() as usize;
             assert!(

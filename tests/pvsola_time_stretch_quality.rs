@@ -102,3 +102,19 @@ fn paper_pvsola_survives_pitch_transitions_and_reports_its_delay() {
         "non-finite PVSOLA transition output"
     );
 }
+
+#[test]
+fn neutral_interval_does_not_replay_old_pvsola_audio() {
+    let mut shifter = PitchShifter::new(7.0, false, 0.0, PitchAlgorithm::Pvsola).unwrap();
+    let mut output = vec![0.0; 24000];
+    shifter.process_block(&vec![0.1_f32; output.len()], &mut output);
+    shifter.set_semitones(0.0).unwrap();
+    shifter.process_block(&vec![0.0_f32; output.len()], &mut output);
+    shifter.set_semitones(-3.0).unwrap();
+    shifter.process_block(&vec![0.0_f32; output.len()], &mut output);
+    assert!(
+        output.iter().all(|x| x.abs() < 1e-8),
+        "old audio replayed after neutral bypass: peak={}",
+        output.iter().map(|x| x.abs()).fold(0.0_f32, f32::max)
+    );
+}

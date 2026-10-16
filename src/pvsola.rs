@@ -84,6 +84,30 @@ impl PvsOla {
         }
     }
 
+    /// Discard queued audio when returning to the exact neutral bypass.
+    /// Reuse the allocated buffers so reactivation never allocates in a callback.
+    pub fn reset(&mut self) {
+        if self.input_clock == 0 {
+            return;
+        }
+        self.input.fill(0.0);
+        self.output.fill(0.0);
+        self.weight.fill(0.0);
+        self.polarity = 1.0;
+        self.previous_valid = false;
+        self.input_clock = 0;
+        self.analysis_position = 0.0;
+        self.synthesis_position = 0;
+        self.frames_since_reset = 0;
+        self.reset_interval = RESET_EVERY;
+        self.accumulated_offset = 0;
+        self.reset_target = None;
+        self.reset_input_position = 0.0;
+        self.read_position = 0.0;
+        self.delayed_samples = 0;
+        self.clear_until = 0;
+    }
+
     pub fn push(
         &mut self,
         sample: f64,
@@ -174,7 +198,10 @@ impl PvsOla {
         } else {
             self.envelope.fill(0.0);
         }
-        for bin in 0..FRAME {
+        // Advance only positive-frequency phases. Using FRAME-k for the
+        // negative bin adds whole turns at fractional analysis hops and breaks
+        // conjugate symmetry, discarding signal energy in the inverse FFT.
+        for bin in 0..=FRAME / 2 {
             let phase = self.current_phase[bin];
             let omega = std::f64::consts::TAU * bin as f64 / FRAME as f64;
             if self.previous_valid {
@@ -201,6 +228,14 @@ impl PvsOla {
                 self.magnitude[bin] * formant_gain,
                 self.synthesis_phase[bin],
             );
+        }
+        self.frame[0].im = 0.0;
+        self.frame[FRAME / 2].im = 0.0;
+        for bin in 1..FRAME / 2 {
+            self.frame[FRAME - bin] = Complex {
+                re: self.frame[bin].re,
+                im: -self.frame[bin].im,
+            };
         }
         self.previous_valid = true;
         self.fft.inverse(&mut self.frame[..]);
@@ -368,4 +403,29 @@ impl PvsOla {
 
 fn wrap(phase: f64) -> f64 {
     (phase + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fractional_analysis_hops_keep_the_vocoder_frame_real() {
+        for ratio in [0.5, 0.83, 1.3, 1.5, 2.0] {
+            let mut dsp = PvsOla::new(ratio, false, 1.0);
+            for i in 0..RING {
+                dsp.input[i] = 0.1 * (i as f64 * 0.071).sin();
+            }
+            dsp.vocode_frame(0);
+            dsp.analysis_position += HOP as f64 / ratio;
+            dsp.vocode_frame(HOP);
+            let imaginary = dsp.frame.iter().map(|x| x.im * x.im).sum::<f64>();
+            let real = dsp.frame.iter().map(|x| x.re * x.re).sum::<f64>();
+            assert!(
+                imaginary < 1e-20 * real,
+                "ratio={ratio}, imaginary/real={}",
+                imaginary / real
+            );
+        }
+    }
 }
