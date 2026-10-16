@@ -37,7 +37,7 @@ test("pitch algorithm selection is validated and saved", async () => {
   settingsStore.getState().voice.setPitchAlgorithm("pvsola");
   await settingsStore.getState().save();
   assert.equal(calls("save_settings")[0].arguments[1].settings.voice.pitchAlgorithm, "pvsola");
-  for (const pitchAlgorithm of ["phase-locked", "pvsola", "td-psola"]) {
+  for (const pitchAlgorithm of ["phase-locked", "pvsola", "pvsola-sync", "td-psola"]) {
     assert.equal(
       v.safeParse(settingsSchema, { ...settings, voice: { ...settings.voice, pitchAlgorithm } })
         .success,

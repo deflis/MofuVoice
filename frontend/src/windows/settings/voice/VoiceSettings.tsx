@@ -17,6 +17,8 @@ export function VoiceSettings() {
   const tdPsola = pitchAlgorithm === "td-psola" || pitchAlgorithm === "td-psola-resampled";
   const resampledTdPsola = pitchAlgorithm === "td-psola-resampled";
   const fdPsola = pitchAlgorithm === "fd-psola";
+  const pvsola = pitchAlgorithm === "pvsola";
+  const pvsolaSync = pitchAlgorithm === "pvsola-sync";
   return (
     <section>
       <h2>声の変換</h2>
@@ -29,7 +31,8 @@ export function VoiceSettings() {
           }
         >
           <option value="phase-locked">フェーズロック（標準）</option>
-          <option value="pvsola">PVSOLAアプローチ（実験）</option>
+          <option value="pvsola">PVSOLA 論文方式（実験）</option>
+          <option value="pvsola-sync">スペクトル位相同期（従来方式）</option>
           <option value="td-psola">TD-PSOLA（実験）</option>
           <option value="td-psola-resampled">TD-PSOLA＋時間伸縮リサンプリング（実験）</option>
           <option value="fd-psola">FD-PSOLA（実験）</option>
@@ -80,6 +83,14 @@ export function VoiceSettings() {
           {resampledTdPsola
             ? "TD-PSOLAの時間伸縮と帯域制限リサンプリングで高さと響きを独立して変えます。DSP遅延は48 kHzで96 msです。"
             : "TD-PSOLAで高さを変え、響きの移動にはスペクトル処理を使います。DSP遅延は48 kHzで響きの移動時に約106.7 msです。"}
+        </p>
+      ) : pvsola ? (
+        <p>
+          PVSOLA論文方式は位相ボコーダーで時間伸縮し、相互相関で整列した入力フレームを周期的に挿入してから再生速度を変えます。DSP遅延は48 kHzで約96 msです。響きの保持と独立調整に対応します。
+        </p>
+      ) : pvsolaSync ? (
+        <p>
+          スペクトル位相同期は既存の直接スペクトル変換方式です。主要な周波数成分の相関を使って位相を補正します。DSP遅延は48 kHzで約10.7 msです。
         </p>
       ) : fdPsola ? (
         <p>

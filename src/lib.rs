@@ -21,6 +21,7 @@ pub mod level;
 #[cfg(windows)]
 pub mod native_spectrum;
 pub mod pitch;
+mod pvsola;
 pub mod rumble;
 pub mod session;
 pub mod spectrum;
