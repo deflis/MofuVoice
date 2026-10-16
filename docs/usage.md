@@ -78,7 +78,7 @@ PVSOLAアプローチは、相関による位置合わせと位相の復元を�
 
 CLIでは `--pitch-algorithm phase-locked`、`pvsola`、`td-psola`、`td-psola-resampled`、`fd-psola` を指定できます。GUIでは「ピッチ変換方式」から方式を選び、同じピッチとフォルマント設定で聞き比べてください。設定を保存してから音声を開始すると反映されます。ピッチとフォルマント移動がともに0なら、方式にかかわらずこの段はビットを保ってバイパスします。
 
-設定INIには `pitch_algorithm=phase-locked`、`pitch_algorithm=pvsola`、`pitch_algorithm=td-psola`、`pitch_algorithm=td-psola-resampled`、`pitch_algorithm=fd-psola` のいずれかを保存します。このキーがない既存INIには、`[gui]` 内へ `pitch_algorithm=phase-locked` を追加してください。不明な値やキーの欠落は起動時のエラーになります。
+設定INIには `pitch_algorithm=phase-locked`、`pitch_algorithm=pvsola`、`pitch_algorithm=td-psola`、`pitch_algorithm=td-psola-resampled`、`pitch_algorithm=fd-psola` のいずれかを保存します。このキーがない既存INIでは標準方式（`phase-locked`）を使い、保存時にキーを追加します。不明な値は起動時のエラーになります。
 
 **TD-PSOLA（実験）** は、入力波形の周期に沿って切り出した波形片を、変更後の周期で重ね合わせます。有声音はピッチマークを使って合成し、無声音は同じ遅延でコピーします。元の共鳴を保つ方式で、独立したフォルマント移動には後段のスペクトル包絡補正を使います。GUIで選ぶと響きの保持をオンにし、移動量は維持します。CLIでは `--pitch-algorithm td-psola --pitch 8 --formant preserve --formant-shift 2.53`、INIでは `pitch_algorithm=td-psola` を使います。響きの保持をオフにするとエラーになります。
 

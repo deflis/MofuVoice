@@ -1180,7 +1180,10 @@ impl PitchShifter {
             self.until_frame -= 1;
             if self.until_frame == 0 {
                 if self.psola.is_none()
-                    || (self.algorithm == PitchAlgorithm::TdPsola && self.formant_shift != 0.0)
+                    || (matches!(
+                        self.algorithm,
+                        PitchAlgorithm::TdPsola | PitchAlgorithm::FdPsola
+                    ) && self.formant_shift != 0.0)
                 {
                     self.frame();
                 }

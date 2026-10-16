@@ -198,7 +198,10 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
         "--pitch",
         value("pitch")?,
         "--pitch-algorithm",
-        value("pitch_algorithm")?,
+        values
+            .get("pitch_algorithm")
+            .copied()
+            .unwrap_or("phase-locked"),
         "--formant-shift",
         value("formant_shift")?,
         "--formant",
@@ -420,7 +423,7 @@ pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>>
 #[cfg(test)]
 mod tests {
     #[test]
-    fn pitch_algorithm_round_trips_and_requires_an_explicit_ini_value() {
+    fn pitch_algorithm_round_trips_and_defaults_for_existing_ini() {
         use crate::pitch::PitchAlgorithm;
         let path = std::env::temp_dir().join(format!("pitch-algorithm-{}.ini", std::process::id()));
         for algorithm in PitchAlgorithm::ALL {
@@ -436,10 +439,13 @@ mod tests {
             assert_eq!(overridden.pitch.algorithm, PitchAlgorithm::Pvsola);
             let text = std::fs::read_to_string(&path).unwrap();
             assert!(super::decode(&text.replace(algorithm.name(), "invalid")).is_err());
-            assert!(super::decode(
-                &text.replace(&format!("pitch_algorithm={}\n", algorithm.name()), "")
+            let legacy = super::decode(
+                &text.replace(&format!("pitch_algorithm={}\n", algorithm.name()), ""),
             )
-            .is_err());
+            .unwrap();
+            assert_eq!(legacy.pitch.algorithm, PitchAlgorithm::PhaseLocked);
+            assert_eq!(legacy.pitch.semitones, options.pitch.semitones);
+            assert_eq!(legacy.pitch.formant_shift, options.pitch.formant_shift);
         }
         std::fs::remove_file(path).unwrap();
     }

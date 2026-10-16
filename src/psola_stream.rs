@@ -116,6 +116,7 @@ impl PsolaStream {
         }
     }
 
+    #[cfg(test)]
     pub fn push(&mut self, sample: f64, ratio: f64) -> f64 {
         self.push_with_formants(sample, ratio, true)
     }
@@ -325,9 +326,9 @@ impl PsolaStream {
                     && (mark.position - self.next_synthesis).abs() < mark.period * 0.75
                 {
                     let timing = self.synthesis.grain_timing(
-                        previous.period,
+                        mark.position - previous.position,
                         mark.period,
-                        next.period,
+                        next.position - mark.position,
                         ratio,
                         self.previous_synthesis_period,
                     );

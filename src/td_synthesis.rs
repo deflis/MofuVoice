@@ -68,23 +68,22 @@ impl TdSynthesis {
 impl PsolaSynthesis for TdSynthesis {
     fn grain_timing(
         &self,
-        previous_source_period: f64,
+        left_source_span: f64,
         source_period: f64,
-        next_source_period: f64,
+        right_source_span: f64,
         pitch_ratio: f64,
         previous_synthesis_period: f64,
     ) -> crate::psola_synthesis::GrainTiming {
         let intermediate_ratio = pitch_ratio / self.formant_ratio;
         let intermediate_period = source_period / intermediate_ratio;
         let period = intermediate_period / self.formant_ratio;
-        let left = ((source_period - previous_source_period) / self.formant_ratio).min(
-            if previous_synthesis_period > 0.0 {
+        let left =
+            (left_source_span / self.formant_ratio).min(if previous_synthesis_period > 0.0 {
                 previous_synthesis_period
             } else {
                 period
-            },
-        );
-        let right = ((next_source_period - source_period) / self.formant_ratio).min(period);
+            });
+        let right = (right_source_span / self.formant_ratio).min(period);
         crate::psola_synthesis::GrainTiming {
             period,
             left,

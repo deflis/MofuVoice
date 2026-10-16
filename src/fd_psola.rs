@@ -39,6 +39,7 @@ impl FdSynthesis {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn grain_impl(
         &mut self,
         source: f64,
@@ -96,20 +97,21 @@ impl FdSynthesis {
 impl crate::psola_synthesis::PsolaSynthesis for FdSynthesis {
     fn grain_timing(
         &self,
-        previous_source_period: f64,
+        left_source_span: f64,
         source_period: f64,
-        next_source_period: f64,
-        _pitch_ratio: f64,
+        right_source_span: f64,
+        pitch_ratio: f64,
         previous_synthesis_period: f64,
     ) -> crate::psola_synthesis::GrainTiming {
-        let period = source_period;
-        let left =
-            (source_period - previous_source_period).min(if previous_synthesis_period > 0.0 {
-                previous_synthesis_period
-            } else {
-                period
-            });
-        let right = (next_source_period - source_period).min(period);
+        // Output epochs must follow the requested pitch, or overlap-add
+        // locks the reconstructed spectrum back to the input fundamental.
+        let period = source_period / pitch_ratio;
+        let left = left_source_span.min(if previous_synthesis_period > 0.0 {
+            previous_synthesis_period
+        } else {
+            period
+        });
+        let right = right_source_span.min(period);
         crate::psola_synthesis::GrainTiming {
             period,
             left,

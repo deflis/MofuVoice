@@ -32,8 +32,8 @@ fn fd_psola_moves_voiced_fundamental_at_supported_rates() {
             shifter(pitch, true).process_block(&input, &mut output);
             let signal = &output[16384..];
             let expected = frequency * pitch_ratio(pitch).unwrap();
-            let peak = (-12..=12)
-                .map(|step| expected + step as f64 * 0.25)
+            let peak = (40..=800)
+                .map(|step| step as f64 * 0.5)
                 .max_by(|&a, &b| power(signal, a, rate).total_cmp(&power(signal, b, rate)))
                 .unwrap();
             assert!(
@@ -118,5 +118,50 @@ fn fd_psola_is_independent_of_audio_block_boundaries() {
             dsp.process_block(source, destination);
         }
         assert_eq!(whole, split, "block size={block}");
+    }
+}
+
+#[test]
+fn fd_psola_applies_independent_formant_shift_and_emits_audio() {
+    use rust_low_latency_voice_changer::pitch::PitchSettings;
+    let rate = 48000;
+    let input: Vec<f32> = (0..rate)
+        .map(|i| {
+            let phase = std::f64::consts::TAU * 100.0 * i as f64 / rate as f64;
+            (1..=40)
+                .map(|h| {
+                    let amplitude =
+                        0.02 * (-0.5 * ((h as f64 * 100.0 - 1200.0) / 180.0).powi(2)).exp();
+                    amplitude * (phase * h as f64).cos()
+                })
+                .sum::<f64>() as f32
+        })
+        .collect();
+    for shift in [-4.0, 4.0] {
+        let settings = PitchSettings {
+            algorithm: PitchAlgorithm::FdPsola,
+            semitones: 0.0,
+            preserve_formants: true,
+            formant_shift: shift,
+        };
+        assert_eq!(settings.latency(), 5120);
+        let mut output = vec![0.0; input.len()];
+        settings.build().unwrap().process_block(&input, &mut output);
+        let signal = &output[16384..];
+        assert!(signal.iter().all(|x| x.is_finite()));
+        let peak = (5..=20)
+            .map(|h| h as f64 * 100.0)
+            .max_by(|&a, &b| {
+                power(signal, a, rate as u32).total_cmp(&power(signal, b, rate as u32))
+            })
+            .unwrap();
+        assert!(
+            power(signal, peak, rate as u32) > 1.0,
+            "formant shift produced silence"
+        );
+        assert!(
+            (peak - 1200.0 * pitch_ratio(shift).unwrap()).abs() < 180.0,
+            "shift={shift}, peak={peak}"
+        );
     }
 }
