@@ -323,9 +323,12 @@ fn hann(size: usize) -> Vec<f64> {
 
 fn db_to_bgra(db: f64) -> [u8; 4] {
     let t = ((db - DB_MIN) / (DB_MAX - DB_MIN)).clamp(0.0, 1.0);
-    // Praat-like light-on-dark grayscale.
-    let v = (t * 255.0).round() as u8;
-    [v, v, v, 255]
+    // Blue -> cyan -> green -> yellow -> red, stored in BGRA order.
+    let ramp = |value: f64| (value.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let blue = ramp(2.0 - 4.0 * t);
+    let green = ramp((4.0 * t).min(4.0 - 4.0 * t));
+    let red = ramp(4.0 * t - 2.0);
+    [blue, green, red, 255]
 }
 
 fn magnitude_at(bins: &[f64], fft_size: usize, hz: f64, rate: u32) -> f64 {
