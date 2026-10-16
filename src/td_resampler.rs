@@ -59,6 +59,10 @@ impl Resampler {
             first >= 0 || available < N,
             "resampler read expired startup history"
         );
+        assert!(
+            first < 0 || first as usize >= available.saturating_sub(N),
+            "resampler read expired input"
+        );
         let phase = (position - center as f64) * PHASES as f64;
         let index = phase.floor() as usize;
         let fraction = phase - index as f64;

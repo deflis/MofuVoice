@@ -142,7 +142,9 @@ impl PitchSettings {
     /// Buffered delay of the configured wet path; neutral bypass is handled by callers.
     pub fn latency(self) -> usize {
         match (self.algorithm, self.formant_shift != 0.0) {
-            (PitchAlgorithm::TdPsola, true) => crate::td_psola::LATENCY + 512,
+            (PitchAlgorithm::TdPsola | PitchAlgorithm::FdPsola, true) => {
+                crate::td_psola::LATENCY + 512
+            }
             _ => self.algorithm.latency(),
         }
     }
@@ -745,7 +747,7 @@ impl PitchShifter {
 
     #[inline(always)]
     fn frame_inner(&mut self) {
-        let ratio = if self.td_psola.is_some() && self.algorithm != PitchAlgorithm::FdPsola {
+        let ratio = if self.td_psola.is_some() {
             1.0
         } else {
             self.ratio
