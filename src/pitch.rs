@@ -2,7 +2,15 @@
 //! All FFT tables, windows, and overlap storage are allocated before streaming.
 //! Wet audio uses a long analysis window and a short right-aligned synthesis window,
 //! so the fixed delay is SYNTHESIS samples; the neutral setting bypasses exactly.
-use crate::dsp::{complex::Complex, fft_kernel::FftKernel, phase, window::hann, Sample};
+#[cfg(test)]
+use crate::dsp::fft_kernel::FftKernel;
+use crate::dsp::{
+    complex::Complex,
+    fft_split::{SplitBuffer, SplitRoots},
+    phase,
+    window::hann,
+    Sample,
+};
 use std::{error::Error, fmt};
 #[path = "pitch_math.rs"]
 mod math;
@@ -108,8 +116,8 @@ struct Fft {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     avx2: bool,
     reverse_half: Box<[usize; HALF]>,
-    forward_roots_half: Box<[Complex; HALF - 1]>,
-    inverse_roots_half: Box<[Complex; HALF - 1]>,
+    forward_roots_half: SplitRoots,
+    inverse_roots_half: SplitRoots,
     /// `exp(-2π i k / N)` for real-FFT packing, k = 0 .. HALF-1.
     real_twiddle: Box<[Complex; HALF]>,
     #[cfg(test)]
@@ -122,6 +130,7 @@ struct Fft {
 impl Fft {
     // Store each stage's twiddles contiguously, in the same order used by the
     // butterflies. This removes strided loads and permits vectorization.
+    #[cfg(test)]
     fn stage_roots<const N: usize>(roots: &[Complex]) -> Box<[Complex; N]> {
         Box::new(std::array::from_fn(|i| {
             let half = 1 << (i + 1).ilog2();
@@ -131,20 +140,14 @@ impl Fft {
 
     fn new() -> Self {
         let half_bits = HALF.ilog2();
-        let forward: [Complex; HALF / 2] = std::array::from_fn(|i| {
-            Complex::polar(1.0, -std::f64::consts::TAU * i as f64 / HALF as f64)
-        });
-        let inverse: [Complex; HALF / 2] = std::array::from_fn(|i| {
-            Complex::polar(1.0, std::f64::consts::TAU * i as f64 / HALF as f64)
-        });
         Self {
             #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
             avx2: std::is_x86_feature_detected!("avx2"),
             reverse_half: Box::new(std::array::from_fn(|i| {
                 i.reverse_bits() >> (usize::BITS - half_bits)
             })),
-            forward_roots_half: Self::stage_roots(&forward),
-            inverse_roots_half: Self::stage_roots(&inverse),
+            forward_roots_half: SplitRoots::new(HALF, false),
+            inverse_roots_half: SplitRoots::new(HALF, true),
             real_twiddle: Box::new(std::array::from_fn(|i| {
                 Complex::polar(1.0, -std::f64::consts::TAU * i as f64 / WINDOW as f64)
             })),
@@ -163,6 +166,7 @@ impl Fft {
         }
     }
 
+    #[cfg(test)]
     fn transform_sized<const N: usize>(
         &self,
         reverse: &[usize; N],
@@ -192,194 +196,80 @@ impl Fft {
         }
     }
 
-    fn synthesis_stages(roots: &[Complex], data: &mut [Complex; HALF]) {
-        FftKernel::stage::<HALF, 2>(roots, data);
-        FftKernel::stage::<HALF, 4>(roots, data);
-        FftKernel::stage::<HALF, 8>(roots, data);
-        FftKernel::stage::<HALF, 16>(roots, data);
-        FftKernel::stage::<HALF, 32>(roots, data);
-        FftKernel::stage::<HALF, 64>(roots, data);
-        FftKernel::stage::<HALF, 128>(roots, data);
-        FftKernel::stage::<HALF, 256>(roots, data);
-        Self::right_stage::<512, 0>(roots, data);
-        Self::right_stage::<1024, 256>(roots, data);
+    fn vector(&self) -> bool {
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            self.avx2
+        }
+        #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+        {
+            false
+        }
     }
 
-    fn right_stage<const SIZE: usize, const FIRST: usize>(
-        roots: &[Complex],
-        data: &mut [Complex; HALF],
-    ) {
-        let half = SIZE / 2;
-        let roots = &roots[half - 1 + FIRST..SIZE - 1];
-        for block in data.as_chunks_mut::<SIZE>().0 {
-            let (left, right) = block.split_at_mut(half);
-            for ((a, b), root) in left[FIRST..].iter().zip(&mut right[FIRST..]).zip(roots) {
-                let product = b.mul(*root);
-                *b = Complex {
-                    re: a.re - product.re,
-                    im: a.im - product.im,
-                };
+    fn transform_half(&self, work: &mut SplitBuffer<HALF>, inverse: bool) {
+        for (i, &j) in self.reverse_half.iter().enumerate() {
+            if i < j {
+                work.swap(i, j);
             }
         }
-    }
-
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    #[target_feature(enable = "avx2")]
-    unsafe fn synthesis_stages_avx2(roots: &[Complex], data: &mut [Complex; HALF]) {
-        FftKernel::stage::<HALF, 2>(roots, data);
-        // SAFETY: inherited feature contract; each stage checks its slices.
-        unsafe {
-            FftKernel::stage_avx2::<HALF, 4>(roots, data);
-            FftKernel::stage_avx2::<HALF, 8>(roots, data);
-            FftKernel::stage_avx2::<HALF, 16>(roots, data);
-            FftKernel::stage_avx2::<HALF, 32>(roots, data);
-            FftKernel::stage_avx2::<HALF, 64>(roots, data);
-            FftKernel::stage_avx2::<HALF, 128>(roots, data);
-            FftKernel::stage_avx2::<HALF, 256>(roots, data);
-            Self::right_stage_avx2::<512, 0>(roots, data);
-            Self::right_stage_avx2::<1024, 256>(roots, data);
+        let roots = if inverse {
+            &self.inverse_roots_half
+        } else {
+            &self.forward_roots_half
+        };
+        let vector = self.vector();
+        roots.first_four(work, vector);
+        roots.stage::<HALF, 8, 0>(work, 0, 4, vector);
+        roots.stage::<HALF, 16, 0>(work, 0, 8, vector);
+        roots.stage::<HALF, 32, 0>(work, 0, 16, vector);
+        roots.stage::<HALF, 64, 0>(work, 0, 32, vector);
+        roots.stage::<HALF, 128, 0>(work, 0, 64, vector);
+        roots.stage::<HALF, 256, 0>(work, 0, 128, vector);
+        roots.stage::<HALF, 512, 0>(work, 0, 256, vector);
+        roots.stage::<HALF, 1024, 0>(work, 0, 512, vector);
+        if inverse {
+            work.scale(1.0 / HALF as f64);
         }
     }
 
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    #[target_feature(enable = "avx2")]
-    unsafe fn right_stage_avx2<const SIZE: usize, const FIRST: usize>(
-        roots: &[Complex],
-        data: &mut [Complex; HALF],
+    fn synthesis_stages(roots: &SplitRoots, data: &mut SplitBuffer<HALF>, vector: bool) {
+        roots.first_four(data, vector);
+        roots.stage::<HALF, 8, 0>(data, 0, 4, vector);
+        roots.stage::<HALF, 16, 0>(data, 0, 8, vector);
+        roots.stage::<HALF, 32, 0>(data, 0, 16, vector);
+        roots.stage::<HALF, 64, 0>(data, 0, 32, vector);
+        roots.stage::<HALF, 128, 0>(data, 0, 64, vector);
+        roots.stage::<HALF, 256, 0>(data, 0, 128, vector);
+        roots.stage::<HALF, 512, 2>(data, 0, 256, vector);
+        roots.stage::<HALF, 1024, 2>(data, 256, 512, vector);
+    }
+
+    fn envelope_stages(roots: &SplitRoots, data: &mut SplitBuffer<HALF>, vector: bool) {
+        roots.first_four(data, vector);
+        roots.stage::<HALF, 8, 0>(data, 0, 4, vector);
+        roots.stage::<HALF, 16, 0>(data, 0, 8, vector);
+        roots.stage::<HALF, 32, 0>(data, 0, 16, vector);
+        roots.stage::<HALF, 64, 0>(data, 0, 32, vector);
+        Self::envelope_stage::<128>(roots, data, vector);
+        Self::envelope_stage::<256>(roots, data, vector);
+        Self::envelope_stage::<512>(roots, data, vector);
+        Self::envelope_stage::<1024>(roots, data, vector);
+    }
+
+    fn envelope_stage<const SIZE: usize>(
+        roots: &SplitRoots,
+        data: &mut SplitBuffer<HALF>,
+        vector: bool,
     ) {
-        #[cfg(target_arch = "x86")]
-        use std::arch::x86::*;
-        #[cfg(target_arch = "x86_64")]
-        use std::arch::x86_64::*;
-        let half = SIZE / 2;
-        let roots = &roots[half - 1 + FIRST..SIZE - 1];
-        for block in data.as_chunks_mut::<SIZE>().0 {
-            let (left, right) = block.split_at_mut(half);
-            for ((a, b), root) in left[FIRST..]
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .zip(right[FIRST..].as_chunks_mut::<2>().0)
-                .zip(roots.as_chunks::<2>().0)
-            {
-                // SAFETY: each checked chunk contains two repr(C) complexes;
-                // unaligned loads/stores remain inside disjoint stage slices.
-                unsafe {
-                    let av = _mm256_loadu_pd(a.as_ptr().cast());
-                    let bv = _mm256_loadu_pd(b.as_ptr().cast());
-                    let w = _mm256_loadu_pd(root.as_ptr().cast());
-                    let product = _mm256_addsub_pd(
-                        _mm256_mul_pd(_mm256_permute_pd::<0>(bv), w),
-                        _mm256_mul_pd(_mm256_permute_pd::<15>(bv), _mm256_permute_pd::<5>(w)),
-                    );
-                    _mm256_storeu_pd(b.as_mut_ptr().cast(), _mm256_sub_pd(av, product));
-                }
-            }
-        }
-    }
-
-    fn envelope_stages(roots: &[Complex], data: &mut [Complex; HALF]) {
-        FftKernel::stage::<HALF, 2>(roots, data);
-        FftKernel::stage::<HALF, 4>(roots, data);
-        FftKernel::stage::<HALF, 8>(roots, data);
-        FftKernel::stage::<HALF, 16>(roots, data);
-        FftKernel::stage::<HALF, 32>(roots, data);
-        FftKernel::stage::<HALF, 64>(roots, data);
-        Self::envelope_stage::<128>(roots, data);
-        Self::envelope_stage::<256>(roots, data);
-        Self::envelope_stage::<512>(roots, data);
-        Self::envelope_stage::<1024>(roots, data);
-    }
-
-    fn envelope_stage<const SIZE: usize>(roots: &[Complex], data: &mut [Complex; HALF]) {
-        const KEEP: usize = CEPSTRUM / 2 + 2; // even, includes the centre boundary
-        let half = SIZE / 2;
-        let roots = &roots[half - 1..SIZE - 1];
-        for block in data.as_chunks_mut::<SIZE>().0 {
-            let (left, right) = block.split_at_mut(half);
-            for j in (0..KEEP).chain(KEEP.max(half - KEEP)..half) {
-                let a = left[j];
-                let product = right[j].mul(roots[j]);
-                if j < KEEP {
-                    left[j] = Complex {
-                        re: a.re + product.re,
-                        im: a.im + product.im,
-                    };
-                }
-                if j >= half - KEEP {
-                    right[j] = Complex {
-                        re: a.re - product.re,
-                        im: a.im - product.im,
-                    };
-                }
-            }
-        }
-    }
-
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    #[target_feature(enable = "avx2")]
-    unsafe fn envelope_stages_avx2(roots: &[Complex], data: &mut [Complex; HALF]) {
-        FftKernel::stage::<HALF, 2>(roots, data);
-        // SAFETY: inherited AVX2 contract and checked stage slices.
-        unsafe {
-            FftKernel::stage_avx2::<HALF, 4>(roots, data);
-            FftKernel::stage_avx2::<HALF, 8>(roots, data);
-            FftKernel::stage_avx2::<HALF, 16>(roots, data);
-            FftKernel::stage_avx2::<HALF, 32>(roots, data);
-            FftKernel::stage_avx2::<HALF, 64>(roots, data);
-            Self::envelope_stage_avx2::<128>(roots, data);
-            Self::envelope_stage_avx2::<256>(roots, data);
-            Self::envelope_stage_avx2::<512>(roots, data);
-            Self::envelope_stage_avx2::<1024>(roots, data);
-        }
-    }
-
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    #[target_feature(enable = "avx2")]
-    unsafe fn envelope_stage_avx2<const SIZE: usize>(
-        roots: &[Complex],
-        data: &mut [Complex; HALF],
-    ) {
-        #[cfg(target_arch = "x86")]
-        use std::arch::x86::*;
-        #[cfg(target_arch = "x86_64")]
-        use std::arch::x86_64::*;
         const KEEP: usize = CEPSTRUM / 2 + 2;
         let half = SIZE / 2;
-        let roots = &roots[half - 1..SIZE - 1];
-        for block in data.as_chunks_mut::<SIZE>().0 {
-            let (left, right) = block.split_at_mut(half);
-            for j in (0..KEEP)
-                .step_by(2)
-                .chain((KEEP.max(half - KEEP)..half).step_by(2))
-            {
-                // SAFETY: KEEP and all half sizes are even; each j addresses two
-                // complexes within checked, disjoint left/right/root slices.
-                unsafe {
-                    let a = _mm256_loadu_pd(left[j..j + 2].as_ptr().cast());
-                    let b = _mm256_loadu_pd(right[j..j + 2].as_ptr().cast());
-                    let w = _mm256_loadu_pd(roots[j..j + 2].as_ptr().cast());
-                    let product = _mm256_addsub_pd(
-                        _mm256_mul_pd(_mm256_permute_pd::<0>(b), w),
-                        _mm256_mul_pd(_mm256_permute_pd::<15>(b), _mm256_permute_pd::<5>(w)),
-                    );
-                    if j < KEEP {
-                        _mm256_storeu_pd(
-                            left[j..j + 2].as_mut_ptr().cast(),
-                            _mm256_add_pd(a, product),
-                        );
-                    }
-                    if j >= half - KEEP {
-                        _mm256_storeu_pd(
-                            right[j..j + 2].as_mut_ptr().cast(),
-                            _mm256_sub_pd(a, product),
-                        );
-                    }
-                }
-            }
+        roots.stage::<HALF, SIZE, 1>(data, 0, KEEP.min(half - KEEP), vector);
+        if half - KEEP < KEEP {
+            roots.stage::<HALF, SIZE, 0>(data, half - KEEP, KEEP, vector);
         }
+        roots.stage::<HALF, SIZE, 2>(data, KEEP.max(half - KEEP), half, vector);
     }
-
     #[cfg(test)]
     fn transform(&self, data: &mut [Complex; WINDOW], inverse: bool) {
         if inverse {
@@ -402,20 +292,18 @@ impl Fft {
     /// Real forward FFT: `time[n].re` is the real sequence (imag ignored).
     /// Writes only the nonnegative-frequency bins; inverse_real needs no mirror.
     #[inline(always)]
-    fn forward_real(&self, time: &mut [Complex; WINDOW], work: &mut [Complex; HALF]) {
+    fn forward_real(&self, time: &mut [Complex; WINDOW], work: &mut SplitBuffer<HALF>) {
         for n in 0..HALF {
-            work[n] = Complex {
-                re: time[2 * n].re,
-                im: time[2 * n + 1].re,
-            };
+            work.set(
+                n,
+                Complex {
+                    re: time[2 * n].re,
+                    im: time[2 * n + 1].re,
+                },
+            );
         }
-        self.transform_sized(
-            &self.reverse_half,
-            self.forward_roots_half.as_ref(),
-            work,
-            None,
-        );
-        let z0 = work[0];
+        self.transform_half(work, false);
+        let z0 = work.get(0);
         time[0] = Complex {
             re: z0.re + z0.im,
             im: 0.0,
@@ -425,8 +313,8 @@ impl Fft {
             im: 0.0,
         };
         for k in 1..=HALF / 2 {
-            let zk = work[k];
-            let zm = work[HALF - k];
+            let zk = work.get(k);
+            let zm = work.get(HALF - k);
             let a = Complex {
                 re: zk.re + zm.re,
                 im: zk.im - zm.im,
@@ -454,7 +342,7 @@ impl Fft {
 
     /// Inverse of a Hermitian spectrum produced by `forward_real` / mirror fill.
     #[cfg(test)]
-    fn inverse_real(&self, spectrum: &mut [Complex; WINDOW], work: &mut [Complex; HALF]) {
+    fn inverse_real(&self, spectrum: &mut [Complex; WINDOW], work: &mut SplitBuffer<HALF>) {
         self.inverse_real_partial(spectrum, work, false, false);
     }
 
@@ -464,16 +352,19 @@ impl Fft {
     fn inverse_real_partial(
         &self,
         spectrum: &mut [Complex; WINDOW],
-        work: &mut [Complex; HALF],
+        work: &mut SplitBuffer<HALF>,
         envelope: bool,
         synthesis: bool,
     ) {
         let x0 = spectrum[0].re;
         let xn = spectrum[HALF].re;
-        work[0] = Complex {
-            re: 0.5 * (x0 + xn),
-            im: 0.5 * (x0 - xn),
-        };
+        work.set(
+            0,
+            Complex {
+                re: 0.5 * (x0 + xn),
+                im: 0.5 * (x0 - xn),
+            },
+        );
         for k in 1..=HALF / 2 {
             let a = spectrum[k];
             let b = Complex {
@@ -493,15 +384,21 @@ impl Fft {
             let wi = -w.im;
             let t_re = -wi;
             let t_im = wr;
-            work[k] = Complex {
-                re: e.re + t_re * o.re - t_im * o.im,
-                im: e.im + t_re * o.im + t_im * o.re,
-            };
+            work.set(
+                k,
+                Complex {
+                    re: e.re + t_re * o.re - t_im * o.im,
+                    im: e.im + t_re * o.im + t_im * o.re,
+                },
+            );
             if k != HALF / 2 {
-                work[HALF - k] = Complex {
-                    re: e.re - t_re * o.re + t_im * o.im,
-                    im: -e.im + t_re * o.im + t_im * o.re,
-                };
+                work.set(
+                    HALF - k,
+                    Complex {
+                        re: e.re - t_re * o.re + t_im * o.im,
+                        im: -e.im + t_re * o.im + t_im * o.re,
+                    },
+                );
             }
         }
         if envelope {
@@ -510,22 +407,14 @@ impl Fft {
                     work.swap(i, j);
                 }
             }
-            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-            if self.avx2 {
-                // SAFETY: runtime AVX2 detection and checked transform storage.
-                unsafe { Self::envelope_stages_avx2(self.inverse_roots_half.as_ref(), work) };
-            } else {
-                Self::envelope_stages(self.inverse_roots_half.as_ref(), work);
-            }
-            #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
-            Self::envelope_stages(self.inverse_roots_half.as_ref(), work);
+            Self::envelope_stages(&self.inverse_roots_half, work, self.vector());
             for n in (0..CEPSTRUM / 2 + 1).chain(HALF - CEPSTRUM / 2..HALF) {
                 spectrum[2 * n] = Complex {
-                    re: work[n].re / HALF as f64,
+                    re: work.get(n).re / HALF as f64,
                     im: 0.0,
                 };
                 spectrum[2 * n + 1] = Complex {
-                    re: work[n].im / HALF as f64,
+                    re: work.get(n).im / HALF as f64,
                     im: 0.0,
                 };
             }
@@ -537,40 +426,27 @@ impl Fft {
                     work.swap(i, j);
                 }
             }
-            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-            if self.avx2 {
-                // SAFETY: inherited runtime AVX2 detection and checked storage.
-                unsafe { Self::synthesis_stages_avx2(self.inverse_roots_half.as_ref(), work) };
-            } else {
-                Self::synthesis_stages(self.inverse_roots_half.as_ref(), work);
-            }
-            #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
-            Self::synthesis_stages(self.inverse_roots_half.as_ref(), work);
+            Self::synthesis_stages(&self.inverse_roots_half, work, self.vector());
             for n in (WINDOW - SYNTHESIS) / 2..HALF {
                 spectrum[2 * n] = Complex {
-                    re: work[n].re / HALF as f64,
+                    re: work.get(n).re / HALF as f64,
                     im: 0.0,
                 };
                 spectrum[2 * n + 1] = Complex {
-                    re: work[n].im / HALF as f64,
+                    re: work.get(n).im / HALF as f64,
                     im: 0.0,
                 };
             }
             return;
         }
-        self.transform_sized(
-            &self.reverse_half,
-            self.inverse_roots_half.as_ref(),
-            work,
-            Some(1.0 / HALF as f64),
-        );
+        self.transform_half(work, true);
         for n in 0..HALF {
             spectrum[2 * n] = Complex {
-                re: work[n].re,
+                re: work.get(n).re,
                 im: 0.0,
             };
             spectrum[2 * n + 1] = Complex {
-                re: work[n].im,
+                re: work.get(n).im,
                 im: 0.0,
             };
         }
@@ -616,7 +492,7 @@ pub struct PitchShifter {
     output: Box<[f64; QUEUE]>,
     spectrum: Box<[Complex; WINDOW]>,
     shifted: Box<[Complex; WINDOW]>,
-    fft_work: Box<[Complex; HALF]>,
+    fft_work: Box<SplitBuffer<HALF>>,
     envelope_work: Box<[Complex; WINDOW]>,
     magnitude: Box<[f64; BINS]>,
     gains: Box<[f64; BINS]>,
@@ -687,7 +563,7 @@ impl PitchShifter {
             output: Box::new([0.0; QUEUE]),
             spectrum: Box::new([Complex::default(); WINDOW]),
             shifted: Box::new([Complex::default(); WINDOW]),
-            fft_work: Box::new([Complex::default(); HALF]),
+            fft_work: Box::new(SplitBuffer::default()),
             envelope_work: Box::new([Complex::default(); WINDOW]),
             magnitude: Box::new([0.0; BINS]),
             gains: Box::new([0.0; BINS]),
@@ -1157,7 +1033,7 @@ mod tests {
         }
         let mut expected = input;
         let mut actual = input;
-        let mut work = [Complex::default(); HALF];
+        let mut work = SplitBuffer::default();
         scalar.forward_real(&mut expected, &mut work);
         vector.forward_real(&mut actual, &mut work);
         scalar.inverse_real(&mut expected, &mut work);
@@ -1185,7 +1061,7 @@ mod tests {
             }
             let _ = vector;
             let mut expected = input;
-            let mut work = [Complex::default(); HALF];
+            let mut work = SplitBuffer::default();
             fft.inverse_real(&mut expected, &mut work);
             for envelope in [false, true] {
                 let mut actual = input;
@@ -1356,7 +1232,7 @@ mod tests {
             re: (i as f64 * 0.31).sin(),
             im: 0.0,
         });
-        let mut work = [Complex::default(); HALF];
+        let mut work = SplitBuffer::default();
         fft.forward_real(&mut spectrum, &mut work);
         let mut positive_only = spectrum;
         positive_only[BINS..].fill(Complex {
@@ -1457,7 +1333,7 @@ mod tests {
             re: samples[i],
             im: 0.0,
         });
-        let mut work = [Complex::default(); HALF];
+        let mut work = SplitBuffer::default();
         fft.forward_real(&mut packed, &mut work);
         for i in 0..BINS {
             assert!((packed[i].re - reference[i].re).abs() < 1e-9);
