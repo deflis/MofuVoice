@@ -248,7 +248,12 @@ fn run_audio(
     )?;
     let configuration = engine.configuration();
     update_configuration(info, &configuration, &options, "opening", kind);
-    let details = format!("Device: {}\n{}", configuration.device, engine.details());
+    let details = format!(
+        "Device: {}\n{}\nPitch algorithm: {}",
+        configuration.device,
+        engine.details(),
+        options.pitch.algorithm.name()
+    );
     set_status(status, details.clone());
     if stop.load(Ordering::Acquire) {
         info.lock().unwrap().phase = "stopped";

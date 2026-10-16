@@ -1,4 +1,4 @@
-use rust_low_latency_voice_changer::pitch::PitchShifter;
+use rust_low_latency_voice_changer::pitch::{PitchAlgorithm, PitchShifter};
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::Cell,
@@ -74,27 +74,33 @@ fn portable_processor_does_not_allocate_with_rumble_gate_pitch_eq_level_and_dees
 
 #[test]
 fn callback_does_not_allocate_including_first_frames_and_transitions() {
-    for preserve in [false, true] {
-        let mut dsp = PitchShifter::new(7.0, preserve, 0.0).unwrap();
-        let mut level = rust_low_latency_voice_changer::level::LevelSettings {
-            enabled: true,
-            compressor_enabled: true,
-            ..Default::default()
-        }
-        .build()
-        .unwrap();
-        let input = std::array::from_fn::<_, 512, _>(|i| (0.1 * (i as f64 * 0.017).sin()) as f32);
-        let mut output = [0.0; 512];
-        ALLOCATIONS.with(|n| n.set(0));
-        ENABLED.with(|enabled| enabled.set(true));
-        for pitch in [7.0, -12.0, 0.0, 12.0] {
-            dsp.set_semitones(pitch).unwrap();
-            for _ in 0..32 {
-                dsp.process_block(&input, &mut output);
-                level.process_in_place(&mut output);
+    for algorithm in PitchAlgorithm::ALL {
+        for preserve in [false, true] {
+            let mut dsp = PitchShifter::new(7.0, preserve, 0.0, algorithm).unwrap();
+            let mut level = rust_low_latency_voice_changer::level::LevelSettings {
+                enabled: true,
+                compressor_enabled: true,
+                ..Default::default()
             }
+            .build()
+            .unwrap();
+            let input = std::array::from_fn::<_, 512, _>(|i| {
+                ((1..=8)
+                    .map(|h| 0.015 * (i as f64 * 0.017 * h as f64).cos())
+                    .sum::<f64>()) as f32
+            });
+            let mut output = [0.0; 512];
+            ALLOCATIONS.with(|n| n.set(0));
+            ENABLED.with(|enabled| enabled.set(true));
+            for pitch in [7.0, -12.0, 0.0, 12.0] {
+                dsp.set_semitones(pitch).unwrap();
+                for _ in 0..32 {
+                    dsp.process_block(&input, &mut output);
+                    level.process_in_place(&mut output);
+                }
+            }
+            ENABLED.with(|enabled| enabled.set(false));
+            assert_eq!(ALLOCATIONS.with(Cell::get), 0);
         }
-        ENABLED.with(|enabled| enabled.set(false));
-        assert_eq!(ALLOCATIONS.with(Cell::get), 0);
     }
 }

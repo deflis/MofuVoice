@@ -11,6 +11,26 @@ import {
 const { settingsSchema } = await import("./schema.ts");
 const { settingsApi } = await import("./api.ts");
 
+test("pitch algorithm selection is validated and saved", async () => {
+  settingsStore.getState().voice.setPitchAlgorithm("pvsola");
+  await settingsStore.getState().save();
+  assert.equal(calls("save_settings")[0].arguments[1].settings.voice.pitchAlgorithm, "pvsola");
+  for (const pitchAlgorithm of ["phase-locked", "pvsola"]) {
+    assert.equal(
+      v.safeParse(settingsSchema, { ...settings, voice: { ...settings.voice, pitchAlgorithm } })
+        .success,
+      true,
+    );
+  }
+  for (const pitchAlgorithm of ["psola", "", null, undefined]) {
+    assert.equal(
+      v.safeParse(settingsSchema, { ...settings, voice: { ...settings.voice, pitchAlgorithm } })
+        .success,
+      false,
+    );
+  }
+});
+
 test("saving extracts only numeric settings from slices and strips every action", async () => {
   const voiceBefore = settingsStore.getState().voice;
   settingsStore.getState().devices.setFrames(128);

@@ -170,6 +170,7 @@ struct DeviceSettings {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct VoiceSettings {
+    pitch_algorithm: String,
     pitch: f64,
     formant_shift: f64,
     preserve_formants: bool,
@@ -197,6 +198,7 @@ impl Settings {
                 sample_rate: options.sample_rate,
             },
             voice: VoiceSettings {
+                pitch_algorithm: options.pitch.algorithm.name().into(),
                 pitch: options.pitch.semitones,
                 formant_shift: options.pitch.formant_shift,
                 preserve_formants: options.pitch.preserve_formants,
@@ -234,6 +236,8 @@ impl Settings {
             frames: self.devices.frames,
             sample_rate: self.devices.sample_rate,
             pitch: crate::pitch::PitchSettings {
+                algorithm: crate::pitch::PitchAlgorithm::parse(&self.voice.pitch_algorithm)
+                    .map_err(str::to_string)?,
                 semitones: self.voice.pitch,
                 formant_shift: self.voice.formant_shift,
                 preserve_formants: self.voice.preserve_formants,
@@ -991,6 +995,19 @@ pub fn show_message(message: &str, _error: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pitch_algorithm_controls_round_trip_and_reject_unknown_values() {
+        for algorithm in crate::pitch::PitchAlgorithm::ALL {
+            let options =
+                Options::parse_gui(["--pitch-algorithm", algorithm.name()].map(String::from))
+                    .unwrap();
+            let mut settings = Settings::from_options(&options);
+            assert_eq!(settings.voice.pitch_algorithm, algorithm.name());
+            assert_eq!(settings.options().unwrap(), options);
+            settings.voice.pitch_algorithm = "unknown".into();
+            assert!(settings.options().is_err());
+        }
+    }
     #[test]
     fn settings_payload_uses_numeric_values_in_feature_groups() {
         use tauri::ipc::{InvokeResponseBody, IpcResponse};

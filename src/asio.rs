@@ -826,7 +826,8 @@ mod tests {
         state.inputs = 1;
         state.input_channel = 1;
         state.output_channels = vec![1];
-        state.dsp.get_mut().pitch = PitchShifter::new(0.0, true, 0.0).unwrap();
+        state.dsp.get_mut().pitch =
+            PitchShifter::new(0.0, true, 0.0, crate::pitch::PitchAlgorithm::PhaseLocked).unwrap();
         state.dsp.get_mut().gate = GateSettings {
             enabled: true,
             threshold: crate::gate::GateThreshold::Db(-90.0),
@@ -860,7 +861,8 @@ mod tests {
         .build()
         .unwrap();
         state.dsp.get_mut().level = crate::level::LevelSettings::default().build().unwrap();
-        state.dsp.get_mut().pitch = PitchShifter::new(3.0, true, 0.0).unwrap();
+        state.dsp.get_mut().pitch =
+            PitchShifter::new(3.0, true, 0.0, crate::pitch::PitchAlgorithm::PhaseLocked).unwrap();
         for _ in 0..1024 {
             assert_eq!(unsafe { state.process::<f32>(0) }, 3);
         }

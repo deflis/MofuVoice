@@ -14,6 +14,7 @@ export const settings = {
     sampleRate: 48000,
   },
   voice: {
+    pitchAlgorithm: "phase-locked",
     pitch: 0,
     formantShift: 0,
     preserveFormants: true,

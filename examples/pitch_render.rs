@@ -100,9 +100,9 @@ fn write_wav(path: &Path, samples: &[f32]) -> Result<(), Box<dyn Error>> {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    if args.len() != 4 {
+    if args.len() != 5 {
         return Err(
-            "Usage: pitch_render INPUT.wav OUTPUT_DIRECTORY PITCH_SEMITONES FORMANT_SEMITONES"
+            "Usage: pitch_render INPUT.wav OUTPUT_DIRECTORY PITCH_SEMITONES FORMANT_SEMITONES phase-locked|pvsola"
                 .into(),
         );
     }
@@ -114,6 +114,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let pitch: f64 = args[2].parse()?;
     let shift: f64 = args[3].parse()?;
     let options = Options::parse([
+        "--pitch-algorithm".to_string(),
+        args[4].clone(),
         "--pitch".to_string(),
         args[2].clone(),
         "--formant-shift".to_string(),

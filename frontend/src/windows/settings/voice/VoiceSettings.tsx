@@ -1,12 +1,35 @@
 import { useVoiceSettings } from "./hooks";
 import { SemitonesInput } from "./SemitonesInput";
+import * as v from "valibot";
+import { voiceSchema } from "./schema";
 
 export function VoiceSettings() {
-  const { pitch, formantShift, preserveFormants, setPitch, setFormantShift, setPreserveFormants } =
-    useVoiceSettings();
+  const {
+    pitchAlgorithm,
+    setPitchAlgorithm,
+    pitch,
+    formantShift,
+    preserveFormants,
+    setPitch,
+    setFormantShift,
+    setPreserveFormants,
+  } = useVoiceSettings();
   return (
     <section>
       <h2>声の変換</h2>
+      <label>
+        ピッチ変換方式
+        <select
+          value={pitchAlgorithm}
+          onChange={(event) =>
+            setPitchAlgorithm(v.parse(voiceSchema.entries.pitchAlgorithm, event.target.value))
+          }
+        >
+          <option value="phase-locked">フェーズロック（標準）</option>
+          <option value="pvsola">PVSOLAアプローチ（実験）</option>
+        </select>
+      </label>
+      <p>同じピッチ・響きの設定で聞き比べてください。変更は保存後、次の音声開始時に反映します。</p>
       <SemitonesInput
         lowerLabel="低く"
         upperLabel="高く"
