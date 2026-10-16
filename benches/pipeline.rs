@@ -6,6 +6,24 @@ use rust_low_latency_voice_changer::{
 };
 use std::{hint::black_box, time::Instant};
 
+// Count scheduled work separately from wall time: desktop scheduling pauses
+// otherwise obscure DSP changes. Cycle counts are not device/round-trip latency.
+#[cfg(windows)]
+fn thread_cycles() -> u64 {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetCurrentThread() -> *mut std::ffi::c_void;
+        fn QueryThreadCycleTime(thread: *mut std::ffi::c_void, cycles: *mut u64) -> i32;
+    }
+    let mut cycles = 0;
+    // SAFETY: current-thread pseudo handle is valid, cycles is writable u64 storage.
+    assert_ne!(
+        unsafe { QueryThreadCycleTime(GetCurrentThread(), &mut cycles) },
+        0
+    );
+    cycles
+}
+
 fn selected<T: std::str::FromStr + PartialEq>(name: &str, value: T) -> bool {
     match std::env::var(name) {
         Ok(text) => {
@@ -21,6 +39,8 @@ fn selected<T: std::str::FromStr + PartialEq>(name: &str, value: T) -> bool {
 fn main() {
     let mut total = 0.0;
     let mut cases = 0;
+    #[cfg(windows)]
+    let mut total_cycles = 0.0;
     for rate in [44_100, 48_000] {
         if !selected("DSP_BENCH_RATE", rate) {
             continue;
@@ -52,6 +72,8 @@ fn main() {
                 for shift in [0, 3] {
                     let mut times = Vec::new();
                     let mut worst = 0.0_f64;
+                    #[cfg(windows)]
+                    let mut cycles = Vec::new();
                     for trial in 0..8 {
                         let options = Options::parse([
                             "--pitch".into(),
@@ -83,6 +105,8 @@ fn main() {
                                 .unwrap();
                         let mut output = vec![0.0; frames];
                         let start = Instant::now();
+                        #[cfg(windows)]
+                        let cycle_start = thread_cycles();
                         for chunk in input.chunks(frames) {
                             let block = Instant::now();
                             black_box(
@@ -96,13 +120,22 @@ fn main() {
                         }
                         if trial != 0 {
                             times.push(start.elapsed().as_secs_f64() * 1e9 / input.len() as f64);
+                            #[cfg(windows)]
+                            cycles
+                                .push((thread_cycles() - cycle_start) as f64 / input.len() as f64);
                         }
                     }
                     times.sort_by(f64::total_cmp);
                     let median = times[3];
                     total += median;
                     cases += 1;
-                    println!("rate={rate}, frames={frames}, pitch={pitch:+}, formant={shift:+}: median={median:.2} ns/sample, CPU/audio={:.2}%, worst={worst:.3} ms, block budget={:.3} ms", median * rate as f64 / 1e7, frames as f64 / rate as f64 * 1000.0);
+                    #[cfg(windows)]
+                    {
+                        cycles.sort_by(f64::total_cmp);
+                        total_cycles += cycles[3];
+                        print!("cycles/sample={:.2}, ", cycles[3]);
+                    }
+                    println!("rate={rate}, frames={frames}, pitch={pitch:+}, formant={shift:+}: median={median:.2} ns/sample, wall/audio={:.2}%, worst={worst:.3} ms, block budget={:.3} ms", median * rate as f64 / 1e7, frames as f64 / rate as f64 * 1000.0);
                 }
             }
         }
@@ -111,5 +144,10 @@ fn main() {
     println!(
         "equal-weight mean of {cases} case medians: {:.2} ns/sample",
         total / cases as f64
+    );
+    #[cfg(windows)]
+    println!(
+        "equal-weight mean cycles/sample: {:.2}",
+        total_cycles / cases as f64
     );
 }
