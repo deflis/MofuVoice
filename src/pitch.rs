@@ -51,7 +51,7 @@ impl PitchAlgorithm {
     pub fn latency(self) -> usize {
         match self {
             Self::Pvsola => crate::pvsola::LATENCY,
-            Self::TdPsola | Self::TdPsolaResampled | Self::FdPsola => crate::td_psola::LATENCY,
+            Self::TdPsola | Self::TdPsolaResampled | Self::FdPsola => crate::psola_stream::LATENCY,
             _ => LATENCY,
         }
     }
@@ -149,7 +149,7 @@ impl PitchSettings {
     pub fn latency(self) -> usize {
         match (self.algorithm, self.formant_shift != 0.0) {
             (PitchAlgorithm::TdPsola | PitchAlgorithm::FdPsola, true) => {
-                crate::td_psola::LATENCY + 512
+                crate::psola_stream::LATENCY + 512
             }
             _ => self.algorithm.latency(),
         }
@@ -581,7 +581,7 @@ struct Lobe {
 }
 
 pub struct PitchShifter {
-    td_psola: Option<crate::td_psola::TdPsola>,
+    psola: Option<crate::psola_stream::PsolaStream>,
     pvsola: Option<crate::pvsola::PvsOla>,
     algorithm: PitchAlgorithm,
     synchronizer: sync::Synchronizer,
@@ -665,12 +665,18 @@ impl PitchShifter {
             std::f64::consts::TAU * HOP as f64 * bin as f64 / WINDOW as f64
         }));
         Ok(Self {
-            td_psola: match algorithm {
-                PitchAlgorithm::TdPsola => Some(crate::td_psola::TdPsola::new(1.0)),
+            psola: match algorithm {
+                PitchAlgorithm::TdPsola => Some(crate::psola_stream::PsolaStream::with_synthesis(
+                    Box::new(crate::td_synthesis::TdSynthesis::new(1.0)),
+                )),
                 PitchAlgorithm::TdPsolaResampled => {
-                    Some(crate::td_psola::TdPsola::new(formant_ratio))
+                    Some(crate::psola_stream::PsolaStream::with_synthesis(Box::new(
+                        crate::td_synthesis::TdSynthesis::new(formant_ratio),
+                    )))
                 }
-                PitchAlgorithm::FdPsola => Some(crate::td_psola::TdPsola::new_fd()),
+                PitchAlgorithm::FdPsola => Some(crate::psola_stream::PsolaStream::with_synthesis(
+                    Box::new(crate::fd_psola::FdSynthesis::new()),
+                )),
                 _ => None,
             },
             pvsola: (algorithm == PitchAlgorithm::Pvsola)
@@ -756,7 +762,7 @@ impl PitchShifter {
 
     #[inline(always)]
     fn frame_inner(&mut self) {
-        let ratio = if self.td_psola.is_some() {
+        let ratio = if self.psola.is_some() {
             1.0
         } else {
             self.ratio
@@ -1154,15 +1160,15 @@ impl PitchShifter {
                     pvsola.push(dry, self.ratio, self.preserve_formants, self.formant_ratio)
                 }
             });
-            let source = if let Some(td_psola) = &mut self.td_psola {
-                td_psola.push_with_formants(dry, self.ratio, self.preserve_formants)
+            let source = if let Some(psola) = &mut self.psola {
+                psola.push_with_formants(dry, self.ratio, self.preserve_formants)
             } else {
                 dry
             };
             self.input[self.clock % WINDOW] = source;
             let wet = if let Some(pvsola_wet) = pvsola_wet {
                 pvsola_wet
-            } else if self.td_psola.is_some()
+            } else if self.psola.is_some()
                 && (self.algorithm == PitchAlgorithm::TdPsolaResampled || self.formant_shift == 0.0)
             {
                 source
@@ -1193,10 +1199,11 @@ impl PitchShifter {
             self.until_frame -= 1;
             if self.until_frame == 0 {
                 if self.pvsola.is_none()
-                    || (self.ratio == 1.0 && self.formant_ratio == 1.0)
-                        && (self.td_psola.is_none()
-                            || (self.algorithm == PitchAlgorithm::TdPsola
-                                && self.formant_shift != 0.0))
+                    && (self.psola.is_none()
+                        || (matches!(
+                            self.algorithm,
+                            PitchAlgorithm::TdPsola | PitchAlgorithm::FdPsola
+                        ) && self.formant_shift != 0.0))
                 {
                     self.frame();
                 }

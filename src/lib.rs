@@ -21,11 +21,14 @@ pub mod level;
 #[cfg(windows)]
 pub mod native_spectrum;
 pub mod pitch;
+mod psola_common;
+mod psola_stream;
+mod psola_synthesis;
 mod pvsola;
 pub mod rumble;
 pub mod session;
 pub mod spectrum;
-mod td_psola;
+mod td_synthesis;
 /// Default sample rate; runtime sessions carry their selected rate separately.
 pub const RATE: u32 = 48_000;
 // Keep the fixed-window pitch/formant engine near its validated 48 kHz design.

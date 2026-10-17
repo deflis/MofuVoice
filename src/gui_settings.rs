@@ -445,6 +445,7 @@ mod tests {
             .unwrap();
             assert_eq!(legacy.pitch.algorithm, PitchAlgorithm::PhaseLocked);
             assert_eq!(legacy.pitch.semitones, options.pitch.semitones);
+            assert_eq!(legacy.pitch.formant_shift, options.pitch.formant_shift);
         }
         std::fs::remove_file(path).unwrap();
     }
