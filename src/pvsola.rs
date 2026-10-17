@@ -12,6 +12,7 @@ const HOP: usize = FRAME / 4;
 const RESET_EVERY: usize = 4;
 const TOLERANCE: usize = 2 * HOP;
 const RESAMPLE_RADIUS: usize = 32;
+const CORRELATION_SIZE: usize = (2 * FRAME + 2 * TOLERANCE).next_power_of_two();
 const RING: usize = 16384;
 const CEPSTRUM_CUTOFF: usize = 48;
 /// Covers the analysis frame, PVSOLA correlation lookahead at the slowest
@@ -21,6 +22,9 @@ const _: () = assert!(LATENCY >= FRAME + (FRAME + TOLERANCE) * 2 + RESAMPLE_RADI
 
 pub(crate) struct PvsOla {
     fft: Fft,
+    correlation_fft: Fft,
+    correlation_output: Box<[Complex; CORRELATION_SIZE]>,
+    correlation_input: Box<[Complex; CORRELATION_SIZE]>,
     input: Box<[f64; RING]>,
     output: Box<[f64; RING]>,
     weight: Box<[f64; RING]>,
@@ -39,10 +43,10 @@ pub(crate) struct PvsOla {
     analysis_position: f64,
     synthesis_position: usize,
     frames_since_reset: usize,
-    reset_interval: usize,
-    accumulated_offset: isize,
+    synthesis_offset: f64,
     reset_target: Option<usize>,
     reset_input_position: f64,
+    reset_nominal_position: f64,
     ratio: f64,
     read_position: f64,
     delayed_samples: usize,
@@ -55,6 +59,9 @@ impl PvsOla {
         let window = Box::new(std::array::from_fn(|i| hann(i, FRAME)));
         Self {
             fft: Fft::new(FRAME),
+            correlation_fft: Fft::new(CORRELATION_SIZE),
+            correlation_output: Box::new([Complex::default(); CORRELATION_SIZE]),
+            correlation_input: Box::new([Complex::default(); CORRELATION_SIZE]),
             input: Box::new([0.0; RING]),
             output: Box::new([0.0; RING]),
             weight: Box::new([0.0; RING]),
@@ -73,10 +80,10 @@ impl PvsOla {
             analysis_position: 0.0,
             synthesis_position: 0,
             frames_since_reset: 0,
-            reset_interval: RESET_EVERY,
-            accumulated_offset: 0,
+            synthesis_offset: 0.0,
             reset_target: None,
             reset_input_position: 0.0,
+            reset_nominal_position: 0.0,
             ratio,
             read_position: 0.0,
             delayed_samples: 0,
@@ -99,13 +106,17 @@ impl PvsOla {
         self.analysis_position = 0.0;
         self.synthesis_position = 0;
         self.frames_since_reset = 0;
-        self.reset_interval = RESET_EVERY;
-        self.accumulated_offset = 0;
+        self.synthesis_offset = 0.0;
         self.reset_target = None;
         self.reset_input_position = 0.0;
+        self.reset_nominal_position = 0.0;
         self.read_position = 0.0;
         self.delayed_samples = 0;
         self.clear_until = 0;
+    }
+
+    pub fn ready(&self) -> bool {
+        self.delayed_samples >= LATENCY
     }
 
     pub fn push(
@@ -151,8 +162,13 @@ impl PvsOla {
             self.synthesis_position += HOP;
             if self.reset_target.is_none() {
                 self.frames_since_reset += 1;
-                if self.frames_since_reset == self.reset_interval {
-                    self.reset_target = Some(self.synthesis_position);
+                if self.frames_since_reset == RESET_EVERY {
+                    // Search around the unshifted timeline, not the last
+                    // correlation displacement. Otherwise offsets accumulate
+                    // until synthesis overwrites unread ring-buffer samples.
+                    self.reset_nominal_position =
+                        self.synthesis_position as f64 - self.synthesis_offset;
+                    self.reset_target = Some(self.reset_nominal_position.round().max(0.0) as usize);
                     self.reset_input_position = self.analysis_position;
                 }
             } else if self.synthesis_position > self.reset_target.unwrap() + FRAME + TOLERANCE {
@@ -247,31 +263,54 @@ impl PvsOla {
         }
     }
 
+    /// Linear cross-correlation via zero-padded FFTs. This computes the same
+    /// windowed, even-sample dot products as the exhaustive offset search, but
+    /// normalizes each output sample once and bounds work to three 4096 FFTs.
+    fn correlate_reset_frame(&mut self, target: usize, input_start: usize) {
+        self.correlation_output.fill(Complex::default());
+        self.correlation_input.fill(Complex::default());
+        let first = target as isize - TOLERANCE as isize;
+        for i in 0..FRAME + 2 * TOLERANCE {
+            let absolute = first + i as isize;
+            if absolute >= 0 {
+                let index = absolute as usize % RING;
+                if self.weight[index] > 1e-12 {
+                    self.correlation_output[i].re = self.output[index] / self.weight[index];
+                }
+            }
+        }
+        for i in (0..FRAME).step_by(2) {
+            self.correlation_input[i].re = self.input[(input_start + i) % RING]
+                * self.polarity
+                * self.window[i]
+                * self.window[i];
+        }
+        self.correlation_fft
+            .forward(&mut self.correlation_output[..]);
+        self.correlation_fft
+            .forward(&mut self.correlation_input[..]);
+        for i in 0..CORRELATION_SIZE {
+            let input = self.correlation_input[i];
+            self.correlation_output[i] = self.correlation_output[i].mul(Complex {
+                re: input.re,
+                im: -input.im,
+            });
+        }
+        self.correlation_fft
+            .inverse(&mut self.correlation_output[..]);
+    }
+
     fn reset_from_input_frame(&mut self) {
         let target = self.reset_target.take().unwrap();
         let input_start = self.reset_input_position.round() as usize;
         let mut best_offset = 0_isize;
         let mut best_score = 0.0_f64;
+        self.correlate_reset_frame(target, input_start);
         for offset in -(TOLERANCE as isize)..=TOLERANCE as isize {
-            let start = target as isize + offset;
-            if start < 0 {
+            if target as isize + offset < 0 {
                 continue;
             }
-            let mut score = 0.0;
-            for i in (0..FRAME).step_by(2) {
-                let out_index = (start as usize + i) % RING;
-                let input_index = (input_start + i) % RING;
-                let output = if self.weight[out_index] > 1e-12 {
-                    self.output[out_index] / self.weight[out_index]
-                } else {
-                    0.0
-                };
-                score += output
-                    * self.input[input_index]
-                    * self.polarity
-                    * self.window[i]
-                    * self.window[i];
-            }
+            let score = self.correlation_output[(offset + TOLERANCE as isize) as usize].re;
             let score_magnitude = score.abs();
             let best_magnitude = best_score.abs();
             let tie = 1e-3 * best_magnitude.max(score_magnitude);
@@ -351,15 +390,12 @@ impl PvsOla {
         self.analysis_position = input_start as f64 + HOP as f64 / self.ratio;
         self.synthesis_position = start + HOP;
         self.frames_since_reset = 0;
-        self.accumulated_offset += best_offset;
-        self.reset_interval = RESET_EVERY;
-        if self.accumulated_offset > HOP as isize {
-            self.reset_interval -= 1;
-            self.accumulated_offset -= HOP as isize;
-        } else if self.accumulated_offset < -(HOP as isize) {
-            self.reset_interval += 1;
-            self.accumulated_offset += HOP as isize;
-        }
+        // Keep the displacement from the nominal timeline, including the
+        // fractional analysis position rounded to the inserted input frame.
+        // Omitting that fraction would introduce a small drift on every reset.
+        let rounding = input_start as f64 - self.reset_input_position;
+        self.synthesis_offset =
+            start as f64 - (self.reset_nominal_position + rounding * self.ratio);
 
         self.previous_valid = true;
     }
@@ -426,6 +462,81 @@ mod tests {
                 "ratio={ratio}, imaginary/real={}",
                 imaginary / real
             );
+        }
+    }
+    #[test]
+    fn sustained_audio_keeps_unread_synthesis_inside_the_ring() {
+        for ratio in [0.5, 0.83, 1.3, 2.0] {
+            let mut dsp = PvsOla::new(ratio, false, 1.0);
+            for i in 0..480000 {
+                let phase = std::f64::consts::TAU * 113.0 * i as f64 / 48000.0;
+                dsp.push(
+                    0.1 * phase.sin() + 0.03 * (3.0 * phase).cos(),
+                    ratio,
+                    false,
+                    1.0,
+                );
+                if i > LATENCY * 2 {
+                    let timeline_error =
+                        dsp.synthesis_position as f64 - dsp.analysis_position * ratio;
+                    assert!(
+                        timeline_error.abs() <= TOLERANCE as f64 + 2.0,
+                        "timeline drift: ratio={ratio}, sample={i}, error={timeline_error}"
+                    );
+                    let read = dsp.read_position as usize;
+                    assert!(
+                        dsp.synthesis_position + FRAME < read + RING - RESAMPLE_RADIUS,
+                        "ratio={ratio}, sample={i}, synthesis={}, read={read}",
+                        dsp.synthesis_position
+                    );
+                    assert!(
+                        dsp.synthesis_position > read + RESAMPLE_RADIUS,
+                        "output underrun: ratio={ratio}, sample={i}, synthesis={}, read={read}",
+                        dsp.synthesis_position
+                    );
+                }
+            }
+        }
+    }
+    #[test]
+    fn fft_reset_scores_match_exhaustive_correlation_at_every_offset() {
+        let mut dsp = PvsOla::new(1.3, false, 1.0);
+        let mut seed = 11_u32;
+        for i in 0..RING {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            dsp.input[i] = seed as f64 / u32::MAX as f64 - 0.5;
+            dsp.output[i] = (i as f64 * 0.127).sin();
+            dsp.weight[i] = if i % 17 == 0 {
+                0.0
+            } else {
+                0.5 + (i % 9) as f64
+            };
+        }
+        for target in [256, 2048, RING + 256] {
+            let input_start = target + 701;
+            dsp.correlate_reset_frame(target, input_start);
+            for offset in -(TOLERANCE as isize)..=TOLERANCE as isize {
+                let start = target as isize + offset;
+                if start < 0 {
+                    continue;
+                }
+                let mut expected = 0.0;
+                for i in (0..FRAME).step_by(2) {
+                    let index = (start as usize + i) % RING;
+                    if dsp.weight[index] > 1e-12 {
+                        expected += dsp.output[index] / dsp.weight[index]
+                            * dsp.input[(input_start + i) % RING]
+                            * dsp.polarity
+                            * dsp.window[i]
+                            * dsp.window[i];
+                    }
+                }
+                let actual = dsp.correlation_output[(offset + TOLERANCE as isize) as usize].re;
+                assert!(
+                    (actual - expected).abs() < 1e-10,
+                    "target={target}, offset={offset}, expected={expected}, actual={actual}"
+                );
+            }
         }
     }
 }

@@ -1152,7 +1152,9 @@ impl PitchShifter {
             nonzero += u64::from(sample != T::default());
             let value = sample.normalized();
             let dry = if value.is_finite() { value } else { 0.0 };
+            let mut wet_ready = true;
             let pvsola_wet = self.pvsola.as_mut().map(|pvsola| {
+                wet_ready = pvsola.ready();
                 if self.ratio == 1.0 && self.formant_ratio == 1.0 {
                     pvsola.reset();
                     dry
@@ -1184,7 +1186,7 @@ impl PitchShifter {
                 }
             }
             let step = 1.0 / FADE_SAMPLES as f64;
-            if self.wet < self.target_wet {
+            if self.wet < self.target_wet && wet_ready {
                 self.wet = (self.wet + step).min(self.target_wet);
             }
             if self.wet > self.target_wet {

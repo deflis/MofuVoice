@@ -118,3 +118,23 @@ fn neutral_interval_does_not_replay_old_pvsola_audio() {
         output.iter().map(|x| x.abs()).fold(0.0_f32, f32::max)
     );
 }
+
+#[test]
+fn neutral_to_pitched_keeps_live_audio_until_the_delayed_path_is_ready() {
+    let input = vec![0.1_f32; 12000];
+    let mut output = vec![0.0; input.len()];
+    let mut dsp = PitchShifter::new(0.0, false, 0.0, PitchAlgorithm::Pvsola).unwrap();
+    dsp.process_block(&input, &mut output);
+    for pitch in [7.0, -3.0] {
+        dsp.set_semitones(pitch).unwrap();
+        dsp.process_block(&input, &mut output);
+        for block in output[..4608].chunks(128) {
+            assert!(
+                block.iter().any(|x| x.abs() > 0.03),
+                "live signal faded into silence"
+            );
+        }
+        dsp.set_semitones(0.0).unwrap();
+        dsp.process_block(&input, &mut output);
+    }
+}
