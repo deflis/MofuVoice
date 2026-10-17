@@ -39,6 +39,7 @@ pub(crate) struct PvsOla {
     formant_ratio: f64,
     polarity: f64,
     previous_valid: bool,
+    previous_analysis_position: f64,
     input_clock: usize,
     analysis_position: f64,
     synthesis_position: usize,
@@ -76,6 +77,7 @@ impl PvsOla {
             formant_ratio,
             polarity: 1.0,
             previous_valid: false,
+            previous_analysis_position: 0.0,
             input_clock: 0,
             analysis_position: 0.0,
             synthesis_position: 0,
@@ -102,6 +104,7 @@ impl PvsOla {
         self.weight.fill(0.0);
         self.polarity = 1.0;
         self.previous_valid = false;
+        self.previous_analysis_position = 0.0;
         self.input_clock = 0;
         self.analysis_position = 0.0;
         self.synthesis_position = 0;
@@ -190,7 +193,14 @@ impl PvsOla {
             };
         }
         self.fft.forward(&mut self.frame[..]);
-        let alpha = HOP as f64 / self.ratio;
+        // The previous frame scheduled this position before the live ratio
+        // changed. Estimate frequency from the actual distance between frames.
+        let alpha = if self.previous_valid {
+            self.analysis_position - self.previous_analysis_position
+        } else {
+            HOP as f64 / self.ratio
+        };
+        let stretch = HOP as f64 / alpha;
         for bin in 0..FRAME {
             let value = self.frame[bin];
             let magnitude = value.re.hypot(value.im);
@@ -222,7 +232,7 @@ impl PvsOla {
             let omega = std::f64::consts::TAU * bin as f64 / FRAME as f64;
             if self.previous_valid {
                 let delta = wrap(phase - self.previous_phase[bin] - omega * alpha);
-                self.synthesis_phase[bin] += omega * HOP as f64 + delta * self.ratio;
+                self.synthesis_phase[bin] += omega * HOP as f64 + delta * stretch;
             } else {
                 self.synthesis_phase[bin] = phase;
             }
@@ -253,6 +263,7 @@ impl PvsOla {
                 im: -self.frame[bin].im,
             };
         }
+        self.previous_analysis_position = self.analysis_position;
         self.previous_valid = true;
         self.fft.inverse(&mut self.frame[..]);
         for i in 0..FRAME {
@@ -305,26 +316,44 @@ impl PvsOla {
         let input_start = self.reset_input_position.round() as usize;
         let mut best_offset = 0_isize;
         let mut best_score = 0.0_f64;
+        let mut found = false;
+        // Samples through the previous fractional read's kernel support have
+        // already contributed to emitted audio and cannot be replaced.
+        let minimum_start = if self.read_position > 0.0 {
+            (self.read_position + RESAMPLE_RADIUS as f64).ceil() as usize
+        } else {
+            0
+        };
         self.correlate_reset_frame(target, input_start);
         for offset in -(TOLERANCE as isize)..=TOLERANCE as isize {
-            if target as isize + offset < 0 {
+            if target as isize + offset < minimum_start as isize {
                 continue;
             }
             let score = self.correlation_output[(offset + TOLERANCE as isize) as usize].re;
             let score_magnitude = score.abs();
             let best_magnitude = best_score.abs();
             let tie = 1e-3 * best_magnitude.max(score_magnitude);
-            if score_magnitude > best_magnitude + tie
+            if !found
+                || score_magnitude > best_magnitude + tie
                 || ((score_magnitude - best_magnitude).abs() <= tie
                     && offset.abs() < best_offset.abs())
             {
                 best_score = score;
                 best_offset = offset;
+                found = true;
             }
+        }
+        if !found {
+            // A rapidly changing ratio can put the whole search behind the
+            // reader. Keep the vocoder output and try a later reset instead.
+            self.frames_since_reset = 0;
+            return;
         }
         let start = (target as isize + best_offset).max(0) as usize;
         let sign = if best_score < 0.0 { -1.0 } else { 1.0 };
-        let temporary_end = self.synthesis_position;
+        // synthesis_position is the next frame start, not the end of the
+        // audio already overlap-added by the previous temporary frame.
+        let temporary_end = self.synthesis_position + FRAME - HOP;
         for absolute in start + FRAME - HOP..temporary_end {
             let index = absolute % RING;
             self.output[index] = 0.0;
@@ -387,6 +416,7 @@ impl PvsOla {
             self.output[index] = self.output[index] * (1.0 - window) + input;
             self.weight[index] = self.weight[index] * (1.0 - window) + window;
         }
+        self.previous_analysis_position = input_start as f64;
         self.analysis_position = input_start as f64 + HOP as f64 / self.ratio;
         self.synthesis_position = start + HOP;
         self.frames_since_reset = 0;
@@ -537,6 +567,65 @@ mod tests {
                     "target={target}, offset={offset}, expected={expected}, actual={actual}"
                 );
             }
+        }
+    }
+    #[test]
+    fn reset_discards_the_entire_temporary_tail_including_ring_wrap() {
+        for target in [2048, RING - 512] {
+            let mut dsp = PvsOla::new(1.0, false, 1.0);
+            dsp.output.fill(0.25);
+            dsp.weight.fill(1.0);
+            dsp.reset_target = Some(target);
+            dsp.reset_nominal_position = target as f64;
+            dsp.reset_input_position = target as f64;
+            dsp.synthesis_position = target + FRAME + TOLERANCE + HOP;
+            let end = dsp.synthesis_position + FRAME - HOP;
+            dsp.reset_from_input_frame();
+            for i in target + FRAME..end {
+                assert_eq!(dsp.output[i % RING], 0.0, "stale output at {i}");
+                assert_eq!(dsp.weight[i % RING], 0.0, "stale weight at {i}");
+            }
+            assert_eq!(dsp.output[end % RING], 0.25);
+        }
+    }
+
+    #[test]
+    fn phase_propagation_keeps_a_stationary_tone_stable_when_ratio_changes() {
+        let bin = 17.0;
+        let omega = std::f64::consts::TAU * bin / FRAME as f64;
+        for (old_ratio, new_ratio) in [(1.3, 2.0), (2.0, 0.5), (0.83, 1.7)] {
+            let mut dsp = PvsOla::new(old_ratio, false, 1.0);
+            for i in 0..RING {
+                dsp.input[i] = 0.1 * (omega * i as f64).cos();
+            }
+            dsp.vocode_frame(0);
+            let phase = dsp.synthesis_phase[bin as usize];
+            dsp.analysis_position = HOP as f64 / old_ratio;
+            dsp.ratio = new_ratio;
+            dsp.vocode_frame(HOP);
+            let error = wrap(dsp.synthesis_phase[bin as usize] - phase - omega * HOP as f64);
+            assert!(
+                error.abs() < 0.002,
+                "old={old_ratio}, new={new_ratio}, phase error={error}"
+            );
+        }
+    }
+
+    #[test]
+    fn reset_never_rewrites_samples_already_used_by_the_resampler() {
+        let mut dsp = PvsOla::new(0.5, false, 1.0);
+        dsp.output.fill(0.25);
+        dsp.weight.fill(1.0);
+        dsp.reset_target = Some(1024);
+        dsp.reset_nominal_position = 1024.0;
+        dsp.reset_input_position = 2048.0;
+        dsp.synthesis_position = 2816;
+        dsp.read_position = 1100.0;
+        dsp.reset_from_input_frame();
+        assert!(dsp.synthesis_position - HOP >= 1100 + RESAMPLE_RADIUS);
+        for i in 0..1100 + RESAMPLE_RADIUS {
+            assert_eq!(dsp.output[i], 0.25, "read audio rewritten at {i}");
+            assert_eq!(dsp.weight[i], 1.0);
         }
     }
 }
