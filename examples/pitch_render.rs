@@ -120,7 +120,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "--formant-shift".to_string(),
         args[3].clone(),
     ])?;
-    let latency = options.pitch.algorithm.latency();
+    let latency = options.pitch.latency();
     let mut dsp = AudioProcessor::<f32>::new(RATE, 512, DspSettings::from(&options))?;
     let directory = Path::new(&args[1]);
     for name in ["input.wav", "processed.wav"] {
