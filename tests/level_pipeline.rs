@@ -28,7 +28,13 @@ fn gate_pitch_and_level_chain_is_independent_of_callback_boundaries() {
                 }
                 .build()
                 .unwrap();
-                let mut shifter = PitchShifter::new(pitch, true, formant).unwrap();
+                let mut shifter = PitchShifter::new(
+                    pitch,
+                    true,
+                    formant,
+                    rust_low_latency_voice_changer::pitch::PitchAlgorithm::PhaseLocked,
+                )
+                .unwrap();
                 let mut level = LevelSettings {
                     enabled: true,
                     compressor_enabled: true,

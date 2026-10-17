@@ -2,7 +2,6 @@
 use rust_low_latency_voice_changer::{
     audio::{AudioProcessor, DspSettings},
     cli::Options,
-    pitch::LATENCY,
     RATE,
 };
 use std::{error::Error, fs, path::Path};
@@ -100,9 +99,9 @@ fn write_wav(path: &Path, samples: &[f32]) -> Result<(), Box<dyn Error>> {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    if args.len() != 4 {
+    if args.len() != 5 {
         return Err(
-            "Usage: pitch_render INPUT.wav OUTPUT_DIRECTORY PITCH_SEMITONES FORMANT_SEMITONES"
+            "Usage: pitch_render INPUT.wav OUTPUT_DIRECTORY PITCH_SEMITONES FORMANT_SEMITONES phase-locked|pvsola|td-psola|fd-psola"
                 .into(),
         );
     }
@@ -114,11 +113,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let pitch: f64 = args[2].parse()?;
     let shift: f64 = args[3].parse()?;
     let options = Options::parse([
+        "--pitch-algorithm".to_string(),
+        args[4].clone(),
         "--pitch".to_string(),
         args[2].clone(),
         "--formant-shift".to_string(),
         args[3].clone(),
     ])?;
+    let latency = options.pitch.latency();
     let mut dsp = AudioProcessor::<f32>::new(RATE, 512, DspSettings::from(&options))?;
     let directory = Path::new(&args[1]);
     for name in ["input.wav", "processed.wav"] {
@@ -128,7 +130,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             );
         }
     }
-    input.resize(count + LATENCY * 2, 0.0);
+    input.resize(count + latency * 2, 0.0);
     let mut output = vec![0.0; input.len()];
     for (a, b) in input.chunks(512).zip(output.chunks_mut(512)) {
         dsp.process_block(a, b)?;
@@ -136,7 +138,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let delay = if pitch == 0.0 && shift == 0.0 {
         0
     } else {
-        LATENCY
+        latency
     };
     let output = &output[delay..delay + count];
     let clipped = output.iter().filter(|&&x| x.abs() >= 1.0).count();

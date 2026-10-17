@@ -11,6 +11,48 @@ import {
 const { settingsSchema } = await import("./schema.ts");
 const { settingsApi } = await import("./api.ts");
 
+test("TD-PSOLA selection retains independent formant shift and validates IPC", async () => {
+  settingsStore.getState().voice.setFormantShift(2.53);
+  settingsStore.getState().voice.setPreserveFormants(false);
+  settingsStore.getState().voice.setPitchAlgorithm("td-psola");
+  assert.equal(settingsStore.getState().voice.formantShift, 2.53);
+  assert.equal(settingsStore.getState().voice.preserveFormants, true);
+  await settingsStore.getState().save();
+  assert.equal(calls("save_settings")[0].arguments[1].settings.voice.pitchAlgorithm, "td-psola");
+  assert.equal(
+    v.safeParse(settingsSchema, {
+      ...settings,
+      voice: { ...settings.voice, pitchAlgorithm: "td-psola", formantShift: 2.53 },
+    }).success,
+    true,
+  );
+  for (const voice of [
+    { ...settings.voice, pitchAlgorithm: "td-psola", preserveFormants: false },
+  ]) {
+    assert.equal(v.safeParse(settingsSchema, { ...settings, voice }).success, false);
+  }
+});
+
+test("pitch algorithm selection is validated and saved", async () => {
+  settingsStore.getState().voice.setPitchAlgorithm("pvsola");
+  await settingsStore.getState().save();
+  assert.equal(calls("save_settings")[0].arguments[1].settings.voice.pitchAlgorithm, "pvsola");
+  for (const pitchAlgorithm of ["phase-locked", "pvsola", "pvsola-sync", "td-psola"]) {
+    assert.equal(
+      v.safeParse(settingsSchema, { ...settings, voice: { ...settings.voice, pitchAlgorithm } })
+        .success,
+      true,
+    );
+  }
+  for (const pitchAlgorithm of ["psola", "", null, undefined]) {
+    assert.equal(
+      v.safeParse(settingsSchema, { ...settings, voice: { ...settings.voice, pitchAlgorithm } })
+        .success,
+      false,
+    );
+  }
+});
+
 test("saving extracts only numeric settings from slices and strips every action", async () => {
   const voiceBefore = settingsStore.getState().voice;
   settingsStore.getState().devices.setFrames(128);

@@ -21,6 +21,11 @@ export const settingsSchema = v.pipe(
     "フォルマントを独立調整しない場合、調整値は0にしてください。",
   ),
   v.check(
+    (settings) =>
+      !settings.voice.pitchAlgorithm.startsWith("td-psola") || settings.voice.preserveFormants,
+    "TD-PSOLAではフォルマント保持をオンにしてください。",
+  ),
+  v.check(
     (settings) => settings.level.floorDb < settings.level.targetDb,
     "音声検出しきい値は目標音量より低くしてください。",
   ),

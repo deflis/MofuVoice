@@ -248,7 +248,12 @@ fn run_audio(
     )?;
     let configuration = engine.configuration();
     update_configuration(info, &configuration, &options, "opening", kind);
-    let details = format!("Device: {}\n{}", configuration.device, engine.details());
+    let details = format!(
+        "Device: {}\n{}\nPitch algorithm: {}",
+        configuration.device,
+        engine.details(),
+        options.pitch.algorithm.name()
+    );
     set_status(status, details.clone());
     if stop.load(Ordering::Acquire) {
         info.lock().unwrap().phase = "stopped";
@@ -266,7 +271,7 @@ fn run_audio(
             if options.pitch.semitones == 0.0 && options.pitch.formant_shift == 0.0 {
                 0.0
             } else {
-                crate::pitch::LATENCY as f64 * 1000.0 / configuration.sample_rate
+                options.pitch.latency() as f64 * 1000.0 / configuration.sample_rate
             },
         );
         info.input_latency_ms = input;

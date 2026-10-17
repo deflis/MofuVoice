@@ -1,7 +1,8 @@
-//! Monophonic spectral pitch shifting with identity phase locking.
+//! Monophonic pitch shifting: spectral phase locking, PVSOLA, or waveform TD-PSOLA.
 //! All FFT tables, windows, and overlap storage are allocated before streaming.
-//! Wet audio uses a long analysis window and a short right-aligned synthesis window,
-//! so the fixed delay is SYNTHESIS samples; the neutral setting bypasses exactly.
+//! The spectral stage uses a long analysis window and a short right-aligned synthesis window,
+//! with SYNTHESIS samples of delay. TD-PSOLA uses waveform grains and resampling.
+//! The neutral setting bypasses exactly.
 #[cfg(test)]
 use crate::dsp::fft_kernel::FftKernel;
 use crate::dsp::phase::wrap;
@@ -15,6 +16,78 @@ use crate::dsp::{
 use std::{error::Error, fmt};
 #[path = "pitch_math.rs"]
 mod math;
+#[path = "pitch_sync.rs"]
+mod sync;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PitchAlgorithm {
+    PhaseLocked,
+    /// PVSOLA time stretching followed by pitch-rate resampling.
+    Pvsola,
+    /// Existing synchronized phase correction for direct spectral pitch mapping.
+    PvsolaSync,
+    TdPsola,
+    /// TD-PSOLA time stretch and band-limited resampling for independent formants.
+    TdPsolaResampled,
+    /// Pitch-synchronous frame transform with complex-spectrum compression/expansion.
+    FdPsola,
+}
+
+impl PitchAlgorithm {
+    pub const ALL: [Self; 6] = [
+        Self::PhaseLocked,
+        Self::Pvsola,
+        Self::PvsolaSync,
+        Self::TdPsola,
+        Self::TdPsolaResampled,
+        Self::FdPsola,
+    ];
+    pub const SPECTRAL: [Self; 2] = [Self::PhaseLocked, Self::PvsolaSync];
+
+    pub fn uses_td_psola(self) -> bool {
+        matches!(self, Self::TdPsola | Self::TdPsolaResampled)
+    }
+
+    pub fn latency(self) -> usize {
+        match self {
+            Self::Pvsola => crate::pvsola::LATENCY,
+            Self::TdPsola | Self::TdPsolaResampled | Self::FdPsola => crate::psola_stream::LATENCY,
+            _ => LATENCY,
+        }
+    }
+
+    pub fn validate_formants(self, preserve: bool) -> Result<(), &'static str> {
+        if self.uses_td_psola() && !preserve {
+            return Err("TD-PSOLA requires formant preservation");
+        }
+        Ok(())
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::PhaseLocked => "phase-locked",
+            Self::Pvsola => "pvsola",
+            Self::PvsolaSync => "pvsola-sync",
+            Self::TdPsola => "td-psola",
+            Self::TdPsolaResampled => "td-psola-resampled",
+            Self::FdPsola => "fd-psola",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, &'static str> {
+        match value {
+            "phase-locked" => Ok(Self::PhaseLocked),
+            "pvsola" => Ok(Self::Pvsola),
+            "pvsola-sync" => Ok(Self::PvsolaSync),
+            "td-psola" => Ok(Self::TdPsola),
+            "td-psola-resampled" => Ok(Self::TdPsolaResampled),
+            "fd-psola" => Ok(Self::FdPsola),
+            _ => {
+                Err("pitch algorithm must be phase-locked, pvsola, pvsola-sync, td-psola, td-psola-resampled or fd-psola")
+            }
+        }
+    }
+}
 
 pub const SMOOTH_SAMPLES: usize = 960;
 pub const FADE_SAMPLES: usize = 480;
@@ -54,6 +127,7 @@ pub fn pitch_ratio(semitones: f64) -> Result<f64, InvalidPitch> {
 /// Pitch and independent formant settings, in semitones.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PitchSettings {
+    pub algorithm: PitchAlgorithm,
     pub semitones: f64,
     pub preserve_formants: bool,
     pub formant_shift: f64,
@@ -62,6 +136,7 @@ pub struct PitchSettings {
 impl Default for PitchSettings {
     fn default() -> Self {
         Self {
+            algorithm: PitchAlgorithm::PhaseLocked,
             semitones: 0.0,
             preserve_formants: true,
             formant_shift: 0.0,
@@ -70,8 +145,23 @@ impl Default for PitchSettings {
 }
 
 impl PitchSettings {
+    /// Buffered delay of the configured wet path; neutral bypass is handled by callers.
+    pub fn latency(self) -> usize {
+        match (self.algorithm, self.formant_shift != 0.0) {
+            (PitchAlgorithm::TdPsola | PitchAlgorithm::FdPsola, true) => {
+                crate::psola_stream::LATENCY + 512
+            }
+            _ => self.algorithm.latency(),
+        }
+    }
+
     pub fn build(self) -> Result<PitchShifter, Box<dyn Error>> {
-        PitchShifter::new(self.semitones, self.preserve_formants, self.formant_shift)
+        PitchShifter::new(
+            self.semitones,
+            self.preserve_formants,
+            self.formant_shift,
+            self.algorithm,
+        )
     }
 }
 
@@ -491,6 +581,10 @@ struct Lobe {
 }
 
 pub struct PitchShifter {
+    psola: Option<crate::psola_stream::PsolaStream>,
+    pvsola: Option<crate::pvsola::PvsOla>,
+    algorithm: PitchAlgorithm,
+    synchronizer: sync::Synchronizer,
     fft: Fft,
     analysis_window: Box<[f64; WINDOW]>,
     /// Synthesis window already scaled by COLA normalization `2H/SYNTHESIS`.
@@ -549,9 +643,11 @@ impl PitchShifter {
         semitones: f64,
         preserve_formants: bool,
         formant_shift: f64,
+        algorithm: PitchAlgorithm,
     ) -> Result<Self, Box<dyn Error>> {
         let ratio = pitch_ratio(semitones)?;
         let formant_ratio = formant_ratio(formant_shift)?;
+        algorithm.validate_formants(preserve_formants)?;
         if !preserve_formants && formant_shift != 0.0 {
             return Err(InvalidFormant.into());
         }
@@ -569,6 +665,24 @@ impl PitchShifter {
             std::f64::consts::TAU * HOP as f64 * bin as f64 / WINDOW as f64
         }));
         Ok(Self {
+            psola: match algorithm {
+                PitchAlgorithm::TdPsola => Some(crate::psola_stream::PsolaStream::with_synthesis(
+                    Box::new(crate::td_synthesis::TdSynthesis::new(1.0)),
+                )),
+                PitchAlgorithm::TdPsolaResampled => {
+                    Some(crate::psola_stream::PsolaStream::with_synthesis(Box::new(
+                        crate::td_synthesis::TdSynthesis::new(formant_ratio),
+                    )))
+                }
+                PitchAlgorithm::FdPsola => Some(crate::psola_stream::PsolaStream::with_synthesis(
+                    Box::new(crate::fd_psola::FdSynthesis::new()),
+                )),
+                _ => None,
+            },
+            pvsola: (algorithm == PitchAlgorithm::Pvsola)
+                .then(|| crate::pvsola::PvsOla::new(ratio, preserve_formants, formant_ratio)),
+            algorithm,
+            synchronizer: sync::Synchronizer::new(),
             fft: Fft::new(),
             analysis_window,
             synthesis_window,
@@ -648,6 +762,11 @@ impl PitchShifter {
 
     #[inline(always)]
     fn frame_inner(&mut self) {
+        let ratio = if self.psola.is_some() {
+            1.0
+        } else {
+            self.ratio
+        };
         let clock = self.clock;
         self.fft.forward_windowed_ring(
             &self.input,
@@ -661,7 +780,7 @@ impl PitchShifter {
         let vector = self.fft.avx2;
         #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
         let vector = false;
-        let neutral = self.ratio == 1.0 && self.formant_ratio == 1.0;
+        let neutral = ratio == 1.0 && self.formant_ratio == 1.0;
         if self.preserve_formants && !neutral {
             math::log(
                 self.magnitude.as_slice(),
@@ -739,25 +858,36 @@ impl PitchShifter {
             {
                 previous += 1;
             }
-            self.phase_result[region] = if self.ratio == 1.0
+            self.phase_result[region] = if ratio == 1.0
                 || self.previous_peak_count == 0
                 || self.previous_peaks[previous].abs_diff(peak) > 2
             {
                 self.phase[peak] + centre_step * peak as f64
             } else {
                 self.previous_synthesis_phase[self.previous_peaks[previous]]
-                    + self.phase_advance[peak] * self.ratio
+                    + self.phase_advance[peak] * ratio
             };
         }
         phase::wrap_in_place(&mut self.phase_result[..count], vector);
         for (region, &peak) in self.peaks[..count].iter().enumerate() {
             self.synthesis_phase[peak] = self.phase_result[region];
         }
+        if self.algorithm == PitchAlgorithm::PvsolaSync && ratio != 1.0 && self.remaining == 0 {
+            self.synchronizer.synchronize(sync::Frame {
+                peaks: &self.peaks[..count],
+                magnitude: &self.magnitude[..],
+                phase: &self.phase[..],
+                advance: &self.phase_advance[..],
+                synthesis: &mut self.synthesis_phase[..],
+                ratio,
+                centre_step,
+            });
+        }
         self.previous_peaks[..count].copy_from_slice(&self.peaks[..count]);
         self.previous_peak_count = count;
         self.shifted[..BINS].fill(Complex::default());
         self.shifted[0] = self.spectrum[0];
-        if self.ratio == 1.0 {
+        if ratio == 1.0 {
             self.shifted[BINS - 1] = self.spectrum[BINS - 1];
         }
         let dc_lobe = self.magnitude[0] > self.magnitude[1];
@@ -768,7 +898,7 @@ impl PitchShifter {
             self.shifted[..BINS].copy_from_slice(&self.spectrum[..BINS]);
         } else {
             let bin_scale = WINDOW as f64 / (std::f64::consts::TAU * HOP as f64);
-            let ratio_delta = self.ratio - 1.0;
+            let ratio_delta = ratio - 1.0;
             let preserve = self.preserve_formants;
             let inverse_formant = 1.0 / self.formant_ratio;
             for (region, &peak) in self.peaks[..count].iter().enumerate() {
@@ -1022,8 +1152,31 @@ impl PitchShifter {
             nonzero += u64::from(sample != T::default());
             let value = sample.normalized();
             let dry = if value.is_finite() { value } else { 0.0 };
-            self.input[self.clock % WINDOW] = dry;
-            let wet = self.output[self.clock % QUEUE];
+            let mut wet_ready = true;
+            let pvsola_wet = self.pvsola.as_mut().map(|pvsola| {
+                wet_ready = pvsola.ready();
+                if self.ratio == 1.0 && self.formant_ratio == 1.0 {
+                    pvsola.reset();
+                    dry
+                } else {
+                    pvsola.push(dry, self.ratio, self.preserve_formants, self.formant_ratio)
+                }
+            });
+            let source = if let Some(psola) = &mut self.psola {
+                psola.push_with_formants(dry, self.ratio, self.preserve_formants)
+            } else {
+                dry
+            };
+            self.input[self.clock % WINDOW] = source;
+            let wet = if let Some(pvsola_wet) = pvsola_wet {
+                pvsola_wet
+            } else if self.psola.is_some()
+                && (self.algorithm == PitchAlgorithm::TdPsolaResampled || self.formant_shift == 0.0)
+            {
+                source
+            } else {
+                self.output[self.clock % QUEUE]
+            };
             self.output[self.clock % QUEUE] = 0.0;
             if self.remaining != 0 {
                 self.ratio += self.ratio_step;
@@ -1033,7 +1186,7 @@ impl PitchShifter {
                 }
             }
             let step = 1.0 / FADE_SAMPLES as f64;
-            if self.wet < self.target_wet {
+            if self.wet < self.target_wet && wet_ready {
                 self.wet = (self.wet + step).min(self.target_wet);
             }
             if self.wet > self.target_wet {
@@ -1047,7 +1200,15 @@ impl PitchShifter {
             self.clock = (self.clock + 1) % QUEUE;
             self.until_frame -= 1;
             if self.until_frame == 0 {
-                self.frame();
+                if self.pvsola.is_none()
+                    && (self.psola.is_none()
+                        || (matches!(
+                            self.algorithm,
+                            PitchAlgorithm::TdPsola | PitchAlgorithm::FdPsola
+                        ) && self.formant_shift != 0.0))
+                {
+                    self.frame();
+                }
                 self.until_frame = HOP;
             }
         }
@@ -1239,36 +1400,40 @@ mod tests {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     #[test]
     fn vector_frame_matches_portable_across_formant_and_pitch_transitions() {
-        if !std::is_x86_feature_detected!("avx2") {
-            return;
-        }
-        let mut seed = 7_u32;
-        let input: Vec<f32> = (0..8192)
-            .map(|i| {
-                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
-                let noise = seed as f64 / u32::MAX as f64 - 0.5;
-                (0.12 * (i as f64 * 0.013).sin() + 0.03 * noise) as f32
-            })
-            .collect();
-        for preserve in [false, true] {
-            for formant in if preserve {
-                &[-12.0, 0.0, 12.0][..]
-            } else {
-                &[0.0][..]
-            } {
-                let mut vector = PitchShifter::new(-12.0, preserve, *formant).unwrap();
-                let mut portable = PitchShifter::new(-12.0, preserve, *formant).unwrap();
-                portable.fft.avx2 = false;
-                for pitch in [-12.0, -3.0, 0.0, 3.0, 7.0, 12.0, 0.0] {
-                    vector.set_semitones(pitch).unwrap();
-                    portable.set_semitones(pitch).unwrap();
-                    let mut expected = [0.0_f32; 127];
-                    let mut actual = expected;
-                    for chunk in input.chunks(127) {
-                        vector.process_block(chunk, &mut actual[..chunk.len()]);
-                        portable.process_block(chunk, &mut expected[..chunk.len()]);
-                        for (&a, &b) in actual.iter().zip(&expected) {
-                            assert!((a - b).abs() < 1e-7);
+        for algorithm in PitchAlgorithm::SPECTRAL {
+            if !std::is_x86_feature_detected!("avx2") {
+                return;
+            }
+            let mut seed = 7_u32;
+            let input: Vec<f32> = (0..8192)
+                .map(|i| {
+                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                    let noise = seed as f64 / u32::MAX as f64 - 0.5;
+                    (0.12 * (i as f64 * 0.013).sin() + 0.03 * noise) as f32
+                })
+                .collect();
+            for preserve in [false, true] {
+                for formant in if preserve {
+                    &[-12.0, 0.0, 12.0][..]
+                } else {
+                    &[0.0][..]
+                } {
+                    let mut vector =
+                        PitchShifter::new(-12.0, preserve, *formant, algorithm).unwrap();
+                    let mut portable =
+                        PitchShifter::new(-12.0, preserve, *formant, algorithm).unwrap();
+                    portable.fft.avx2 = false;
+                    for pitch in [-12.0, -3.0, 0.0, 3.0, 7.0, 12.0, 0.0] {
+                        vector.set_semitones(pitch).unwrap();
+                        portable.set_semitones(pitch).unwrap();
+                        let mut expected = [0.0_f32; 127];
+                        let mut actual = expected;
+                        for chunk in input.chunks(127) {
+                            vector.process_block(chunk, &mut actual[..chunk.len()]);
+                            portable.process_block(chunk, &mut expected[..chunk.len()]);
+                            for (&a, &b) in actual.iter().zip(&expected) {
+                                assert!((a - b).abs() < 1e-7);
+                            }
                         }
                     }
                 }
@@ -1278,45 +1443,48 @@ mod tests {
 
     #[test]
     fn batched_phase_analysis_matches_system_reference() {
-        let mut seed = 17_u32;
-        let input: Vec<f32> = (0..16_384)
-            .map(|i| {
-                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
-                let noise = seed as f64 / u32::MAX as f64 - 0.5;
-                let chirp = 0.013 * i as f64 + 0.000002 * (i * i) as f64;
-                match i / 4096 {
-                    0 => 0.0,
-                    1 => (0.12 * chirp.sin() + 0.07 * (3.0 * chirp).cos()) as f32,
-                    2 => (0.2 * noise) as f32,
-                    _ => {
-                        if i == 12_288 {
-                            0.7
-                        } else {
-                            0.0
+        for algorithm in PitchAlgorithm::SPECTRAL {
+            let mut seed = 17_u32;
+            let input: Vec<f32> = (0..16_384)
+                .map(|i| {
+                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                    let noise = seed as f64 / u32::MAX as f64 - 0.5;
+                    let chirp = 0.013 * i as f64 + 0.000002 * (i * i) as f64;
+                    match i / 4096 {
+                        0 => 0.0,
+                        1 => (0.12 * chirp.sin() + 0.07 * (3.0 * chirp).cos()) as f32,
+                        2 => (0.2 * noise) as f32,
+                        _ => {
+                            if i == 12_288 {
+                                0.7
+                            } else {
+                                0.0
+                            }
                         }
                     }
-                }
-            })
-            .collect();
-        for preserve in [false, true] {
-            for formant in if preserve {
-                &[-12.0, 0.0, 12.0][..]
-            } else {
-                &[0.0][..]
-            } {
-                let mut lazy = PitchShifter::new(-12.0, preserve, *formant).unwrap();
-                let mut eager = PitchShifter::new(-12.0, preserve, *formant).unwrap();
-                eager.eager_phase = true;
-                for pitch in [-12.0, -3.0, 0.0, 3.0, 7.0, 12.0, 0.0] {
-                    lazy.set_semitones(pitch).unwrap();
-                    eager.set_semitones(pitch).unwrap();
-                    let mut actual = [0.0_f32; 127];
-                    let mut expected = actual;
-                    for chunk in input.chunks(127) {
-                        lazy.process_block(chunk, &mut actual[..chunk.len()]);
-                        eager.process_block(chunk, &mut expected[..chunk.len()]);
-                        for (&actual, &expected) in actual.iter().zip(&expected) {
-                            assert!((actual - expected).abs() < 1e-7);
+                })
+                .collect();
+            for preserve in [false, true] {
+                for formant in if preserve {
+                    &[-12.0, 0.0, 12.0][..]
+                } else {
+                    &[0.0][..]
+                } {
+                    let mut lazy = PitchShifter::new(-12.0, preserve, *formant, algorithm).unwrap();
+                    let mut eager =
+                        PitchShifter::new(-12.0, preserve, *formant, algorithm).unwrap();
+                    eager.eager_phase = true;
+                    for pitch in [-12.0, -3.0, 0.0, 3.0, 7.0, 12.0, 0.0] {
+                        lazy.set_semitones(pitch).unwrap();
+                        eager.set_semitones(pitch).unwrap();
+                        let mut actual = [0.0_f32; 127];
+                        let mut expected = actual;
+                        for chunk in input.chunks(127) {
+                            lazy.process_block(chunk, &mut actual[..chunk.len()]);
+                            eager.process_block(chunk, &mut expected[..chunk.len()]);
+                            for (&actual, &expected) in actual.iter().zip(&expected) {
+                                assert!((actual - expected).abs() < 1e-7);
+                            }
                         }
                     }
                 }
@@ -1352,26 +1520,28 @@ mod tests {
 
     #[test]
     fn shared_phase_rotation_matches_polar_reference_across_retargeting() {
-        let input: Vec<f32> = (0..8192)
-            .map(|i| {
-                let phase = 0.013 * i as f64 + 0.000002 * (i * i) as f64;
-                (0.12 * phase.sin() + 0.07 * (phase * 3.0).cos()) as f32
-            })
-            .collect();
-        let mut output = vec![0.0; input.len()];
-        for preserve in [false, true] {
-            for formant in if preserve {
-                &[-12.0, 0.0, 12.0][..]
-            } else {
-                &[0.0][..]
-            } {
-                let mut dsp = PitchShifter::new(-12.0, preserve, *formant).unwrap();
-                // Silence exercises the spectrum with no detected peaks.
-                dsp.process_block(&vec![0.0_f32; WINDOW], &mut output[..WINDOW]);
-                for pitch in [-12.0, -3.0, 0.0, 3.0, 7.0, 12.0] {
-                    dsp.set_semitones(pitch).unwrap();
-                    for (chunk, out) in input.chunks(127).zip(output.chunks_mut(127)) {
-                        dsp.process_block(chunk, out);
+        for algorithm in PitchAlgorithm::SPECTRAL {
+            let input: Vec<f32> = (0..8192)
+                .map(|i| {
+                    let phase = 0.013 * i as f64 + 0.000002 * (i * i) as f64;
+                    (0.12 * phase.sin() + 0.07 * (phase * 3.0).cos()) as f32
+                })
+                .collect();
+            let mut output = vec![0.0; input.len()];
+            for preserve in [false, true] {
+                for formant in if preserve {
+                    &[-12.0, 0.0, 12.0][..]
+                } else {
+                    &[0.0][..]
+                } {
+                    let mut dsp = PitchShifter::new(-12.0, preserve, *formant, algorithm).unwrap();
+                    // Silence exercises the spectrum with no detected peaks.
+                    dsp.process_block(&vec![0.0_f32; WINDOW], &mut output[..WINDOW]);
+                    for pitch in [-12.0, -3.0, 0.0, 3.0, 7.0, 12.0] {
+                        dsp.set_semitones(pitch).unwrap();
+                        for (chunk, out) in input.chunks(127).zip(output.chunks_mut(127)) {
+                            dsp.process_block(chunk, out);
+                        }
                     }
                 }
             }
@@ -1517,7 +1687,7 @@ mod tests {
 
     #[test]
     fn neutral_wet_path_reconstructs_at_declared_latency() {
-        let mut dsp = PitchShifter::new(0.0, false, 0.0).unwrap();
+        let mut dsp = PitchShifter::new(0.0, false, 0.0, PitchAlgorithm::PhaseLocked).unwrap();
         // Exercise the transform, rather than the public neutral bypass.
         dsp.wet = 1.0;
         dsp.target_wet = 1.0;

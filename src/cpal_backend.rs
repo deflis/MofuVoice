@@ -6,7 +6,6 @@ use crate::{
     audio_queue::{self, Consumer, Producer},
     backend::{AudioBackend, AudioStream, ChannelRouting, Result},
     dsp::Sample,
-    pitch::LATENCY,
 };
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
@@ -528,6 +527,7 @@ fn build<T: Sample + cpal::SizedSample + Send + 'static>(
     routing: &ChannelRouting,
     dsp: DspSettings,
 ) -> Result<Box<dyn AudioStream>> {
+    let pitch_latency = dsp.pitch.latency();
     let capacity = (frames as usize * 8).max(32768).next_power_of_two();
     let (producer, consumer) = audio_queue::channel::<T>(capacity);
     let rate = prepared.input_config.sample_rate;
@@ -568,6 +568,7 @@ fn build<T: Sample + cpal::SizedSample + Send + 'static>(
         Some(Duration::from_secs(5)),
     )?;
     Ok(Box::new(CpalStream {
+        pitch_latency,
         output: Some(output),
         input: Some(input),
         metrics,
@@ -581,6 +582,7 @@ fn build<T: Sample + cpal::SizedSample + Send + 'static>(
 }
 
 struct CpalStream {
+    pitch_latency: usize,
     configuration: crate::backend::AudioConfiguration,
     output: Option<cpal::Stream>,
     input: Option<cpal::Stream>,
@@ -676,9 +678,10 @@ impl AudioStream for CpalStream {
     fn latency_summary(&self) -> Result<String> {
         let target = self.metrics.prime_frames.load(Ordering::Relaxed);
         let queued = self.metrics.queue_depth.load(Ordering::Relaxed);
-        Ok(format!("CPAL driver latency unavailable through this adapter; queue startup target={target} frames ({:.3} ms), queued snapshot={queued} frames ({:.3} ms), capacity={} frames; wet DSP={LATENCY} samples ({:.3} ms), neutral DSP=0. Hardware round-trip latency is unmeasured. Separate device clock drift is not corrected.",
+        let latency = self.pitch_latency;
+        Ok(format!("CPAL driver latency unavailable through this adapter; queue startup target={target} frames ({:.3} ms), queued snapshot={queued} frames ({:.3} ms), capacity={} frames; wet DSP={latency} samples ({:.3} ms), neutral DSP=0. Hardware round-trip latency is unmeasured. Separate device clock drift is not corrected.",
             target as f64 * 1000.0 / self.configuration.sample_rate, queued as f64 * 1000.0 / self.configuration.sample_rate, self.capacity,
-            LATENCY as f64 * 1000.0 / self.configuration.sample_rate))
+            latency as f64 * 1000.0 / self.configuration.sample_rate))
     }
     fn check_events(&self) -> Result<()> {
         let faults = self.metrics.faults.load(Ordering::Relaxed);
@@ -738,6 +741,7 @@ mod tests {
         capture.process(&[0.25; 64]);
         playback.process(&mut [0.0; 48]);
         let stream = CpalStream {
+            pitch_latency: crate::pitch::PitchAlgorithm::PhaseLocked.latency(),
             configuration: crate::backend::AudioConfiguration {
                 device: "input".into(),
                 output_device: "output".into(),
