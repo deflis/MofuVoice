@@ -125,7 +125,7 @@ fn voiced_harmonics_keep_their_relative_phase_shape() {
                         assert!(output.iter().all(|x| x.is_finite() && x.abs() < 1.0));
                     }
                     eprintln!(
-                    "shape={shape}, preserve={preserve}, f={frequency}, pitch={pitch}: phase-locked={}, pvsola={}",
+                    "shape={shape}, preserve={preserve}, f={frequency}, pitch={pitch}: phase-locked={}, pvsola-sync={}",
                     errors[0], errors[1]
                 );
                     // At 80 Hz, eight nonlinearly phased harmonics are less well

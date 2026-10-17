@@ -1,4 +1,4 @@
-//! Monophonic pitch shifting: spectral phase locking or waveform TD-PSOLA.
+//! Monophonic pitch shifting: spectral phase locking, PVSOLA, or waveform TD-PSOLA.
 //! All FFT tables, windows, and overlap storage are allocated before streaming.
 //! The spectral stage uses a long analysis window and a short right-aligned synthesis window,
 //! with SYNTHESIS samples of delay. TD-PSOLA uses waveform grains and resampling.
@@ -22,8 +22,10 @@ mod sync;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PitchAlgorithm {
     PhaseLocked,
-    /// Experimental PVSOLA-inspired synchronization of directly mapped peaks.
+    /// PVSOLA time stretching followed by pitch-rate resampling.
     Pvsola,
+    /// Existing synchronized phase correction for direct spectral pitch mapping.
+    PvsolaSync,
     TdPsola,
     /// TD-PSOLA time stretch and band-limited resampling for independent formants.
     TdPsolaResampled,
@@ -32,14 +34,15 @@ pub enum PitchAlgorithm {
 }
 
 impl PitchAlgorithm {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::PhaseLocked,
         Self::Pvsola,
+        Self::PvsolaSync,
         Self::TdPsola,
         Self::TdPsolaResampled,
         Self::FdPsola,
     ];
-    pub const SPECTRAL: [Self; 2] = [Self::PhaseLocked, Self::Pvsola];
+    pub const SPECTRAL: [Self; 2] = [Self::PhaseLocked, Self::PvsolaSync];
 
     pub fn uses_td_psola(self) -> bool {
         matches!(self, Self::TdPsola | Self::TdPsolaResampled)
@@ -47,6 +50,7 @@ impl PitchAlgorithm {
 
     pub fn latency(self) -> usize {
         match self {
+            Self::Pvsola => crate::pvsola::LATENCY,
             Self::TdPsola | Self::TdPsolaResampled | Self::FdPsola => crate::psola_stream::LATENCY,
             _ => LATENCY,
         }
@@ -63,6 +67,7 @@ impl PitchAlgorithm {
         match self {
             Self::PhaseLocked => "phase-locked",
             Self::Pvsola => "pvsola",
+            Self::PvsolaSync => "pvsola-sync",
             Self::TdPsola => "td-psola",
             Self::TdPsolaResampled => "td-psola-resampled",
             Self::FdPsola => "fd-psola",
@@ -73,11 +78,12 @@ impl PitchAlgorithm {
         match value {
             "phase-locked" => Ok(Self::PhaseLocked),
             "pvsola" => Ok(Self::Pvsola),
+            "pvsola-sync" => Ok(Self::PvsolaSync),
             "td-psola" => Ok(Self::TdPsola),
             "td-psola-resampled" => Ok(Self::TdPsolaResampled),
             "fd-psola" => Ok(Self::FdPsola),
             _ => {
-                Err("pitch algorithm must be phase-locked, pvsola, td-psola, td-psola-resampled or fd-psola")
+                Err("pitch algorithm must be phase-locked, pvsola, pvsola-sync, td-psola, td-psola-resampled or fd-psola")
             }
         }
     }
@@ -576,6 +582,7 @@ struct Lobe {
 
 pub struct PitchShifter {
     psola: Option<crate::psola_stream::PsolaStream>,
+    pvsola: Option<crate::pvsola::PvsOla>,
     algorithm: PitchAlgorithm,
     synchronizer: sync::Synchronizer,
     fft: Fft,
@@ -672,6 +679,8 @@ impl PitchShifter {
                 )),
                 _ => None,
             },
+            pvsola: (algorithm == PitchAlgorithm::Pvsola)
+                .then(|| crate::pvsola::PvsOla::new(ratio, preserve_formants, formant_ratio)),
             algorithm,
             synchronizer: sync::Synchronizer::new(),
             fft: Fft::new(),
@@ -863,7 +872,7 @@ impl PitchShifter {
         for (region, &peak) in self.peaks[..count].iter().enumerate() {
             self.synthesis_phase[peak] = self.phase_result[region];
         }
-        if self.algorithm == PitchAlgorithm::Pvsola && ratio != 1.0 && self.remaining == 0 {
+        if self.algorithm == PitchAlgorithm::PvsolaSync && ratio != 1.0 && self.remaining == 0 {
             self.synchronizer.synchronize(sync::Frame {
                 peaks: &self.peaks[..count],
                 magnitude: &self.magnitude[..],
@@ -1143,13 +1152,25 @@ impl PitchShifter {
             nonzero += u64::from(sample != T::default());
             let value = sample.normalized();
             let dry = if value.is_finite() { value } else { 0.0 };
+            let mut wet_ready = true;
+            let pvsola_wet = self.pvsola.as_mut().map(|pvsola| {
+                wet_ready = pvsola.ready();
+                if self.ratio == 1.0 && self.formant_ratio == 1.0 {
+                    pvsola.reset();
+                    dry
+                } else {
+                    pvsola.push(dry, self.ratio, self.preserve_formants, self.formant_ratio)
+                }
+            });
             let source = if let Some(psola) = &mut self.psola {
                 psola.push_with_formants(dry, self.ratio, self.preserve_formants)
             } else {
                 dry
             };
             self.input[self.clock % WINDOW] = source;
-            let wet = if self.psola.is_some()
+            let wet = if let Some(pvsola_wet) = pvsola_wet {
+                pvsola_wet
+            } else if self.psola.is_some()
                 && (self.algorithm == PitchAlgorithm::TdPsolaResampled || self.formant_shift == 0.0)
             {
                 source
@@ -1165,7 +1186,7 @@ impl PitchShifter {
                 }
             }
             let step = 1.0 / FADE_SAMPLES as f64;
-            if self.wet < self.target_wet {
+            if self.wet < self.target_wet && wet_ready {
                 self.wet = (self.wet + step).min(self.target_wet);
             }
             if self.wet > self.target_wet {
@@ -1179,11 +1200,12 @@ impl PitchShifter {
             self.clock = (self.clock + 1) % QUEUE;
             self.until_frame -= 1;
             if self.until_frame == 0 {
-                if self.psola.is_none()
-                    || (matches!(
-                        self.algorithm,
-                        PitchAlgorithm::TdPsola | PitchAlgorithm::FdPsola
-                    ) && self.formant_shift != 0.0)
+                if self.pvsola.is_none()
+                    && (self.psola.is_none()
+                        || (matches!(
+                            self.algorithm,
+                            PitchAlgorithm::TdPsola | PitchAlgorithm::FdPsola
+                        ) && self.formant_shift != 0.0))
                 {
                     self.frame();
                 }

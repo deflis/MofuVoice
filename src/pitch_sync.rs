@@ -1,4 +1,4 @@
-//! PVSOLA-inspired synchronization for direct spectral pitch mapping.
+//! Correlation-based phase synchronization for direct spectral pitch mapping.
 //!
 //! Unlike the original time-stretching PVSOLA, the reference is pitch-mapped:
 //! inserting an unshifted input frame would restore the wrong pitch. We correlate
@@ -7,7 +7,7 @@
 //! The score is their energy-weighted sinusoidal-model cross-correlation.
 //! Corrections are bounded and overlap-added by the existing synthesis windows.
 //! No time-stretch/resampling stage, sample-clock drift, or lookahead is added.
-//! Reference: Moinet & Dutoit, DAFx-2011, "PVSOLA: A Phase Vocoder with
+//! Inspired by Moinet & Dutoit, DAFx-2011, "PVSOLA: A Phase Vocoder with
 //! Synchronized Overlap-Add", https://www.dafx.de/paper-archive/2011/Papers/57_e.pdf
 use super::{HOP, WINDOW};
 use crate::dsp::phase::wrap;

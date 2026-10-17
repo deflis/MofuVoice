@@ -5,6 +5,7 @@ export const voiceSchema = v.object({
   pitchAlgorithm: v.picklist([
     "phase-locked",
     "pvsola",
+    "pvsola-sync",
     "td-psola",
     "td-psola-resampled",
     "fd-psola",

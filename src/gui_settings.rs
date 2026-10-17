@@ -423,7 +423,7 @@ pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>>
 #[cfg(test)]
 mod tests {
     #[test]
-    fn pitch_algorithm_round_trips_and_defaults_for_existing_ini() {
+    fn pitch_algorithm_round_trips_and_defaults_for_existing_ini_files() {
         use crate::pitch::PitchAlgorithm;
         let path = std::env::temp_dir().join(format!("pitch-algorithm-{}.ini", std::process::id()));
         for algorithm in PitchAlgorithm::ALL {

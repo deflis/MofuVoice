@@ -24,6 +24,7 @@ pub mod pitch;
 mod psola_common;
 mod psola_stream;
 mod psola_synthesis;
+mod pvsola;
 pub mod rumble;
 pub mod session;
 pub mod spectrum;
