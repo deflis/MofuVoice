@@ -3,6 +3,8 @@ import type { SettingsStore } from "../store";
 import type { VoiceValues } from "./schema";
 
 type VoiceState = VoiceValues & {
+  setAnalysisWindow: (value: VoiceValues["analysisWindow"]) => void;
+  setSynthesisWindow: (value: VoiceValues["synthesisWindow"]) => void;
   setPitchAlgorithm: (value: VoiceValues["pitchAlgorithm"]) => void;
   setPitch: (value: VoiceValues["pitch"]) => void;
   setFormantShift: (value: VoiceValues["formantShift"]) => void;
@@ -22,6 +24,21 @@ export const createVoiceSlice: StateCreator<SettingsStore, [], [], VoiceSlice> =
             : {}),
         },
       })),
+    analysisWindow: 2048,
+    synthesisWindow: 512,
+    setAnalysisWindow: (value) =>
+      set((state) => ({
+        voice: {
+          ...state.voice,
+          analysisWindow: value,
+          synthesisWindow:
+            value === 1024 && state.voice.synthesisWindow === 2048
+              ? 1024
+              : state.voice.synthesisWindow,
+        },
+      })),
+    setSynthesisWindow: (value) =>
+      set((state) => ({ voice: { ...state.voice, synthesisWindow: value } })),
     pitch: 0,
     formantShift: 0,
     preserveFormants: true,

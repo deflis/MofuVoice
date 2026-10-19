@@ -123,3 +123,26 @@ test("automatic gate mode ignores invalid manual threshold after mode switch", a
   await settingsStore.getState().save();
   assert.equal(calls("save_settings").at(-1).arguments[1].settings.noise.thresholdMode, "auto");
 });
+
+test("spectral windows validate, save, and clamp synthesis when analysis shrinks", async () => {
+  const voice = settingsStore.getState().voice;
+  voice.setAnalysisWindow(8192);
+  voice.setSynthesisWindow(2048);
+  await settingsStore.getState().save();
+  const saved = calls("save_settings")[0].arguments[1].settings.voice;
+  assert.equal(saved.analysisWindow, 8192);
+  assert.equal(saved.synthesisWindow, 2048);
+  settingsStore.getState().voice.setAnalysisWindow(1024);
+  assert.equal(settingsStore.getState().voice.synthesisWindow, 1024);
+  for (const changes of [
+    { analysisWindow: 1536 },
+    { synthesisWindow: 128 },
+    { analysisWindow: 1024, synthesisWindow: 2048 },
+  ]) {
+    assert.equal(
+      v.safeParse(settingsSchema, { ...settings, voice: { ...settings.voice, ...changes } })
+        .success,
+      false,
+    );
+  }
+});

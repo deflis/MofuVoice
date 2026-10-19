@@ -79,7 +79,14 @@ fn callback_does_not_allocate_including_first_frames_and_transitions() {
             if algorithm.uses_td_psola() && !preserve {
                 continue;
             }
-            let mut dsp = PitchShifter::new(7.0, preserve, shift, algorithm).unwrap();
+            let mut dsp = PitchShifter::new(
+                7.0,
+                preserve,
+                shift,
+                algorithm,
+                rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+            )
+            .unwrap();
             let mut level = rust_low_latency_voice_changer::level::LevelSettings {
                 enabled: true,
                 compressor_enabled: true,
@@ -104,6 +111,43 @@ fn callback_does_not_allocate_including_first_frames_and_transitions() {
             }
             ENABLED.with(|enabled| enabled.set(false));
             assert_eq!(ALLOCATIONS.with(Cell::get), 0);
+        }
+    }
+}
+
+#[test]
+fn configured_windows_do_not_allocate_in_callbacks_or_pitch_transitions() {
+    use rust_low_latency_voice_changer::pitch::SpectralWindows;
+    for analysis in [1024, 2048, 4096, 8192] {
+        for synthesis in [256, 512, 1024, 2048] {
+            if synthesis > analysis {
+                continue;
+            }
+            for algorithm in PitchAlgorithm::SPECTRAL {
+                let mut dsp = PitchShifter::new(
+                    7.0,
+                    true,
+                    2.53,
+                    algorithm,
+                    SpectralWindows {
+                        analysis,
+                        synthesis,
+                    },
+                )
+                .unwrap();
+                let input = [0.1_f32; 511];
+                let mut output = [0.0; 511];
+                ALLOCATIONS.with(|n| n.set(0));
+                ENABLED.with(|enabled| enabled.set(true));
+                for pitch in [-12.0, 0.0, 12.0] {
+                    dsp.set_semitones(pitch).unwrap();
+                    for _ in 0..32 {
+                        dsp.process_block(&input, &mut output);
+                    }
+                }
+                ENABLED.with(|enabled| enabled.set(false));
+                assert_eq!(ALLOCATIONS.with(Cell::get), 0);
+            }
         }
     }
 }

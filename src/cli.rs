@@ -71,6 +71,7 @@ impl Options {
         let mut rate_given = false;
         let mut pitch_given = false;
         let mut algorithm_given = false;
+        let mut window_given = [false; 2];
         let mut formant_given = false;
         let mut shift_given = false;
         let mut eq_given = std::collections::HashSet::new();
@@ -134,6 +135,22 @@ impl Options {
                         _ => return Err("--formant requires preserve or off".into()),
                     };
                     formant_given = true;
+                }
+                flag @ ("--analysis-window" | "--synthesis-window") => {
+                    let index = usize::from(flag == "--synthesis-window");
+                    if window_given[index] {
+                        return Err(format!("Repeated argument {flag}").into());
+                    }
+                    let value = args
+                        .next()
+                        .ok_or_else(|| format!("{flag} requires samples"))?
+                        .parse()?;
+                    if index == 0 {
+                        options.pitch.windows.analysis = value;
+                    } else {
+                        options.pitch.windows.synthesis = value;
+                    }
+                    window_given[index] = true;
                 }
                 "--pitch-algorithm" if !algorithm_given => {
                     options.pitch.algorithm =
@@ -355,6 +372,7 @@ impl Options {
                 && (options.seconds.is_some()
                     || pitch_given
                     || algorithm_given
+                    || window_given.iter().any(|given| *given)
                     || formant_given
                     || shift_given
                     || !eq_given.is_empty()
@@ -376,7 +394,7 @@ impl Options {
                     || input_channel_given
                     || output_channels_given))
         {
-            return Err("Choose one CLI mode: --help, --list-devices, --inspect [--device NAME] [--frames N] [--sample-rate HZ], or [--device NAME] [--frames N] [--sample-rate HZ] [--seconds N] [--pitch SEMITONES] [--pitch-algorithm phase-locked|pvsola|pvsola-sync|td-psola|td-psola-resampled|fd-psola] [--formant preserve|off] [--formant-shift SEMITONES] [--eq on|off] [--eq-mode simple|pro] [--eq-bandN HZ,DB,Q] [--eq-output DB] [--auto-level on|off] [--compressor on|off] [--level-target DB] [--level-max-gain DB] [--level-floor DB] [--level-response MS] [--compress-threshold DB] [--compress-ratio N] [--compress-attack MS] [--compress-release MS] [--deesser on|off] [--deesser-mode simple|pro] [--deesser-frequency HZ] [--deesser-threshold DBFS] [--deesser-range DB] [--deesser-attack MS] [--deesser-release MS] [--rumble-filter on|off] [--gate on|off] [--gate-threshold auto|DB] [--gate-attack MS] [--gate-release MS]".into());
+            return Err("Choose one CLI mode: --help, --list-devices, --inspect [--device NAME] [--frames N] [--sample-rate HZ], or [--device NAME] [--frames N] [--sample-rate HZ] [--seconds N] [--pitch SEMITONES] [--analysis-window 1024|2048|4096|8192] [--synthesis-window 256|512|1024|2048] [--pitch-algorithm phase-locked|pvsola|pvsola-sync|td-psola|td-psola-resampled|fd-psola] [--formant preserve|off] [--formant-shift SEMITONES] [--eq on|off] [--eq-mode simple|pro] [--eq-bandN HZ,DB,Q] [--eq-output DB] [--auto-level on|off] [--compressor on|off] [--level-target DB] [--level-max-gain DB] [--level-floor DB] [--level-response MS] [--compress-threshold DB] [--compress-ratio N] [--compress-attack MS] [--compress-release MS] [--deesser on|off] [--deesser-mode simple|pro] [--deesser-frequency HZ] [--deesser-threshold DBFS] [--deesser-range DB] [--deesser-attack MS] [--deesser-release MS] [--rumble-filter on|off] [--gate on|off] [--gate-threshold auto|DB] [--gate-attack MS] [--gate-release MS]".into());
         }
         Ok(options)
     }
@@ -386,6 +404,7 @@ impl Options {
         if !(1..=8192).contains(&self.frames) {
             return Err("--frames must be between 1 and 8192".into());
         }
+        self.pitch.windows.validate()?;
         crate::pitch::pitch_ratio(self.pitch.semitones)?;
         crate::pitch::formant_ratio(self.pitch.formant_shift)?;
         self.pitch

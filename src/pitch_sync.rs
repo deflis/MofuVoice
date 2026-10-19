@@ -9,13 +9,11 @@
 //! No time-stretch/resampling stage, sample-clock drift, or lookahead is added.
 //! Inspired by Moinet & Dutoit, DAFx-2011, "PVSOLA: A Phase Vocoder with
 //! Synchronized Overlap-Add", https://www.dafx.de/paper-archive/2011/Papers/57_e.pdf
-use super::{HOP, WINDOW};
+use super::HOP;
 use crate::dsp::phase::wrap;
 
 const PEAKS: usize = 32;
-const RADIUS: usize = WINDOW / 2;
 const STEP: usize = 2;
-const SCORES: usize = 2 * RADIUS / STEP + 1;
 const INTERVAL: usize = 8;
 const MAX_CORRECTION: f64 = 0.2;
 
@@ -38,15 +36,17 @@ pub(super) struct Frame<'a> {
 }
 
 pub(super) struct Synchronizer {
-    scores: Box<[f64; SCORES]>,
+    scores: Vec<f64>,
+    radius: usize,
     components: [Component; PEAKS],
     until_reset: usize,
 }
 
 impl Synchronizer {
-    pub fn new() -> Self {
+    pub fn new(window: usize) -> Self {
         Self {
-            scores: Box::new([0.0; SCORES]),
+            scores: vec![0.0; window / STEP + 1],
+            radius: window / 2,
             components: [Component::default(); PEAKS],
             until_reset: INTERVAL,
         }
@@ -110,16 +110,16 @@ impl Synchronizer {
         self.scores.fill(0.0);
         for component in components {
             let (mut im, mut re) =
-                (component.difference - component.frequency * RADIUS as f64).sin_cos();
+                (component.difference - component.frequency * self.radius as f64).sin_cos();
             let (step_im, step_re) = (component.frequency * STEP as f64).sin_cos();
             for score in self.scores.iter_mut() {
                 *score += component.weight * re;
                 (re, im) = (re * step_re - im * step_im, im * step_re + re * step_im);
             }
         }
-        let middle = RADIUS / STEP;
+        let middle = self.radius / STEP;
         let mut best = middle;
-        for i in 0..SCORES {
+        for i in 0..self.scores.len() {
             // Prefer the smaller displacement when periodic candidates tie.
             if self.scores[i] > self.scores[best] + 1e-10 * energy
                 || ((self.scores[i] - self.scores[best]).abs() <= 1e-10 * energy
@@ -134,7 +134,7 @@ impl Synchronizer {
         let mut offset = (best as f64 - middle as f64) * STEP as f64;
         // Refine to a fractional sample. Integer-only synchronization modulates
         // high harmonics as the selected displacement crosses a sample boundary.
-        if best > 0 && best + 1 < SCORES {
+        if best > 0 && best + 1 < self.scores.len() {
             let left = self.scores[best - 1];
             let right = self.scores[best + 1];
             let curvature = left - 2.0 * self.scores[best] + right;
@@ -164,7 +164,7 @@ mod tests {
             i as f64 * 0.023 * 13.37 + if i % 2 == 0 { 0.45 } else { -0.45 }
         });
         let original = synthesis;
-        let mut sync = Synchronizer::new();
+        let mut sync = Synchronizer::new(crate::pitch::WINDOW);
         for _ in 0..INTERVAL * 16 {
             sync.synchronize(Frame {
                 peaks: &peaks,
@@ -195,7 +195,7 @@ mod tests {
         for magnitude in [[0.0; 16], [1.0; 16]] {
             let original = [0.7; 16];
             let mut synthesis = original;
-            let mut sync = Synchronizer::new();
+            let mut sync = Synchronizer::new(crate::pitch::WINDOW);
             for _ in 0..INTERVAL * 2 {
                 sync.synchronize(Frame {
                     peaks: &[1, 4, 8],

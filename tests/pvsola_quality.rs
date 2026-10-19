@@ -25,9 +25,15 @@ fn voiced_glides_keep_the_fundamental_phase_continuous() {
         let ratio = pitch_ratio(pitch).unwrap();
         for algorithm in PitchAlgorithm::SPECTRAL {
             let mut output = vec![0.0; input.len()];
-            PitchShifter::new(pitch, false, 0.0, algorithm)
-                .unwrap()
-                .process_block(&input, &mut output);
+            PitchShifter::new(
+                pitch,
+                false,
+                0.0,
+                algorithm,
+                rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+            )
+            .unwrap()
+            .process_block(&input, &mut output);
             let residual: Vec<_> = (8192..input.len() - LATENCY - 1024)
                 .step_by(1024)
                 .map(|start| {
@@ -106,9 +112,15 @@ fn voiced_harmonics_keep_their_relative_phase_shape() {
                     for (algorithm, error) in PitchAlgorithm::SPECTRAL.into_iter().zip(&mut errors)
                     {
                         let mut output = vec![0.0; input.len()];
-                        PitchShifter::new(pitch, preserve, 0.0, algorithm)
-                            .unwrap()
-                            .process_block(&input, &mut output);
+                        PitchShifter::new(
+                            pitch,
+                            preserve,
+                            0.0,
+                            algorithm,
+                            rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+                        )
+                        .unwrap()
+                        .process_block(&input, &mut output);
                         let frames: Vec<_> = output[RATE as usize..]
                             .as_chunks::<8192>()
                             .0
