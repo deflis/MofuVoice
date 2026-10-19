@@ -146,3 +146,33 @@ test("spectral windows validate, save, and clamp synthesis when analysis shrinks
     );
   }
 });
+
+test("PSOLA and vocoder window edits validate and persist independently", async () => {
+  const voice = settingsStore.getState().voice;
+  voice.setAnalysisWindow(8192);
+  voice.setSynthesisWindow(2048);
+  voice.setPsolaAnalysisWindow(1024);
+  voice.setPsolaSynthesisWindow(256);
+  await settingsStore.getState().save();
+  const saved = calls("save_settings")[0].arguments[1].settings.voice;
+  assert.equal(saved.analysisWindow, 8192);
+  assert.equal(saved.synthesisWindow, 2048);
+  assert.equal(saved.psolaAnalysisWindow, 1024);
+  assert.equal(saved.psolaSynthesisWindow, 256);
+  voice.setPsolaAnalysisWindow(8192);
+  voice.setPsolaSynthesisWindow(2048);
+  settingsStore.getState().voice.setPsolaAnalysisWindow(1024);
+  assert.equal(settingsStore.getState().voice.psolaSynthesisWindow, 1024);
+  assert.equal(settingsStore.getState().voice.synthesisWindow, 2048);
+  for (const changes of [
+    { psolaAnalysisWindow: 1536 },
+    { psolaSynthesisWindow: 128 },
+    { psolaAnalysisWindow: 1024, psolaSynthesisWindow: 2048 },
+  ]) {
+    assert.equal(
+      v.safeParse(settingsSchema, { ...settings, voice: { ...settings.voice, ...changes } })
+        .success,
+      false,
+    );
+  }
+});

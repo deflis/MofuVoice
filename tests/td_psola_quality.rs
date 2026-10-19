@@ -10,6 +10,7 @@ fn shifter(pitch: f64) -> PitchShifter {
         0.0,
         PitchAlgorithm::TdPsola,
         rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+        Default::default(),
     )
     .unwrap()
 }
@@ -158,6 +159,7 @@ fn resampled_td_psola_handles_voicing_boundaries_and_flushes_cleanly() {
         2.53,
         PitchAlgorithm::TdPsolaResampled,
         rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+        Default::default(),
     )
     .unwrap();
     let mut output = vec![0.0; input.len()];
@@ -242,27 +244,28 @@ fn td_psola_formant_settings_and_pipeline_latency_are_validated() {
             preserve,
             shift,
             PitchAlgorithm::TdPsola,
-            rust_low_latency_voice_changer::pitch::SpectralWindows::default()
+            rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+            Default::default(),
         )
         .is_err());
     }
     let options =
         Options::parse(["--pitch-algorithm", "td-psola", "--formant-shift", "2"].map(String::from))
             .unwrap();
-    assert_eq!(options.pitch.latency(), 5120);
+    assert_eq!(options.pitch.latency(), 5888);
     assert_eq!(
         rust_low_latency_voice_changer::pitch::PitchSettings {
             formant_shift: 0.0,
             ..options.pitch
         }
         .latency(),
-        4608
+        5376
     );
     assert!(Options::parse(
         ["--pitch-algorithm", "td-psola", "--formant", "off"].map(String::from)
     )
     .is_err());
-    assert_eq!(PitchAlgorithm::TdPsola.latency(), 4608);
+    assert_eq!(PitchAlgorithm::TdPsola.latency(), 5376);
     let resampled = Options::parse(
         [
             "--pitch-algorithm",
@@ -273,7 +276,7 @@ fn td_psola_formant_settings_and_pipeline_latency_are_validated() {
         .map(String::from),
     )
     .unwrap();
-    assert_eq!(resampled.pitch.latency(), 4608);
+    assert_eq!(resampled.pitch.latency(), 5376);
     assert_eq!(PitchAlgorithm::PhaseLocked.latency(), 512);
 }
 
@@ -301,6 +304,7 @@ fn resampled_grains_keep_td_pitch_and_move_vowel_resonance() {
                     shift,
                     PitchAlgorithm::TdPsolaResampled,
                     rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+                    Default::default(),
                 )
                 .unwrap();
                 let mut output = vec![0.0; input.len()];
@@ -343,6 +347,7 @@ fn resampled_grains_are_block_independent_during_pitch_changes() {
             2.53,
             PitchAlgorithm::TdPsolaResampled,
             rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+            Default::default(),
         )
         .unwrap();
         for pitch in [7.0, 0.0, -3.0] {
@@ -408,6 +413,7 @@ fn resampling_moves_unvoiced_resonance_without_changing_duration() {
                 shift,
                 PitchAlgorithm::TdPsolaResampled,
                 rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+                Default::default(),
             )
             .unwrap()
             .process_block(&input, &mut output);
@@ -441,6 +447,7 @@ fn resampled_grains_keep_fixed_delay_and_flush_without_drifting() {
             shift,
             PitchAlgorithm::TdPsolaResampled,
             rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+            Default::default(),
         )
         .unwrap();
         dsp.process_block(&input, &mut output);
@@ -452,8 +459,8 @@ fn resampled_grains_keep_fixed_delay_and_flush_without_drifting() {
             .sum::<f64>()
             / energy;
         eprintln!("formant={shift}: impulse centroid={centroid}");
-        assert!((centroid - (impulse + 4608) as f64).abs() < 2.0);
-        assert!(output[impulse + 4608 + 1024..].iter().all(|&x| x == 0.0));
+        assert!((centroid - (impulse + 5376) as f64).abs() < 2.0);
+        assert!(output[impulse + 5376 + 1024..].iter().all(|&x| x == 0.0));
         for pitch in [-12.0, 12.0, 0.0] {
             dsp.set_semitones(pitch).unwrap();
             let silence = vec![0.0_f32; 48000];
@@ -483,6 +490,7 @@ fn extreme_independent_ratios_remain_finite_across_many_ring_wraps() {
                 shift,
                 PitchAlgorithm::TdPsolaResampled,
                 rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+                Default::default(),
             )
             .unwrap();
             let mut output = vec![0.0; input.len()];

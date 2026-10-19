@@ -34,6 +34,7 @@ fn gate_pitch_and_level_chain_is_independent_of_callback_boundaries() {
                     formant,
                     rust_low_latency_voice_changer::pitch::PitchAlgorithm::PhaseLocked,
                     rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+                    Default::default(),
                 )
                 .unwrap();
                 let mut level = LevelSettings {

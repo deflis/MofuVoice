@@ -39,6 +39,10 @@ fn arguments(options: &Options) -> Vec<String> {
         options.pitch.windows.analysis.to_string(),
         "--synthesis-window".into(),
         options.pitch.windows.synthesis.to_string(),
+        "--psola-analysis-window".into(),
+        options.pitch.psola_windows.analysis.to_string(),
+        "--psola-synthesis-window".into(),
+        options.pitch.psola_windows.synthesis.to_string(),
         "--pitch".into(),
         options.pitch.semitones.to_string(),
         "--pitch-algorithm".into(),
@@ -133,6 +137,8 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
             "sample_rate",
             "pitch",
             "pitch_algorithm",
+            "psola_analysis_window",
+            "psola_synthesis_window",
             "analysis_window",
             "synthesis_window",
             "formant_shift",
@@ -205,6 +211,16 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
         values.get("analysis_window").copied().unwrap_or("2048"),
         "--synthesis-window",
         values.get("synthesis_window").copied().unwrap_or("512"),
+        "--psola-analysis-window",
+        values
+            .get("psola_analysis_window")
+            .copied()
+            .unwrap_or("2048"),
+        "--psola-synthesis-window",
+        values
+            .get("psola_synthesis_window")
+            .copied()
+            .unwrap_or("512"),
         "--pitch",
         value("pitch")?,
         "--pitch-algorithm",
@@ -307,6 +323,8 @@ pub(crate) fn merge(saved: &Options, args: Vec<String>) -> Result<Options, Box<d
             "--sample-rate",
             "--pitch",
             "--pitch-algorithm",
+            "--psola-analysis-window",
+            "--psola-synthesis-window",
             "--analysis-window",
             "--synthesis-window",
             "--formant-shift",
@@ -397,6 +415,10 @@ pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>>
         "analysis_window={}\nsynthesis_window={}\n",
         options.pitch.windows.analysis, options.pitch.windows.synthesis
     ));
+    text.push_str(&format!(
+        "psola_analysis_window={}\npsola_synthesis_window={}\n",
+        options.pitch.psola_windows.analysis, options.pitch.psola_windows.synthesis
+    ));
     text.push_str(&format!("rumble_filter={}\n", options.rumble_filter));
     text.push_str(&format!("deesser={}\n", options.deesser));
     text.push_str(&format!(
@@ -438,6 +460,66 @@ pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>>
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn psola_and_vocoder_windows_persist_and_merge_independently() {
+        let path =
+            std::env::temp_dir().join(format!("independent-windows-{}.ini", std::process::id()));
+        let options = super::Options::parse_gui(
+            [
+                "--analysis-window",
+                "8192",
+                "--synthesis-window",
+                "2048",
+                "--psola-analysis-window",
+                "1024",
+                "--psola-synthesis-window",
+                "256",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        super::save(&path, &options).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(super::decode(&text).unwrap(), options);
+        let merged = super::merge(
+            &options,
+            ["--psola-analysis-window", "4096"]
+                .map(String::from)
+                .to_vec(),
+        )
+        .unwrap();
+        assert_eq!(merged.pitch.windows, options.pitch.windows);
+        assert_eq!(merged.pitch.psola_windows.analysis, 4096);
+        assert_eq!(merged.pitch.psola_windows.synthesis, 256);
+        assert!(super::decode(
+            &text.replace("psola_synthesis_window=256", "psola_synthesis_window=2048")
+        )
+        .is_err());
+        let missing = text
+            .replace("psola_analysis_window=1024\n", "")
+            .replace("psola_synthesis_window=256\n", "");
+        let loaded = super::decode(&missing).unwrap();
+        assert_eq!(loaded.pitch.windows, options.pitch.windows);
+        assert_eq!(loaded.pitch.psola_windows, Default::default());
+        for args in [
+            vec![
+                "--psola-analysis-window",
+                "1024",
+                "--psola-analysis-window",
+                "4096",
+            ],
+            vec![
+                "--psola-analysis-window",
+                "1024",
+                "--psola-synthesis-window",
+                "2048",
+            ],
+        ] {
+            assert!(super::Options::parse_gui(args.into_iter().map(String::from)).is_err());
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
     #[test]
     fn spectral_windows_persist_merge_and_reject_invalid_values() {
         let path =

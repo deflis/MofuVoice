@@ -36,6 +36,7 @@ fn paper_pvsola_time_stretch_then_resampling_moves_pitch() {
         0.0,
         PitchAlgorithm::Pvsola,
         rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+        Default::default(),
     )
     .unwrap();
     let mut position = 0;
@@ -79,6 +80,7 @@ fn formant_preservation_keeps_the_first_resonance_after_pitch_resampling() {
         0.0,
         PitchAlgorithm::Pvsola,
         rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+        Default::default(),
     )
     .unwrap()
     .process_block(&input, &mut output);
@@ -97,6 +99,7 @@ fn paper_pvsola_survives_pitch_transitions_and_reports_its_delay() {
         0.0,
         PitchAlgorithm::Pvsola,
         rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+        Default::default(),
     )
     .unwrap();
     assert_eq!(PitchAlgorithm::Pvsola.latency(), 4608);
@@ -131,6 +134,7 @@ fn neutral_interval_does_not_replay_old_pvsola_audio() {
         0.0,
         PitchAlgorithm::Pvsola,
         rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+        Default::default(),
     )
     .unwrap();
     let mut output = vec![0.0; 24000];
@@ -156,6 +160,7 @@ fn neutral_to_pitched_keeps_live_audio_until_the_delayed_path_is_ready() {
         0.0,
         PitchAlgorithm::Pvsola,
         rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+        Default::default(),
     )
     .unwrap();
     dsp.process_block(&input, &mut output);

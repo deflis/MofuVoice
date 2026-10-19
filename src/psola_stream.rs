@@ -11,22 +11,32 @@
 //! Pitch estimator: de Cheveigne & Kawahara, JASA 2002, doi:10.1121/1.1458024.
 use std::f64::consts::TAU;
 
-pub const LATENCY: usize = crate::psola_common::LATENCY;
+#[cfg(test)]
+const LATENCY: usize = 5376;
 const RING: usize = crate::psola_common::RING;
-const ANALYSIS: usize = crate::psola_common::ANALYSIS;
 const HOP: usize = crate::psola_common::HOP;
 const DECIMATION: usize = crate::psola_common::DECIMATION;
 const TAPS: usize = crate::psola_common::TAPS;
-pub(crate) const LOOKAHEAD: usize = crate::psola_common::LOOKAHEAD;
 const MIN_PERIOD: usize = crate::psola_common::MIN_PERIOD;
 pub(crate) const MAX_PERIOD: usize = crate::psola_common::MAX_PERIOD;
-const FILTERED: usize = ANALYSIS / DECIMATION;
 const MAX_LAG: usize = MAX_PERIOD / DECIMATION;
 const MIN_LAG: usize = MIN_PERIOD / DECIMATION;
 const MARKS: usize = 128;
-// Analysis, both neighbouring epochs, the largest tracked grain support, and
-// one analysis hop must all fit before any output sample is consumed.
-const _: () = assert!(LATENCY >= LOOKAHEAD + 2 * MAX_PERIOD + 6 * MAX_PERIOD / 5 + HOP + 2);
+// Worst-case output-period support (minimum pitch ratio 0.5), plus tracking,
+// frame scheduling, and fractional resampling. Round up to an analysis hop.
+pub(crate) fn latency(windows: crate::pitch::SpectralWindows) -> usize {
+    let left =
+        (2.0 * MAX_PERIOD as f64 * crate::psola_common::flank_scales(windows).0).ceil() as usize;
+    (windows.analysis / 2
+        + MAX_PERIOD / 2
+        + TAPS / 2
+        + 2 * MAX_PERIOD
+        + left.max(windows.synthesis / 2)
+        + HOP
+        + 66)
+        .div_ceil(HOP)
+        * HOP
+}
 
 #[derive(Clone, Copy, Default)]
 struct Mark {
@@ -36,6 +46,8 @@ struct Mark {
 }
 
 pub(crate) struct PsolaStream {
+    latency: usize,
+    lookahead: usize,
     input: Box<[f64; RING]>,
     output: Box<[f64; RING]>,
     weights: Box<[f64; RING]>,
@@ -43,8 +55,8 @@ pub(crate) struct PsolaStream {
     preserve_formants: bool,
     coverage: Box<[bool; RING]>,
     voicing: Box<[f64; RING]>,
-    filtered: Box<[f64; FILTERED]>,
-    analysis: Box<[f64; FILTERED]>,
+    filtered: Vec<f64>,
+    analysis: Vec<f64>,
     difference: [f64; MAX_LAG + 2],
     taps: [f64; TAPS],
     marks: [Mark; MARKS],
@@ -64,18 +76,21 @@ pub(crate) struct PsolaStream {
 impl PsolaStream {
     #[cfg(test)]
     fn new(formant_ratio: f64) -> Self {
-        Self::with_synthesis(Box::new(crate::td_synthesis::TdSynthesis::new(
-            formant_ratio,
-        )))
+        let windows = crate::pitch::SpectralWindows::default();
+        Self::with_synthesis(
+            Box::new(crate::td_synthesis::TdSynthesis::new(
+                formant_ratio,
+                windows,
+            )),
+            windows,
+        )
     }
 
     pub(crate) fn with_synthesis(
         synthesis: Box<dyn crate::psola_synthesis::PsolaSynthesis>,
+        windows: crate::pitch::SpectralWindows,
     ) -> Self {
-        Self::new_inner(synthesis)
-    }
-
-    fn new_inner(synthesis: Box<dyn crate::psola_synthesis::PsolaSynthesis>) -> Self {
+        windows.validate().expect("invalid PSOLA windows");
         let mut taps = std::array::from_fn(|i| {
             let distance = i as f64 - (TAPS / 2) as f64;
             let sinc = if distance == 0.0 {
@@ -90,15 +105,17 @@ impl PsolaStream {
             *tap /= sum;
         }
         Self {
-            input: Box::new([0.0; RING]),
-            output: Box::new([0.0; RING]),
-            weights: Box::new([0.0; RING]),
+            latency: latency(windows),
+            lookahead: windows.analysis / 2 + MAX_PERIOD / 2 + TAPS / 2,
+            input: crate::psola_common::ring(0.0),
+            output: crate::psola_common::ring(0.0),
+            weights: crate::psola_common::ring(0.0),
             synthesis,
             preserve_formants: true,
-            coverage: Box::new([false; RING]),
-            voicing: Box::new([0.0; RING]),
-            filtered: Box::new([0.0; FILTERED]),
-            analysis: Box::new([0.0; FILTERED]),
+            coverage: crate::psola_common::ring(false),
+            voicing: crate::psola_common::ring(0.0),
+            filtered: vec![0.0; windows.analysis / DECIMATION + MAX_LAG + 1],
+            analysis: vec![0.0; windows.analysis / DECIMATION + MAX_LAG + 1],
             difference: [0.0; MAX_LAG + 2],
             taps,
             marks: [Mark::default(); MARKS],
@@ -132,10 +149,11 @@ impl PsolaStream {
                     filtered += tap * self.input[(now - i) % RING];
                 }
             }
-            self.filtered[(now / DECIMATION) % FILTERED] = filtered;
+            let filtered_index = (now / DECIMATION) % self.filtered.len();
+            self.filtered[filtered_index] = filtered;
         }
         let index = now % RING;
-        let wet = if let Some(source) = now.checked_sub(LATENCY) {
+        let wet = if let Some(source) = now.checked_sub(self.latency) {
             let dry = self
                 .synthesis
                 .unvoiced_sample(index)
@@ -157,20 +175,20 @@ impl PsolaStream {
         self.synthesis.clear_output_slot(index);
         self.coverage[index] = false;
         self.clock += 1;
-        if self.clock.is_multiple_of(HOP) && self.clock > LOOKAHEAD {
+        if self.clock.is_multiple_of(HOP) && self.clock > self.lookahead {
             self.frame(ratio);
         }
         wet
     }
 
     fn detect_period(&mut self) -> Option<f64> {
-        let start = (self.clock / DECIMATION) % FILTERED;
-        for i in 0..FILTERED {
-            self.analysis[i] = self.filtered[(start + i) % FILTERED];
+        let start = (self.clock / DECIMATION) % self.filtered.len();
+        for i in 0..self.filtered.len() {
+            self.analysis[i] = self.filtered[(start + i) % self.filtered.len()];
         }
-        let length = FILTERED - MAX_LAG - 1;
+        let length = self.filtered.len() - MAX_LAG - 1;
         let energy: f64 = self.analysis.iter().map(|x| x * x).sum();
-        if energy / (FILTERED as f64) < 1e-10 {
+        if energy / (self.filtered.len() as f64) < 1e-10 {
             return None;
         }
         let mut cumulative = 0.0;
@@ -223,7 +241,7 @@ impl PsolaStream {
     }
 
     fn frame(&mut self, ratio: f64) {
-        let center = self.clock - LOOKAHEAD;
+        let center = self.clock - self.lookahead;
         let detected = self.detect_period();
         for source in self.analyzed..center {
             let target = f64::from(detected.is_some());
@@ -235,7 +253,8 @@ impl PsolaStream {
                 self.segment += 1;
                 self.period = period;
                 let start = self.analyzed;
-                let end = (start + period.ceil() as usize).min(self.clock - MAX_PERIOD);
+                let end = (start + period.ceil() as usize)
+                    .min(self.clock.saturating_sub(MAX_PERIOD).max(start));
                 let peak = (start..=end)
                     .max_by(|&a, &b| {
                         self.input[a % RING]
@@ -301,7 +320,7 @@ impl PsolaStream {
             self.next_analysis = None;
         }
         self.analyzed = center;
-        while self.count > 3 && self.mark(1).position + (LATENCY as f64) < center as f64 {
+        while self.count > 3 && self.mark(1).position + (self.latency as f64) < center as f64 {
             self.first = (self.first + 1) % MARKS;
             self.count -= 1;
         }
@@ -310,7 +329,7 @@ impl PsolaStream {
         // Do not advance the synthesis clock just because that neighbour is pending.
         let safe = center.saturating_sub(2 * MAX_PERIOD) as f64;
         self.synthesis
-            .update_unvoiced(self.clock, LATENCY, &self.input[..]);
+            .update_unvoiced(self.clock, self.latency, &self.input[..]);
         while self.next_synthesis <= safe {
             let nearest = (0..self.count).min_by(|&a, &b| {
                 (self.mark(a).position - self.next_synthesis)
@@ -334,7 +353,7 @@ impl PsolaStream {
                     );
                     self.grain(
                         mark.position,
-                        self.next_synthesis + LATENCY as f64,
+                        self.next_synthesis + self.latency as f64,
                         timing.left,
                         timing.right,
                         timing.period / ((timing.left + timing.right) * 0.5),

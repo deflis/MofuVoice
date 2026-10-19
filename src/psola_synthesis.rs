@@ -47,18 +47,27 @@ mod tests {
     #[test]
     fn stable_and_changing_pitch_marks_keep_nonzero_grain_support() {
         for formant in [0.5, 1.0, 2.0] {
-            let td = crate::td_synthesis::TdSynthesis::new(formant);
+            let td = crate::td_synthesis::TdSynthesis::new(
+                formant,
+                crate::pitch::SpectralWindows::default(),
+            );
             for pitch in [0.5, 1.0, 2.0] {
                 let timing = td.grain_timing(400.0, 400.0, 400.0, pitch, 0.0);
                 assert_eq!(timing.period, 400.0 / pitch);
-                assert_eq!(timing.left, (400.0 / formant).min(timing.period));
-                assert_eq!(timing.right, timing.left);
+                assert_eq!(
+                    timing.left,
+                    (4.0 / 3.0) * (400.0 / formant).min(timing.period)
+                );
+                assert_eq!(timing.right * 2.0, timing.left);
                 let changing = td.grain_timing(390.0, 400.0, 410.0, pitch, 180.0);
-                assert_eq!(changing.left, (390.0 / formant).min(180.0));
-                assert_eq!(changing.right, (410.0 / formant).min(changing.period));
+                assert_eq!(changing.left, (4.0 / 3.0) * (390.0 / formant).min(180.0));
+                assert_eq!(
+                    changing.right,
+                    (2.0 / 3.0) * (410.0 / formant).min(changing.period)
+                );
             }
         }
-        let fd = crate::fd_psola::FdSynthesis::new();
+        let fd = crate::fd_psola::FdSynthesis::new(crate::pitch::SpectralWindows::default());
         let timing = fd.grain_timing(400.0, 400.0, 400.0, 1.5, 0.0);
         assert_eq!(timing.period, 400.0 / 1.5);
         assert_eq!(timing.left, timing.period);

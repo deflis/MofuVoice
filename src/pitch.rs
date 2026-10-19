@@ -51,7 +51,9 @@ impl PitchAlgorithm {
     pub fn latency(self) -> usize {
         match self {
             Self::Pvsola => crate::pvsola::LATENCY,
-            Self::TdPsola | Self::TdPsolaResampled | Self::FdPsola => crate::psola_stream::LATENCY,
+            Self::TdPsola | Self::TdPsolaResampled | Self::FdPsola => {
+                crate::psola_stream::latency(SpectralWindows::default())
+            }
             _ => LATENCY,
         }
     }
@@ -127,7 +129,9 @@ pub fn pitch_ratio(semitones: f64) -> Result<f64, InvalidPitch> {
 /// Pitch and independent formant settings, in semitones.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PitchSettings {
+    /// Windows for vocoder pitch conversion and the optional formant stage.
     pub windows: SpectralWindows,
+    pub psola_windows: SpectralWindows,
     pub algorithm: PitchAlgorithm,
     pub semitones: f64,
     pub preserve_formants: bool,
@@ -139,6 +143,7 @@ impl Default for PitchSettings {
         Self {
             algorithm: PitchAlgorithm::PhaseLocked,
             windows: SpectralWindows::default(),
+            psola_windows: SpectralWindows::default(),
             semitones: 0.0,
             preserve_formants: true,
             formant_shift: 0.0,
@@ -152,8 +157,14 @@ impl PitchSettings {
         match (self.algorithm, self.formant_shift != 0.0) {
             (PitchAlgorithm::PhaseLocked | PitchAlgorithm::PvsolaSync, _) => self.windows.synthesis,
             (PitchAlgorithm::TdPsola | PitchAlgorithm::FdPsola, true) => {
-                crate::psola_stream::LATENCY + 512
+                crate::psola_stream::latency(self.psola_windows) + self.windows.synthesis
             }
+            (
+                PitchAlgorithm::TdPsola
+                | PitchAlgorithm::TdPsolaResampled
+                | PitchAlgorithm::FdPsola,
+                _,
+            ) => crate::psola_stream::latency(self.psola_windows),
             _ => self.algorithm.latency(),
         }
     }
@@ -165,11 +176,13 @@ impl PitchSettings {
             self.formant_shift,
             self.algorithm,
             self.windows,
+            self.psola_windows,
         )
     }
 }
 
-/// Sample counts for direct spectral processing, configured before streaming.
+/// Analysis and synthesis sizes configured before streaming. PSOLA adapts grain
+/// support to the tracked pitch period; PVSOLA retains its fixed frame sizes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SpectralWindows {
     pub analysis: usize,
@@ -203,7 +216,7 @@ pub const LATENCY: usize = SYNTHESIS;
 const BINS: usize = WINDOW / 2 + 1;
 const CEPSTRUM: usize = 80;
 
-fn asymmetric_windows(windows: SpectralWindows) -> (Vec<f64>, Vec<f64>, f64) {
+pub(crate) fn asymmetric_windows(windows: SpectralWindows) -> (Vec<f64>, Vec<f64>, f64) {
     let window = windows.analysis;
     let synthesis_size = windows.synthesis;
     let m = synthesis_size / 2;
@@ -694,13 +707,10 @@ impl PitchShifter {
         formant_shift: f64,
         algorithm: PitchAlgorithm,
         windows: SpectralWindows,
+        psola_windows: SpectralWindows,
     ) -> Result<Self, Box<dyn Error>> {
         windows.validate()?;
-        let windows = if PitchAlgorithm::SPECTRAL.contains(&algorithm) {
-            windows
-        } else {
-            SpectralWindows::default()
-        };
+        psola_windows.validate()?;
         let window = windows.analysis;
         let synthesis = windows.synthesis;
         let bins = window / 2 + 1;
@@ -730,15 +740,21 @@ impl PitchShifter {
                 .then(|| crate::dsp::fft::Fft::new(window)),
             psola: match algorithm {
                 PitchAlgorithm::TdPsola => Some(crate::psola_stream::PsolaStream::with_synthesis(
-                    Box::new(crate::td_synthesis::TdSynthesis::new(1.0)),
+                    Box::new(crate::td_synthesis::TdSynthesis::new(1.0, psola_windows)),
+                    psola_windows,
                 )),
                 PitchAlgorithm::TdPsolaResampled => {
-                    Some(crate::psola_stream::PsolaStream::with_synthesis(Box::new(
-                        crate::td_synthesis::TdSynthesis::new(formant_ratio),
-                    )))
+                    Some(crate::psola_stream::PsolaStream::with_synthesis(
+                        Box::new(crate::td_synthesis::TdSynthesis::new(
+                            formant_ratio,
+                            psola_windows,
+                        )),
+                        psola_windows,
+                    ))
                 }
                 PitchAlgorithm::FdPsola => Some(crate::psola_stream::PsolaStream::with_synthesis(
-                    Box::new(crate::fd_psola::FdSynthesis::new()),
+                    Box::new(crate::fd_psola::FdSynthesis::new(psola_windows)),
+                    psola_windows,
                 )),
                 _ => None,
             },
@@ -1539,6 +1555,7 @@ mod tests {
                         *formant,
                         algorithm,
                         crate::pitch::SpectralWindows::default(),
+                        Default::default(),
                     )
                     .unwrap();
                     let mut portable = PitchShifter::new(
@@ -1547,6 +1564,7 @@ mod tests {
                         *formant,
                         algorithm,
                         crate::pitch::SpectralWindows::default(),
+                        Default::default(),
                     )
                     .unwrap();
                     portable.fft.avx2 = false;
@@ -1603,6 +1621,7 @@ mod tests {
                         *formant,
                         algorithm,
                         crate::pitch::SpectralWindows::default(),
+                        Default::default(),
                     )
                     .unwrap();
                     let mut eager = PitchShifter::new(
@@ -1611,6 +1630,7 @@ mod tests {
                         *formant,
                         algorithm,
                         crate::pitch::SpectralWindows::default(),
+                        Default::default(),
                     )
                     .unwrap();
                     eager.eager_phase = true;
@@ -1680,6 +1700,7 @@ mod tests {
                         *formant,
                         algorithm,
                         crate::pitch::SpectralWindows::default(),
+                        Default::default(),
                     )
                     .unwrap();
                     // Silence exercises the spectrum with no detected peaks.
@@ -1853,7 +1874,9 @@ mod tests {
                     assert!((a[i] * b[i] - expected).abs() < 1e-12);
                 }
                 for algorithm in PitchAlgorithm::SPECTRAL {
-                    let mut dsp = PitchShifter::new(0.0, false, 0.0, algorithm, windows).unwrap();
+                    let mut dsp =
+                        PitchShifter::new(0.0, false, 0.0, algorithm, windows, Default::default())
+                            .unwrap();
                     dsp.wet = 1.0;
                     dsp.target_wet = 1.0;
                     let input: Vec<f32> = (0..24000)
@@ -1887,6 +1910,7 @@ mod tests {
             0.0,
             PitchAlgorithm::PhaseLocked,
             crate::pitch::SpectralWindows::default(),
+            Default::default(),
         )
         .unwrap();
         // Exercise the transform, rather than the public neutral bypass.

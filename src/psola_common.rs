@@ -1,14 +1,25 @@
 //! Shared timing limits for pitch-synchronous overlap-add implementations.
 
-pub(crate) const LATENCY: usize = 4608;
-pub(crate) const RING: usize = 16384;
+pub(crate) const RING: usize = 32768;
 pub(crate) const HOP: usize = 128;
-pub(crate) const ANALYSIS: usize = 3072;
 pub(crate) const DECIMATION: usize = 4;
 pub(crate) const TAPS: usize = 33;
-pub(crate) const LOOKAHEAD: usize = ANALYSIS / 2 + TAPS / 2;
 pub(crate) const MIN_PERIOD: usize = 80;
 pub(crate) const MAX_PERIOD: usize = 800;
+
+pub(crate) fn flank_scales(windows: crate::pitch::SpectralWindows) -> (f64, f64) {
+    let ratio = (windows.analysis as f64 / windows.synthesis as f64).sqrt();
+    // Skew support without lengthening the grain and changing its spectral resolution.
+    (2.0 * ratio / (1.0 + ratio), 2.0 / (1.0 + ratio))
+}
+
+pub(crate) fn ring<T: Clone>(value: T) -> Box<[T; RING]> {
+    vec![value; RING]
+        .into_boxed_slice()
+        .try_into()
+        .ok()
+        .expect("PSOLA ring size must match its allocation")
+}
 
 pub(crate) fn interpolate(input: &[f64], position: f64) -> f64 {
     if position < 1.0 {

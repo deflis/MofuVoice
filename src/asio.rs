@@ -836,6 +836,7 @@ mod tests {
             0.0,
             crate::pitch::PitchAlgorithm::PhaseLocked,
             crate::pitch::SpectralWindows::default(),
+            Default::default(),
         )
         .unwrap();
         state.dsp.get_mut().gate = GateSettings {
@@ -877,6 +878,7 @@ mod tests {
             0.0,
             crate::pitch::PitchAlgorithm::PhaseLocked,
             crate::pitch::SpectralWindows::default(),
+            Default::default(),
         )
         .unwrap();
         for _ in 0..1024 {

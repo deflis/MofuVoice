@@ -71,7 +71,7 @@ impl Options {
         let mut rate_given = false;
         let mut pitch_given = false;
         let mut algorithm_given = false;
-        let mut window_given = [false; 2];
+        let mut window_given = [false; 4];
         let mut formant_given = false;
         let mut shift_given = false;
         let mut eq_given = std::collections::HashSet::new();
@@ -136,8 +136,13 @@ impl Options {
                     };
                     formant_given = true;
                 }
-                flag @ ("--analysis-window" | "--synthesis-window") => {
-                    let index = usize::from(flag == "--synthesis-window");
+                flag @ ("--analysis-window"
+                | "--synthesis-window"
+                | "--psola-analysis-window"
+                | "--psola-synthesis-window") => {
+                    let psola = flag.starts_with("--psola-");
+                    let synthesis = flag.ends_with("synthesis-window");
+                    let index = 2 * usize::from(psola) + usize::from(synthesis);
                     if window_given[index] {
                         return Err(format!("Repeated argument {flag}").into());
                     }
@@ -145,10 +150,15 @@ impl Options {
                         .next()
                         .ok_or_else(|| format!("{flag} requires samples"))?
                         .parse()?;
-                    if index == 0 {
-                        options.pitch.windows.analysis = value;
+                    let windows = if psola {
+                        &mut options.pitch.psola_windows
                     } else {
-                        options.pitch.windows.synthesis = value;
+                        &mut options.pitch.windows
+                    };
+                    if synthesis {
+                        windows.synthesis = value;
+                    } else {
+                        windows.analysis = value;
                     }
                     window_given[index] = true;
                 }
@@ -394,7 +404,7 @@ impl Options {
                     || input_channel_given
                     || output_channels_given))
         {
-            return Err("Choose one CLI mode: --help, --list-devices, --inspect [--device NAME] [--frames N] [--sample-rate HZ], or [--device NAME] [--frames N] [--sample-rate HZ] [--seconds N] [--pitch SEMITONES] [--analysis-window 1024|2048|4096|8192] [--synthesis-window 256|512|1024|2048] [--pitch-algorithm phase-locked|pvsola|pvsola-sync|td-psola|td-psola-resampled|fd-psola] [--formant preserve|off] [--formant-shift SEMITONES] [--eq on|off] [--eq-mode simple|pro] [--eq-bandN HZ,DB,Q] [--eq-output DB] [--auto-level on|off] [--compressor on|off] [--level-target DB] [--level-max-gain DB] [--level-floor DB] [--level-response MS] [--compress-threshold DB] [--compress-ratio N] [--compress-attack MS] [--compress-release MS] [--deesser on|off] [--deesser-mode simple|pro] [--deesser-frequency HZ] [--deesser-threshold DBFS] [--deesser-range DB] [--deesser-attack MS] [--deesser-release MS] [--rumble-filter on|off] [--gate on|off] [--gate-threshold auto|DB] [--gate-attack MS] [--gate-release MS]".into());
+            return Err("Choose one CLI mode: --help, --list-devices, --inspect [--device NAME] [--frames N] [--sample-rate HZ], or [--device NAME] [--frames N] [--sample-rate HZ] [--seconds N] [--pitch SEMITONES] [--analysis-window 1024|2048|4096|8192] [--synthesis-window 256|512|1024|2048] [--psola-analysis-window 1024|2048|4096|8192] [--psola-synthesis-window 256|512|1024|2048] [--pitch-algorithm phase-locked|pvsola|pvsola-sync|td-psola|td-psola-resampled|fd-psola] [--formant preserve|off] [--formant-shift SEMITONES] [--eq on|off] [--eq-mode simple|pro] [--eq-bandN HZ,DB,Q] [--eq-output DB] [--auto-level on|off] [--compressor on|off] [--level-target DB] [--level-max-gain DB] [--level-floor DB] [--level-response MS] [--compress-threshold DB] [--compress-ratio N] [--compress-attack MS] [--compress-release MS] [--deesser on|off] [--deesser-mode simple|pro] [--deesser-frequency HZ] [--deesser-threshold DBFS] [--deesser-range DB] [--deesser-attack MS] [--deesser-release MS] [--rumble-filter on|off] [--gate on|off] [--gate-threshold auto|DB] [--gate-attack MS] [--gate-release MS]".into());
         }
         Ok(options)
     }
@@ -405,6 +415,7 @@ impl Options {
             return Err("--frames must be between 1 and 8192".into());
         }
         self.pitch.windows.validate()?;
+        self.pitch.psola_windows.validate()?;
         crate::pitch::pitch_ratio(self.pitch.semitones)?;
         crate::pitch::formant_ratio(self.pitch.formant_shift)?;
         self.pitch

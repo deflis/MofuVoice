@@ -6,17 +6,10 @@ mod resampler;
 use crate::{psola_common, psola_synthesis::PsolaSynthesis};
 
 const UNVOICED_RADIUS: usize = 256;
-const _: () = assert!(
-    psola_common::LATENCY
-        >= psola_common::LOOKAHEAD
-            + 2 * psola_common::MAX_PERIOD
-            + 6 * psola_common::MAX_PERIOD / 5
-            + psola_common::HOP
-            + resampler::RADIUS
-            + 2
-);
 
 pub(crate) struct TdSynthesis {
+    left_scale: f64,
+    right_scale: f64,
     formant_ratio: f64,
     resampler: Option<resampler::Resampler>,
     unvoiced: Option<Box<[f64; psola_common::RING]>>,
@@ -25,12 +18,15 @@ pub(crate) struct TdSynthesis {
 }
 
 impl TdSynthesis {
-    pub(crate) fn new(formant_ratio: f64) -> Self {
+    pub(crate) fn new(formant_ratio: f64, windows: crate::pitch::SpectralWindows) -> Self {
+        windows.validate().expect("invalid TD-PSOLA windows");
         Self {
+            left_scale: psola_common::flank_scales(windows).0,
+            right_scale: psola_common::flank_scales(windows).1,
             formant_ratio,
             resampler: (formant_ratio != 1.0).then(|| resampler::Resampler::new(formant_ratio)),
-            unvoiced: (formant_ratio != 1.0).then(|| Box::new([0.0; psola_common::RING])),
-            unvoiced_weight: (formant_ratio != 1.0).then(|| Box::new([0.0; psola_common::RING])),
+            unvoiced: (formant_ratio != 1.0).then(|| psola_common::ring(0.0)),
+            unvoiced_weight: (formant_ratio != 1.0).then(|| psola_common::ring(0.0)),
             next_unvoiced: 0,
         }
     }
@@ -86,8 +82,8 @@ impl PsolaSynthesis for TdSynthesis {
         let right = (right_source_span / self.formant_ratio).min(period);
         crate::psola_synthesis::GrainTiming {
             period,
-            left,
-            right,
+            left: left * self.left_scale,
+            right: right * self.right_scale,
         }
     }
 

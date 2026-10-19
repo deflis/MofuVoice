@@ -15,6 +15,8 @@ export const settings = {
   },
   voice: {
     pitchAlgorithm: "phase-locked",
+    psolaAnalysisWindow: 2048,
+    psolaSynthesisWindow: 512,
     analysisWindow: 2048,
     synthesisWindow: 512,
     pitch: 0,

@@ -85,6 +85,7 @@ fn callback_does_not_allocate_including_first_frames_and_transitions() {
                 shift,
                 algorithm,
                 rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+                Default::default(),
             )
             .unwrap();
             let mut level = rust_low_latency_voice_changer::level::LevelSettings {
@@ -123,7 +124,7 @@ fn configured_windows_do_not_allocate_in_callbacks_or_pitch_transitions() {
             if synthesis > analysis {
                 continue;
             }
-            for algorithm in PitchAlgorithm::SPECTRAL {
+            for algorithm in PitchAlgorithm::ALL {
                 let mut dsp = PitchShifter::new(
                     7.0,
                     true,
@@ -133,9 +134,15 @@ fn configured_windows_do_not_allocate_in_callbacks_or_pitch_transitions() {
                         analysis,
                         synthesis,
                     },
+                    SpectralWindows {
+                        analysis,
+                        synthesis,
+                    },
                 )
                 .unwrap();
-                let input = [0.1_f32; 511];
+                let input = std::array::from_fn::<_, 511, _>(|i| {
+                    (0.1 * (std::f64::consts::TAU * i as f64 / 511.0).cos()) as f32
+                });
                 let mut output = [0.0; 511];
                 ALLOCATIONS.with(|n| n.set(0));
                 ENABLED.with(|enabled| enabled.set(true));
