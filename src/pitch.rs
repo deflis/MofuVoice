@@ -186,10 +186,10 @@ impl Default for SpectralWindows {
 impl SpectralWindows {
     pub fn validate(self) -> Result<(), &'static str> {
         if ![1024, 2048, 4096, 8192].contains(&self.analysis) {
-            return Err("解析窓は1024、2048、4096、8192サンプルから選んでください");
+            return Err("解析ウィンドウ長は1024、2048、4096、8192サンプルから選んでください");
         }
         if ![256, 512, 1024, 2048].contains(&self.synthesis) || self.synthesis > self.analysis {
-            return Err("合成窓は256、512、1024、2048サンプルから選び、解析窓以下にしてください");
+            return Err("合成ウィンドウ長は256、512、1024、2048サンプルから選び、解析ウィンドウ長以下にしてください");
         }
         Ok(())
     }

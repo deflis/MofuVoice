@@ -18,7 +18,7 @@ export const settingsSchema = v.pipe(
   }),
   v.check(
     (settings) => settings.voice.synthesisWindow <= settings.voice.analysisWindow,
-    "合成窓は解析窓以下にしてください。",
+    "合成ウィンドウ長は解析ウィンドウ長以下にしてください。",
   ),
   v.check(
     (settings) => settings.voice.preserveFormants || settings.voice.formantShift === 0,

@@ -46,7 +46,7 @@ export function VoiceSettings() {
       <DetailsPopup title="声の変換" buttonLabel="詳細設定">
         <fieldset className="settings" disabled={!spectral}>
           <label>
-            解析窓
+            解析ウィンドウ長
             <select
               value={analysisWindow}
               onChange={(event) =>
@@ -63,7 +63,7 @@ export function VoiceSettings() {
             </select>
           </label>
           <label>
-            合成窓
+            合成ウィンドウ長
             <select
               value={synthesisWindow}
               onChange={(event) =>
@@ -82,7 +82,7 @@ export function VoiceSettings() {
             </select>
           </label>
           <p>
-            解析窓を長くすると周波数を細かく分析できます。合成窓を短くすると遅延を減らせます。音質は声や設定によって変わるため、聞き比べて調整してください。
+            解析ウィンドウ長を長くすると周波数を細かく分析できます。合成ウィンドウ長を短くすると遅延を減らせます。音質は声や設定によって変わるため、聞き比べて調整してください。
           </p>
           <p>
             変換時のDSP遅延：{((synthesisWindow / sampleRate) * 1000).toFixed(1)}{" "}
@@ -95,7 +95,7 @@ export function VoiceSettings() {
               setSynthesisWindow(512);
             }}
           >
-            ウィンドウを標準に戻す
+            ウィンドウ長を標準に戻す
           </button>
         </fieldset>
         <p>
@@ -155,7 +155,7 @@ function algorithmDescription(algorithm: string): string {
     case "pvsola":
       return "PVSOLA論文方式は位相ボコーダーで時間伸縮し、相互相関で整列した入力フレームを周期的に挿入してから再生速度を変えます。DSP遅延は48 kHzで約96 msです。響きの保持と独立調整に対応します。";
     case "pvsola-sync":
-      return "スペクトル位相同期は既存の直接スペクトル変換方式です。主要な周波数成分の相関を使って位相を補正します。DSP遅延は詳細設定の合成窓で変わります。";
+      return "スペクトル位相同期は既存の直接スペクトル変換方式です。主要な周波数成分の相関を使って位相を補正します。DSP遅延は詳細設定の合成ウィンドウ長で変わります。";
     case "fd-psola":
       return "FD-PSOLAはピッチ同期フレームのスペクトルを変換します。フォルマント保持を有効にすると響きの包絡を維持します。DSP遅延は48 kHzで96 ms、響きの移動時に約106.7 msです。";
     default:
