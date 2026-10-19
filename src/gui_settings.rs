@@ -202,9 +202,9 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
         "--frames",
         value("frames")?,
         "--analysis-window",
-        value("analysis_window")?,
+        values.get("analysis_window").copied().unwrap_or("2048"),
         "--synthesis-window",
-        value("synthesis_window")?,
+        values.get("synthesis_window").copied().unwrap_or("512"),
         "--pitch",
         value("pitch")?,
         "--pitch-algorithm",
@@ -439,7 +439,7 @@ pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>>
 #[cfg(test)]
 mod tests {
     #[test]
-    fn spectral_windows_persist_merge_and_reject_invalid_or_missing_values() {
+    fn spectral_windows_persist_merge_and_reject_invalid_values() {
         let path =
             std::env::temp_dir().join(format!("spectral-windows-{}.ini", std::process::id()));
         let options = super::Options::parse_gui(
@@ -459,9 +459,64 @@ mod tests {
         for invalid in [
             text.replace("analysis_window=4096", "analysis_window=1234"),
             text.replace("synthesis_window=1024", "synthesis_window=128"),
-            text.replace("analysis_window=4096\n", ""),
+            text.replace("analysis_window=4096", "analysis_window="),
+            text.replace("synthesis_window=1024", "synthesis_window="),
+            text.replace("analysis_window=4096", "analysis_window=1024")
+                .replace("synthesis_window=1024", "synthesis_window=2048"),
         ] {
             assert!(super::decode(&invalid).is_err());
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn missing_spectral_windows_load_defaults_and_are_written_on_save() {
+        let path = std::env::temp_dir().join(format!(
+            "legacy-spectral-windows-{}.ini",
+            std::process::id()
+        ));
+        let options = super::Options::parse_gui(
+            [
+                "--analysis-window",
+                "4096",
+                "--synthesis-window",
+                "1024",
+                "--pitch",
+                "3",
+                "--formant-shift",
+                "2",
+                "--sample-rate",
+                "44100",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        super::save(&path, &options).unwrap();
+        let original = std::fs::read_to_string(&path).unwrap();
+        for (missing_analysis, missing_synthesis) in [(true, true), (true, false), (false, true)] {
+            let mut text = original.clone();
+            let mut expected = super::Options::parse_gui(super::arguments(&options)).unwrap();
+            if missing_analysis {
+                text = text.replace("analysis_window=4096\n", "");
+                expected.pitch.windows.analysis = 2048;
+            }
+            if missing_synthesis {
+                text = text.replace("synthesis_window=1024\n", "");
+                expected.pitch.windows.synthesis = 512;
+            }
+            std::fs::write(&path, text).unwrap();
+            let loaded = super::load(&path).unwrap();
+            assert_eq!(loaded, expected);
+            super::save(&path, &loaded).unwrap();
+            let saved = std::fs::read_to_string(&path).unwrap();
+            assert!(saved.contains(&format!(
+                "analysis_window={}\n",
+                expected.pitch.windows.analysis
+            )));
+            assert!(saved.contains(&format!(
+                "synthesis_window={}\n",
+                expected.pitch.windows.synthesis
+            )));
+            assert_eq!(super::load(&path).unwrap(), expected);
         }
         std::fs::remove_file(path).unwrap();
     }
