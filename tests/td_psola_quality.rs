@@ -4,7 +4,14 @@ use rust_low_latency_voice_changer::{
 };
 
 fn shifter(pitch: f64) -> PitchShifter {
-    PitchShifter::new(pitch, true, 0.0, PitchAlgorithm::TdPsola).unwrap()
+    PitchShifter::new(
+        pitch,
+        true,
+        0.0,
+        PitchAlgorithm::TdPsola,
+        rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+    )
+    .unwrap()
 }
 
 #[test]
@@ -145,7 +152,14 @@ fn resampled_td_psola_handles_voicing_boundaries_and_flushes_cleanly() {
             }
         })
         .collect();
-    let mut dsp = PitchShifter::new(7.0, true, 2.53, PitchAlgorithm::TdPsolaResampled).unwrap();
+    let mut dsp = PitchShifter::new(
+        7.0,
+        true,
+        2.53,
+        PitchAlgorithm::TdPsolaResampled,
+        rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+    )
+    .unwrap();
     let mut output = vec![0.0; input.len()];
     for pitch in [7.0, -12.0, 12.0] {
         dsp.set_semitones(pitch).unwrap();
@@ -223,7 +237,14 @@ fn td_psola_is_block_independent_and_preserves_neutral_sample_bits() {
 fn td_psola_formant_settings_and_pipeline_latency_are_validated() {
     use rust_low_latency_voice_changer::cli::Options;
     for (preserve, shift) in [(false, 0.0), (false, 3.0), (false, -3.0)] {
-        assert!(PitchShifter::new(7.0, preserve, shift, PitchAlgorithm::TdPsola).is_err());
+        assert!(PitchShifter::new(
+            7.0,
+            preserve,
+            shift,
+            PitchAlgorithm::TdPsola,
+            rust_low_latency_voice_changer::pitch::SpectralWindows::default()
+        )
+        .is_err());
     }
     let options =
         Options::parse(["--pitch-algorithm", "td-psola", "--formant-shift", "2"].map(String::from))
@@ -274,9 +295,14 @@ fn resampled_grains_keep_td_pitch_and_move_vowel_resonance() {
             .collect();
         for pitch in [-3.0, 7.0, 12.0] {
             for shift in [-4.0, 2.53, 6.0] {
-                let mut dsp =
-                    PitchShifter::new(pitch, true, shift, PitchAlgorithm::TdPsolaResampled)
-                        .unwrap();
+                let mut dsp = PitchShifter::new(
+                    pitch,
+                    true,
+                    shift,
+                    PitchAlgorithm::TdPsolaResampled,
+                    rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+                )
+                .unwrap();
                 let mut output = vec![0.0; input.len()];
                 dsp.process_block(&input, &mut output);
                 let signal = &output[16384..];
@@ -311,7 +337,14 @@ fn resampled_grains_are_block_independent_during_pitch_changes() {
         .collect();
     let mut reference = None;
     for block in [24000, 1, 127, 512] {
-        let mut dsp = PitchShifter::new(7.0, true, 2.53, PitchAlgorithm::TdPsolaResampled).unwrap();
+        let mut dsp = PitchShifter::new(
+            7.0,
+            true,
+            2.53,
+            PitchAlgorithm::TdPsolaResampled,
+            rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+        )
+        .unwrap();
         for pitch in [7.0, 0.0, -3.0] {
             dsp.set_semitones(pitch).unwrap();
             let mut output = vec![0.0; input.len()];
@@ -369,9 +402,15 @@ fn resampling_moves_unvoiced_resonance_without_changing_duration() {
             .unwrap();
         for shift in [-12.0, -4.0, 2.53, 12.0] {
             let mut output = vec![0.0; input.len()];
-            PitchShifter::new(0.0, true, shift, PitchAlgorithm::TdPsolaResampled)
-                .unwrap()
-                .process_block(&input, &mut output);
+            PitchShifter::new(
+                0.0,
+                true,
+                shift,
+                PitchAlgorithm::TdPsolaResampled,
+                rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+            )
+            .unwrap()
+            .process_block(&input, &mut output);
             // Average multiple short spectra and neighbouring frequencies: a
             // noise periodogram's narrow maxima do not track its broad peak.
             let expected = input_peak * pitch_ratio(shift).unwrap();
@@ -396,8 +435,14 @@ fn resampled_grains_keep_fixed_delay_and_flush_without_drifting() {
         let mut input = vec![0.0_f32; 48000];
         input[impulse] = 0.25;
         let mut output = vec![0.0; input.len()];
-        let mut dsp =
-            PitchShifter::new(0.0, true, shift, PitchAlgorithm::TdPsolaResampled).unwrap();
+        let mut dsp = PitchShifter::new(
+            0.0,
+            true,
+            shift,
+            PitchAlgorithm::TdPsolaResampled,
+            rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+        )
+        .unwrap();
         dsp.process_block(&input, &mut output);
         let energy: f64 = output.iter().map(|&x| (x as f64).powi(2)).sum();
         let centroid: f64 = output
@@ -432,8 +477,14 @@ fn extreme_independent_ratios_remain_finite_across_many_ring_wraps() {
         .collect();
     for shift in [-12.0, 12.0] {
         for pitch in [-12.0, 12.0] {
-            let mut dsp =
-                PitchShifter::new(pitch, true, shift, PitchAlgorithm::TdPsolaResampled).unwrap();
+            let mut dsp = PitchShifter::new(
+                pitch,
+                true,
+                shift,
+                PitchAlgorithm::TdPsolaResampled,
+                rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+            )
+            .unwrap();
             let mut output = vec![0.0; input.len()];
             dsp.process_block(&input, &mut output);
             assert!(output.iter().all(|x| x.is_finite() && x.abs() < 0.9));

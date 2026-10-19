@@ -30,7 +30,14 @@ fn paper_pvsola_time_stretch_then_resampling_moves_pitch() {
         .map(|i| (0.15 * (std::f64::consts::TAU * 440.0 * i as f64 / RATE as f64).sin()) as f32)
         .collect();
     let mut output = vec![0.0; input.len()];
-    let mut shifter = PitchShifter::new(pitch, false, 0.0, PitchAlgorithm::Pvsola).unwrap();
+    let mut shifter = PitchShifter::new(
+        pitch,
+        false,
+        0.0,
+        PitchAlgorithm::Pvsola,
+        rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+    )
+    .unwrap();
     let mut position = 0;
     let blocks = [1, 127, 512, 64, 239];
     let mut block_index = 0;
@@ -66,9 +73,15 @@ fn formant_preservation_keeps_the_first_resonance_after_pitch_resampling() {
         input.push(sample as f32);
     }
     let mut output = vec![0.0; input.len()];
-    PitchShifter::new(pitch, true, 0.0, PitchAlgorithm::Pvsola)
-        .unwrap()
-        .process_block(&input, &mut output);
+    PitchShifter::new(
+        pitch,
+        true,
+        0.0,
+        PitchAlgorithm::Pvsola,
+        rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+    )
+    .unwrap()
+    .process_block(&input, &mut output);
     let peak = peak_frequency(&output[24_576..32_768], 700.0, 1500.0);
     assert!(
         (peak - 900.0).abs() < 40.0,
@@ -78,7 +91,14 @@ fn formant_preservation_keeps_the_first_resonance_after_pitch_resampling() {
 
 #[test]
 fn paper_pvsola_survives_pitch_transitions_and_reports_its_delay() {
-    let mut shifter = PitchShifter::new(0.0, true, 0.0, PitchAlgorithm::Pvsola).unwrap();
+    let mut shifter = PitchShifter::new(
+        0.0,
+        true,
+        0.0,
+        PitchAlgorithm::Pvsola,
+        rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+    )
+    .unwrap();
     assert_eq!(PitchAlgorithm::Pvsola.latency(), 4608);
     let input: Vec<f32> = (0..RATE as usize)
         .map(|i| (0.1 * (std::f64::consts::TAU * 170.0 * i as f64 / RATE as f64).sin()) as f32)
@@ -105,7 +125,14 @@ fn paper_pvsola_survives_pitch_transitions_and_reports_its_delay() {
 
 #[test]
 fn neutral_interval_does_not_replay_old_pvsola_audio() {
-    let mut shifter = PitchShifter::new(7.0, false, 0.0, PitchAlgorithm::Pvsola).unwrap();
+    let mut shifter = PitchShifter::new(
+        7.0,
+        false,
+        0.0,
+        PitchAlgorithm::Pvsola,
+        rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+    )
+    .unwrap();
     let mut output = vec![0.0; 24000];
     shifter.process_block(&vec![0.1_f32; output.len()], &mut output);
     shifter.set_semitones(0.0).unwrap();
@@ -123,7 +150,14 @@ fn neutral_interval_does_not_replay_old_pvsola_audio() {
 fn neutral_to_pitched_keeps_live_audio_until_the_delayed_path_is_ready() {
     let input = vec![0.1_f32; 12000];
     let mut output = vec![0.0; input.len()];
-    let mut dsp = PitchShifter::new(0.0, false, 0.0, PitchAlgorithm::Pvsola).unwrap();
+    let mut dsp = PitchShifter::new(
+        0.0,
+        false,
+        0.0,
+        PitchAlgorithm::Pvsola,
+        rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+    )
+    .unwrap();
     dsp.process_block(&input, &mut output);
     for pitch in [7.0, -3.0] {
         dsp.set_semitones(pitch).unwrap();

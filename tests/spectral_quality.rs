@@ -19,9 +19,15 @@ fn pitch_lobes_above_nyquist_are_discarded_without_aliasing() {
             for preserve in [false, true] {
                 let input = tone(18_000.0, 24_000);
                 let mut output = vec![0.0; input.len()];
-                PitchShifter::new(pitch, preserve, 0.0, algorithm)
-                    .unwrap()
-                    .process_block(&input, &mut output);
+                PitchShifter::new(
+                    pitch,
+                    preserve,
+                    0.0,
+                    algorithm,
+                    rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+                )
+                .unwrap()
+                .process_block(&input, &mut output);
                 let settled = &output[8192..];
                 let rms = (settled.iter().map(|&x| (x as f64).powi(2)).sum::<f64>()
                     / settled.len() as f64)
@@ -48,9 +54,15 @@ fn moving_pitch_keeps_amplitude_and_phase_continuous() {
             .collect();
         for pitch in [3.0, 7.0, 12.0] {
             let mut output = vec![0.0; input.len()];
-            PitchShifter::new(pitch, false, 0.0, algorithm)
-                .unwrap()
-                .process_block(&input, &mut output);
+            PitchShifter::new(
+                pitch,
+                false,
+                0.0,
+                algorithm,
+                rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+            )
+            .unwrap()
+            .process_block(&input, &mut output);
             let levels: Vec<f64> = output[8192..count - LATENCY]
                 .as_chunks::<1024>()
                 .0
@@ -127,9 +139,15 @@ fn low_voice_quality_at_rate(rate: u32, algorithm: PitchAlgorithm) {
         for pitch in [3.0, 7.0, 12.0, -3.0, -12.0] {
             let input = tone_at_rate(frequency, rate as usize, rate);
             let mut output = vec![0.0; input.len()];
-            PitchShifter::new(pitch, false, 0.0, algorithm)
-                .unwrap()
-                .process_block(&input, &mut output);
+            PitchShifter::new(
+                pitch,
+                false,
+                0.0,
+                algorithm,
+                rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+            )
+            .unwrap()
+            .process_block(&input, &mut output);
             let expected = frequency * pitch_ratio(pitch).unwrap();
             let signal = &output[8192..];
             let peak = ((expected - 15.0).ceil() as usize..=(expected + 15.0).floor() as usize)
@@ -159,11 +177,16 @@ fn low_voice_quality_at_rate(rate: u32, algorithm: PitchAlgorithm) {
 fn preservation_and_shift_move_a_broadband_resonance_independently_of_pitch() {
     for algorithm in PitchAlgorithm::SPECTRAL {
         for rate in rust_low_latency_voice_changer::SAMPLE_RATES {
-            formant_quality_at_rate(rate, algorithm);
+            formant_quality_at_rate(rate, algorithm, Default::default(), 200.0);
         }
     }
 }
-fn formant_quality_at_rate(rate: u32, algorithm: PitchAlgorithm) {
+fn formant_quality_at_rate(
+    rate: u32,
+    algorithm: PitchAlgorithm,
+    windows: rust_low_latency_voice_changer::pitch::SpectralWindows,
+    maximum_error_hz: f64,
+) {
     let mut seed = 1_u32;
     let radius = 0.98_f64;
     let coefficient = 2.0 * radius * (std::f64::consts::TAU * 1500.0 / rate as f64).cos();
@@ -186,6 +209,10 @@ fn formant_quality_at_rate(rate: u32, algorithm: PitchAlgorithm) {
     ] {
         let mut output = vec![0.0; input.len()];
         let options = rust_low_latency_voice_changer::cli::Options::parse([
+            "--analysis-window".into(),
+            windows.analysis.to_string(),
+            "--synthesis-window".into(),
+            windows.synthesis.to_string(),
             "--pitch-algorithm".into(),
             algorithm.name().into(),
             "--pitch".into(),
@@ -221,8 +248,8 @@ fn formant_quality_at_rate(rate: u32, algorithm: PitchAlgorithm) {
             .unwrap() as f64;
         let expected = 1500.0 * pitch_ratio(if preserve { shift } else { pitch }).unwrap();
         assert!(
-            (peak - expected).abs() < 200.0,
-            "pitch={pitch}, preserve={preserve}, shift={shift}: peak={peak}, expected={expected}"
+            (peak - expected).abs() < maximum_error_hz,
+            "{windows:?} {algorithm:?} pitch={pitch}, preserve={preserve}, shift={shift}: peak={peak}, expected={expected}"
         );
         assert!(output.iter().all(|x| x.is_finite() && x.abs() <= 1.0));
     }
@@ -234,9 +261,15 @@ fn low_components_are_suppressed_with_formants_enabled() {
         let input = tone(100.0, 48_000);
         for shift in [0.0, 3.0] {
             let mut output = vec![0.0; input.len()];
-            PitchShifter::new(7.0, true, shift, algorithm)
-                .unwrap()
-                .process_block(&input, &mut output);
+            PitchShifter::new(
+                7.0,
+                true,
+                shift,
+                algorithm,
+                rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+            )
+            .unwrap()
+            .process_block(&input, &mut output);
             let expected = 100.0 * pitch_ratio(7.0).unwrap();
             let low: f64 = (20..100)
                 .step_by(2)
@@ -253,11 +286,24 @@ fn block_boundaries_formats_bypass_and_retargeting() {
         let input = tone(113.0, 12_000);
         for (pitch, preserve, shift) in [(7.0, false, 0.0), (7.0, true, 3.0), (0.0, true, 3.0)] {
             let mut whole = vec![0.0; input.len()];
-            PitchShifter::new(pitch, preserve, shift, algorithm)
-                .unwrap()
-                .process_block(&input, &mut whole);
+            PitchShifter::new(
+                pitch,
+                preserve,
+                shift,
+                algorithm,
+                rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+            )
+            .unwrap()
+            .process_block(&input, &mut whole);
             for size in [1, 7, 64, 512, 4096] {
-                let mut dsp = PitchShifter::new(pitch, preserve, shift, algorithm).unwrap();
+                let mut dsp = PitchShifter::new(
+                    pitch,
+                    preserve,
+                    shift,
+                    algorithm,
+                    rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+                )
+                .unwrap();
                 let mut split = vec![0.0; input.len()];
                 for (a, b) in input.chunks(size).zip(split.chunks_mut(size)) {
                     dsp.process_block(a, b);
@@ -266,7 +312,14 @@ fn block_boundaries_formats_bypass_and_retargeting() {
             }
         }
         let floats = [f32::NAN, f32::INFINITY, -0.0, f32::from_bits(1), 0.25];
-        let mut dsp = PitchShifter::new(0.0, true, 0.0, algorithm).unwrap();
+        let mut dsp = PitchShifter::new(
+            0.0,
+            true,
+            0.0,
+            algorithm,
+            rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+        )
+        .unwrap();
         let mut output = [0.0; 5];
         dsp.process_block(&floats, &mut output);
         assert_eq!(floats.map(f32::to_bits), output.map(f32::to_bits));
@@ -292,7 +345,14 @@ fn block_boundaries_formats_bypass_and_retargeting() {
 fn silence_and_impulse_delay_and_invalid_settings() {
     for algorithm in PitchAlgorithm::SPECTRAL {
         for preserve in [false, true] {
-            let mut dsp = PitchShifter::new(7.0, preserve, 0.0, algorithm).unwrap();
+            let mut dsp = PitchShifter::new(
+                7.0,
+                preserve,
+                0.0,
+                algorithm,
+                rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+            )
+            .unwrap();
             let mut output = vec![1.0; 8192];
             dsp.process_block(&vec![0.0_f32; output.len()], &mut output);
             assert!(output.iter().all(|&x| x == 0.0));
@@ -311,10 +371,55 @@ fn silence_and_impulse_delay_and_invalid_settings() {
                 .iter()
                 .all(|x| x.abs() < 1e-9));
         }
-        assert!(PitchShifter::new(0.0, false, 1.0, algorithm).is_err());
+        assert!(PitchShifter::new(
+            0.0,
+            false,
+            1.0,
+            algorithm,
+            rust_low_latency_voice_changer::pitch::SpectralWindows::default()
+        )
+        .is_err());
         for value in [f64::NAN, f64::INFINITY, -12.1, 12.1] {
-            assert!(PitchShifter::new(value, true, 0.0, algorithm).is_err());
-            assert!(PitchShifter::new(0.0, true, value, algorithm).is_err());
+            assert!(PitchShifter::new(
+                value,
+                true,
+                0.0,
+                algorithm,
+                rust_low_latency_voice_changer::pitch::SpectralWindows::default()
+            )
+            .is_err());
+            assert!(PitchShifter::new(
+                0.0,
+                true,
+                value,
+                algorithm,
+                rust_low_latency_voice_changer::pitch::SpectralWindows::default()
+            )
+            .is_err());
+        }
+    }
+}
+
+#[test]
+fn configured_windows_preserve_and_shift_formants() {
+    // Alternate time/frequency resolutions allow up to 250 Hz resonance error.
+    // The default configuration retains its existing 200 Hz quality check.
+    for analysis in [1024, 2048, 4096, 8192] {
+        for synthesis in [256, 512, 1024, 2048] {
+            if synthesis > analysis {
+                continue;
+            }
+            for algorithm in PitchAlgorithm::SPECTRAL {
+                formant_quality_at_rate(
+                    RATE,
+                    algorithm,
+                    rust_low_latency_voice_changer::pitch::SpectralWindows {
+                        analysis,
+                        synthesis,
+                    },
+                    250.0,
+                );
+            }
         }
     }
 }

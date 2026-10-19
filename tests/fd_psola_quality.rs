@@ -2,7 +2,14 @@ use rust_low_latency_voice_changer::pitch::{pitch_ratio, PitchAlgorithm, PitchSh
 use rust_low_latency_voice_changer::SAMPLE_RATES;
 
 fn shifter(pitch: f64, preserve_formants: bool) -> PitchShifter {
-    PitchShifter::new(pitch, preserve_formants, 0.0, PitchAlgorithm::FdPsola).unwrap()
+    PitchShifter::new(
+        pitch,
+        preserve_formants,
+        0.0,
+        PitchAlgorithm::FdPsola,
+        rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+    )
+    .unwrap()
 }
 
 fn power(signal: &[f32], frequency: f64, rate: u32) -> f64 {
@@ -139,6 +146,7 @@ fn fd_psola_applies_independent_formant_shift_and_emits_audio() {
         .collect();
     for shift in [-4.0, 4.0] {
         let settings = PitchSettings {
+            windows: Default::default(),
             algorithm: PitchAlgorithm::FdPsola,
             semitones: 0.0,
             preserve_formants: true,

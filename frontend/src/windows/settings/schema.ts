@@ -17,6 +17,10 @@ export const settingsSchema = v.pipe(
     level: levelSchema,
   }),
   v.check(
+    (settings) => settings.voice.synthesisWindow <= settings.voice.analysisWindow,
+    "合成窓は解析窓以下にしてください。",
+  ),
+  v.check(
     (settings) => settings.voice.preserveFormants || settings.voice.formantShift === 0,
     "フォルマントを独立調整しない場合、調整値は0にしてください。",
   ),

@@ -170,6 +170,8 @@ struct DeviceSettings {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct VoiceSettings {
+    analysis_window: usize,
+    synthesis_window: usize,
     pitch_algorithm: String,
     pitch: f64,
     formant_shift: f64,
@@ -198,6 +200,8 @@ impl Settings {
                 sample_rate: options.sample_rate,
             },
             voice: VoiceSettings {
+                analysis_window: options.pitch.windows.analysis,
+                synthesis_window: options.pitch.windows.synthesis,
                 pitch_algorithm: options.pitch.algorithm.name().into(),
                 pitch: options.pitch.semitones,
                 formant_shift: options.pitch.formant_shift,
@@ -236,6 +240,10 @@ impl Settings {
             frames: self.devices.frames,
             sample_rate: self.devices.sample_rate,
             pitch: crate::pitch::PitchSettings {
+                windows: crate::pitch::SpectralWindows {
+                    analysis: self.voice.analysis_window,
+                    synthesis: self.voice.synthesis_window,
+                },
                 algorithm: crate::pitch::PitchAlgorithm::parse(&self.voice.pitch_algorithm)
                     .map_err(str::to_string)?,
                 semitones: self.voice.pitch,
@@ -995,6 +1003,17 @@ pub fn show_message(message: &str, _error: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn spectral_windows_round_trip_and_reject_invalid_combinations() {
+        let options = Options::parse_gui(
+            ["--analysis-window", "8192", "--synthesis-window", "2048"].map(String::from),
+        )
+        .unwrap();
+        let mut settings = Settings::from_options(&options);
+        assert_eq!(settings.options().unwrap(), options);
+        settings.voice.analysis_window = 1024;
+        assert!(settings.options().is_err());
+    }
     #[test]
     fn pitch_algorithm_controls_round_trip_and_reject_unknown_values() {
         for algorithm in crate::pitch::PitchAlgorithm::ALL {

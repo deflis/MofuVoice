@@ -66,7 +66,14 @@ fn main() {
                     let mut times = Vec::new();
                     let mut worst_block = 0.0_f64;
                     for _ in 0..7 {
-                        let mut dsp = PitchShifter::new(pitch, preserve, shift, algorithm).unwrap();
+                        let mut dsp = PitchShifter::new(
+                            pitch,
+                            preserve,
+                            shift,
+                            algorithm,
+                            rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+                        )
+                        .unwrap();
                         let mut level = LevelSettings {
                             enabled: auto_level,
                             compressor_enabled: auto_level,

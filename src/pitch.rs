@@ -1,7 +1,7 @@
 //! Monophonic pitch shifting: spectral phase locking, PVSOLA, or waveform TD-PSOLA.
 //! All FFT tables, windows, and overlap storage are allocated before streaming.
 //! The spectral stage uses a long analysis window and a short right-aligned synthesis window,
-//! with SYNTHESIS samples of delay. TD-PSOLA uses waveform grains and resampling.
+//! with the configured synthesis length as its delay. TD-PSOLA uses waveform grains and resampling.
 //! The neutral setting bypasses exactly.
 #[cfg(test)]
 use crate::dsp::fft_kernel::FftKernel;
@@ -127,6 +127,7 @@ pub fn pitch_ratio(semitones: f64) -> Result<f64, InvalidPitch> {
 /// Pitch and independent formant settings, in semitones.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PitchSettings {
+    pub windows: SpectralWindows,
     pub algorithm: PitchAlgorithm,
     pub semitones: f64,
     pub preserve_formants: bool,
@@ -137,6 +138,7 @@ impl Default for PitchSettings {
     fn default() -> Self {
         Self {
             algorithm: PitchAlgorithm::PhaseLocked,
+            windows: SpectralWindows::default(),
             semitones: 0.0,
             preserve_formants: true,
             formant_shift: 0.0,
@@ -148,6 +150,7 @@ impl PitchSettings {
     /// Buffered delay of the configured wet path; neutral bypass is handled by callers.
     pub fn latency(self) -> usize {
         match (self.algorithm, self.formant_shift != 0.0) {
+            (PitchAlgorithm::PhaseLocked | PitchAlgorithm::PvsolaSync, _) => self.windows.synthesis,
             (PitchAlgorithm::TdPsola | PitchAlgorithm::FdPsola, true) => {
                 crate::psola_stream::LATENCY + 512
             }
@@ -161,7 +164,34 @@ impl PitchSettings {
             self.preserve_formants,
             self.formant_shift,
             self.algorithm,
+            self.windows,
         )
+    }
+}
+
+/// Sample counts for direct spectral processing, configured before streaming.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpectralWindows {
+    pub analysis: usize,
+    pub synthesis: usize,
+}
+impl Default for SpectralWindows {
+    fn default() -> Self {
+        Self {
+            analysis: WINDOW,
+            synthesis: SYNTHESIS,
+        }
+    }
+}
+impl SpectralWindows {
+    pub fn validate(self) -> Result<(), &'static str> {
+        if ![1024, 2048, 4096, 8192].contains(&self.analysis) {
+            return Err("解析窓は1024、2048、4096、8192サンプルから選んでください");
+        }
+        if ![256, 512, 1024, 2048].contains(&self.synthesis) || self.synthesis > self.analysis {
+            return Err("合成窓は256、512、1024、2048サンプルから選び、解析窓以下にしてください");
+        }
+        Ok(())
     }
 }
 
@@ -169,28 +199,33 @@ pub const WINDOW: usize = 2048;
 pub const HOP: usize = 128;
 /// Right-aligned synthesis / COLA length (`2M`); wet delay equals this many samples.
 pub const SYNTHESIS: usize = 512;
-const M: usize = SYNTHESIS / 2;
 pub const LATENCY: usize = SYNTHESIS;
 const BINS: usize = WINDOW / 2 + 1;
-const QUEUE: usize = WINDOW * 2;
 const CEPSTRUM: usize = 80;
 
-fn asymmetric_windows() -> (Box<[f64; WINDOW]>, Box<[f64; WINDOW]>, f64) {
-    let mut analysis = Box::new([0.0; WINDOW]);
-    let mut synthesis = Box::new([0.0; WINDOW]);
-    let left_length = 2 * (WINDOW - M);
-    for i in 0..WINDOW - M {
-        analysis[i] = hann(i, left_length).sqrt();
+fn asymmetric_windows(windows: SpectralWindows) -> (Vec<f64>, Vec<f64>, f64) {
+    let window = windows.analysis;
+    let synthesis_size = windows.synthesis;
+    let m = synthesis_size / 2;
+    let mut analysis = vec![0.0; window];
+    let mut synthesis = vec![0.0; window];
+    let left_length = 2 * (window - m);
+    for (i, value) in analysis.iter_mut().enumerate().take(window - m) {
+        *value = hann(i, left_length).sqrt();
     }
-    for i in WINDOW - M..WINDOW {
-        let short = hann(i - (WINDOW - SYNTHESIS), SYNTHESIS).sqrt();
+    for i in window - m..window {
+        let short = hann(i - (window - synthesis_size), synthesis_size).sqrt();
         analysis[i] = short;
         synthesis[i] = short;
     }
-    for i in WINDOW - SYNTHESIS..WINDOW - M {
-        let short = hann(i - (WINDOW - SYNTHESIS), SYNTHESIS);
-        // Product hA*hS is the right-aligned Hann of length SYNTHESIS.
-        synthesis[i] = short / analysis[i];
+    for i in window - synthesis_size..window - m {
+        let short = hann(i - (window - synthesis_size), synthesis_size);
+        // Product hA*hS is the right-aligned Hann of length synthesis_size.
+        synthesis[i] = if analysis[i] == 0.0 {
+            0.0
+        } else {
+            short / analysis[i]
+        };
     }
     let (mut moment, mut energy) = (0.0, 0.0);
     for (i, &weight) in analysis.iter().enumerate() {
@@ -209,7 +244,7 @@ struct Fft {
     reverse_half: Box<[usize; HALF]>,
     forward_roots_half: SplitRoots,
     inverse_roots_half: SplitRoots,
-    /// `exp(-2π i k / N)` for real-FFT packing, k = 0 .. HALF-1.
+    /// `exp(-2ﾏ i k / N)` for real-FFT packing, k = 0 .. HALF-1.
     real_twiddle: Box<[Complex; HALF]>,
     #[cfg(test)]
     reverse: Box<[usize; WINDOW]>,
@@ -570,6 +605,18 @@ impl Fft {
     }
 }
 
+fn mirror_spectrum(spectrum: &mut [Complex]) {
+    let size = spectrum.len();
+    spectrum[0].im = 0.0;
+    spectrum[size / 2].im = 0.0;
+    for i in 1..size / 2 {
+        spectrum[size - i] = Complex {
+            re: spectrum[i].re,
+            im: -spectrum[i].im,
+        };
+    }
+}
+
 #[derive(Clone, Copy, Default)]
 struct Lobe {
     first: usize,
@@ -581,48 +628,50 @@ struct Lobe {
 }
 
 pub struct PitchShifter {
+    windows: SpectralWindows,
+    custom_fft: Option<crate::dsp::fft::Fft>,
     psola: Option<crate::psola_stream::PsolaStream>,
     pvsola: Option<crate::pvsola::PvsOla>,
     algorithm: PitchAlgorithm,
     synchronizer: sync::Synchronizer,
     fft: Fft,
-    analysis_window: Box<[f64; WINDOW]>,
-    /// Synthesis window already scaled by COLA normalization `2H/SYNTHESIS`.
-    synthesis_window: Box<[f64; WINDOW]>,
+    analysis_window: Vec<f64>,
+    /// Synthesis window already scaled by COLA normalization `2H/synthesis`.
+    synthesis_window: Vec<f64>,
     phase_center: f64,
     /// `exp(-i * centre_phase(bin))` for each analysis bin.
-    centre_phasor: Box<[Complex; BINS]>,
-    /// Nominal hop phase advance `2π · hop · bin / N` per bin.
-    nominal_advance: Box<[f64; BINS]>,
-    input: Box<[f64; WINDOW]>,
-    output: Box<[f64; QUEUE]>,
-    spectrum: Box<[Complex; BINS]>,
-    shifted: Box<[Complex; WINDOW]>,
+    centre_phasor: Vec<Complex>,
+    /// Nominal hop phase advance `2ﾏ ﾂｷ hop ﾂｷ bin / N` per bin.
+    nominal_advance: Vec<f64>,
+    input: Vec<f64>,
+    output: Vec<f64>,
+    spectrum: Vec<Complex>,
+    shifted: Vec<Complex>,
     fft_work: Box<SplitBuffer<HALF>>,
-    envelope_work: Box<[Complex; WINDOW]>,
-    magnitude: Box<[f64; BINS]>,
-    gains: Box<[f64; BINS]>,
-    lobes: Box<[Lobe; BINS]>,
-    rotation_angles: Box<[f64; BINS]>,
-    rotations: Box<[Complex; BINS]>,
-    phase_input: Box<[Complex; 2 * BINS]>,
-    phase_result: Box<[f64; 2 * BINS]>,
-    phase: Box<[f64; BINS]>,
+    envelope_work: Vec<Complex>,
+    magnitude: Vec<f64>,
+    gains: Vec<f64>,
+    lobes: Vec<Lobe>,
+    rotation_angles: Vec<f64>,
+    rotations: Vec<Complex>,
+    phase_input: Vec<Complex>,
+    phase_result: Vec<f64>,
+    phase: Vec<f64>,
     // Portable processors retain peak-only scalar analysis; evaluating every
     // bin is advantageous only with four-wide phase math.
-    phase_valid: Box<[bool; BINS]>,
+    phase_valid: Vec<bool>,
     // Match the analysis buffer's size so history can be retained by swapping boxes.
-    previous_spectrum: Box<[Complex; BINS]>,
+    previous_spectrum: Vec<Complex>,
     #[cfg(test)]
     eager_phase: bool,
     #[cfg(test)]
-    previous_phase: Box<[f64; BINS]>,
-    synthesis_phase: Box<[f64; BINS]>,
-    previous_synthesis_phase: Box<[f64; BINS]>,
-    phase_advance: Box<[f64; BINS]>,
-    envelope: Box<[f64; BINS]>,
-    peaks: Box<[usize; BINS]>,
-    previous_peaks: Box<[usize; BINS]>,
+    previous_phase: Vec<f64>,
+    synthesis_phase: Vec<f64>,
+    previous_synthesis_phase: Vec<f64>,
+    phase_advance: Vec<f64>,
+    envelope: Vec<f64>,
+    peaks: Vec<usize>,
+    previous_peaks: Vec<usize>,
     previous_peak_count: usize,
     clock: usize,
     until_frame: usize,
@@ -644,7 +693,18 @@ impl PitchShifter {
         preserve_formants: bool,
         formant_shift: f64,
         algorithm: PitchAlgorithm,
+        windows: SpectralWindows,
     ) -> Result<Self, Box<dyn Error>> {
+        windows.validate()?;
+        let windows = if PitchAlgorithm::SPECTRAL.contains(&algorithm) {
+            windows
+        } else {
+            SpectralWindows::default()
+        };
+        let window = windows.analysis;
+        let synthesis = windows.synthesis;
+        let bins = window / 2 + 1;
+        let queue = 2 * window;
         let ratio = pitch_ratio(semitones)?;
         let formant_ratio = formant_ratio(formant_shift)?;
         algorithm.validate_formants(preserve_formants)?;
@@ -652,19 +712,22 @@ impl PitchShifter {
             return Err(InvalidFormant.into());
         }
         let wet = f64::from(semitones != 0.0 || formant_shift != 0.0);
-        let (analysis_window, mut synthesis_window, phase_center) = asymmetric_windows();
-        let normalization = 2.0 * HOP as f64 / SYNTHESIS as f64;
+        let (analysis_window, mut synthesis_window, phase_center) = asymmetric_windows(windows);
+        let normalization = 2.0 * HOP as f64 / synthesis as f64;
         for weight in synthesis_window.iter_mut() {
             *weight *= normalization;
         }
-        let centre_step = std::f64::consts::TAU * phase_center / WINDOW as f64;
-        let centre_phasor = Box::new(std::array::from_fn(|bin| {
-            Complex::polar(1.0, -centre_step * bin as f64)
-        }));
-        let nominal_advance = Box::new(std::array::from_fn(|bin| {
-            std::f64::consts::TAU * HOP as f64 * bin as f64 / WINDOW as f64
-        }));
+        let centre_step = std::f64::consts::TAU * phase_center / window as f64;
+        let centre_phasor = (0..bins)
+            .map(|bin| Complex::polar(1.0, -centre_step * bin as f64))
+            .collect();
+        let nominal_advance = (0..bins)
+            .map(|bin| std::f64::consts::TAU * HOP as f64 * bin as f64 / window as f64)
+            .collect();
         Ok(Self {
+            windows,
+            custom_fft: (windows != SpectralWindows::default())
+                .then(|| crate::dsp::fft::Fft::new(window)),
             psola: match algorithm {
                 PitchAlgorithm::TdPsola => Some(crate::psola_stream::PsolaStream::with_synthesis(
                     Box::new(crate::td_synthesis::TdSynthesis::new(1.0)),
@@ -682,39 +745,39 @@ impl PitchShifter {
             pvsola: (algorithm == PitchAlgorithm::Pvsola)
                 .then(|| crate::pvsola::PvsOla::new(ratio, preserve_formants, formant_ratio)),
             algorithm,
-            synchronizer: sync::Synchronizer::new(),
+            synchronizer: sync::Synchronizer::new(window),
             fft: Fft::new(),
             analysis_window,
             synthesis_window,
             phase_center,
             centre_phasor,
             nominal_advance,
-            input: Box::new([0.0; WINDOW]),
-            output: Box::new([0.0; QUEUE]),
-            spectrum: Box::new([Complex::default(); BINS]),
-            shifted: Box::new([Complex::default(); WINDOW]),
+            input: vec![0.0; window],
+            output: vec![0.0; queue],
+            spectrum: vec![Complex::default(); bins],
+            shifted: vec![Complex::default(); window],
             fft_work: Box::new(SplitBuffer::default()),
-            envelope_work: Box::new([Complex::default(); WINDOW]),
-            magnitude: Box::new([0.0; BINS]),
-            gains: Box::new([0.0; BINS]),
-            lobes: Box::new([Lobe::default(); BINS]),
-            rotation_angles: Box::new([0.0; BINS]),
-            rotations: Box::new([Complex::default(); BINS]),
-            phase_input: Box::new([Complex::default(); 2 * BINS]),
-            phase_result: Box::new([0.0; 2 * BINS]),
-            phase: Box::new([0.0; BINS]),
-            phase_valid: Box::new([true; BINS]),
-            previous_spectrum: Box::new([Complex::default(); BINS]),
+            envelope_work: vec![Complex::default(); window],
+            magnitude: vec![0.0; bins],
+            gains: vec![0.0; bins],
+            lobes: vec![Lobe::default(); bins],
+            rotation_angles: vec![0.0; bins],
+            rotations: vec![Complex::default(); bins],
+            phase_input: vec![Complex::default(); 2 * bins],
+            phase_result: vec![0.0; 2 * bins],
+            phase: vec![0.0; bins],
+            phase_valid: vec![true; bins],
+            previous_spectrum: vec![Complex::default(); bins],
             #[cfg(test)]
             eager_phase: false,
             #[cfg(test)]
-            previous_phase: Box::new([0.0; BINS]),
-            synthesis_phase: Box::new([0.0; BINS]),
-            previous_synthesis_phase: Box::new([0.0; BINS]),
-            phase_advance: Box::new([0.0; BINS]),
-            envelope: Box::new([0.0; BINS]),
-            peaks: Box::new([0; BINS]),
-            previous_peaks: Box::new([0; BINS]),
+            previous_phase: vec![0.0; bins],
+            synthesis_phase: vec![0.0; bins],
+            previous_synthesis_phase: vec![0.0; bins],
+            phase_advance: vec![0.0; bins],
+            envelope: vec![0.0; bins],
+            peaks: vec![0; bins],
+            previous_peaks: vec![0; bins],
             previous_peak_count: 0,
             clock: 0,
             until_frame: HOP,
@@ -762,20 +825,37 @@ impl PitchShifter {
 
     #[inline(always)]
     fn frame_inner(&mut self) {
+        let window = self.windows.analysis;
+        let synthesis = self.windows.synthesis;
+        let bins = window / 2 + 1;
+        let queue = 2 * window;
+        // Quefrency is measured in samples, independently of FFT length.
+        let cepstrum = CEPSTRUM;
         let ratio = if self.psola.is_some() {
             1.0
         } else {
             self.ratio
         };
         let clock = self.clock;
-        self.fft.forward_windowed_ring(
-            &self.input,
-            &self.analysis_window,
-            clock % WINDOW,
-            self.spectrum.as_mut_slice(),
-            &mut self.fft_work,
-        );
-        Complex::magnitudes(&self.spectrum[..BINS], self.magnitude.as_mut_slice());
+        if let Some(fft) = &self.custom_fft {
+            for i in 0..window {
+                self.shifted[i] = Complex {
+                    re: self.input[(clock + i) % window] * self.analysis_window[i],
+                    im: 0.0,
+                };
+            }
+            fft.forward(&mut self.shifted);
+            self.spectrum.copy_from_slice(&self.shifted[..bins]);
+        } else {
+            self.fft.forward_windowed_ring(
+                self.input.as_slice().try_into().unwrap(),
+                self.analysis_window.as_slice().try_into().unwrap(),
+                clock % window,
+                self.spectrum.as_mut_slice(),
+                &mut self.fft_work,
+            );
+        }
+        Complex::magnitudes(&self.spectrum[..bins], self.magnitude.as_mut_slice());
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         let vector = self.fft.avx2;
         #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
@@ -788,24 +868,40 @@ impl PitchShifter {
                 vector,
             );
             // Real cepstral low-pass estimates a smooth envelope without fitting harmonics.
-            for i in 0..BINS {
+            for i in 0..bins {
                 self.envelope_work[i] = Complex {
                     re: self.envelope[i],
                     im: 0.0,
                 };
             }
             // inverse_real reads only the nonnegative-frequency bins.
-            self.fft
-                .inverse_real_partial(&mut self.envelope_work, &mut self.fft_work, true, false);
-            self.envelope_work[CEPSTRUM + 1..WINDOW - CEPSTRUM].fill(Complex::default());
-            self.fft
-                .forward_cepstrum(&mut self.envelope_work, &mut self.fft_work);
-            for i in 0..BINS {
+            if let Some(fft) = &self.custom_fft {
+                mirror_spectrum(&mut self.envelope_work);
+                fft.inverse(&mut self.envelope_work);
+                self.envelope_work[cepstrum + 1..window - cepstrum].fill(Complex::default());
+                for value in &mut self.envelope_work {
+                    value.im = 0.0;
+                }
+                fft.forward(&mut self.envelope_work);
+            } else {
+                self.fft.inverse_real_partial(
+                    self.envelope_work.as_mut_slice().try_into().unwrap(),
+                    &mut self.fft_work,
+                    true,
+                    false,
+                );
+                self.envelope_work[CEPSTRUM + 1..window - CEPSTRUM].fill(Complex::default());
+                self.fft.forward_cepstrum(
+                    self.envelope_work.as_mut_slice().try_into().unwrap(),
+                    &mut self.fft_work,
+                );
+            }
+            for i in 0..bins {
                 self.envelope[i] = self.envelope_work[i].re;
             }
         }
         let mut count = 0;
-        for i in 1..BINS - 1 {
+        for i in 1..bins - 1 {
             if self.magnitude[i] > self.magnitude[i - 1]
                 && self.magnitude[i] >= self.magnitude[i + 1]
             {
@@ -821,7 +917,7 @@ impl PitchShifter {
         let eager = false;
         if eager {
             #[cfg(test)]
-            for i in 0..BINS {
+            for i in 0..bins {
                 let value = self.spectrum[i];
                 self.phase[i] = value.im.atan2(value.re);
                 let advance = self.nominal_advance[i];
@@ -833,7 +929,7 @@ impl PitchShifter {
             self.analyze_peaks(count, vector);
         } else if count == 0 {
             // A spectrum without local maxima uses each bin as its own peak.
-            for i in 1..BINS - 1 {
+            for i in 1..bins - 1 {
                 self.analyze_phase(i);
             }
         } else {
@@ -850,7 +946,7 @@ impl PitchShifter {
             &mut self.synthesis_phase,
         );
         let mut previous = 0;
-        let centre_step = std::f64::consts::TAU * self.phase_center / WINDOW as f64;
+        let centre_step = std::f64::consts::TAU * self.phase_center / window as f64;
         for (region, &peak) in self.peaks[..count].iter().enumerate() {
             while previous + 1 < self.previous_peak_count
                 && self.previous_peaks[previous + 1].abs_diff(peak)
@@ -885,25 +981,32 @@ impl PitchShifter {
         }
         self.previous_peaks[..count].copy_from_slice(&self.peaks[..count]);
         self.previous_peak_count = count;
-        self.shifted[..BINS].fill(Complex::default());
+        self.shifted[..bins].fill(Complex::default());
         self.shifted[0] = self.spectrum[0];
         if ratio == 1.0 {
-            self.shifted[BINS - 1] = self.spectrum[BINS - 1];
+            self.shifted[bins - 1] = self.spectrum[bins - 1];
         }
         let dc_lobe = self.magnitude[0] > self.magnitude[1];
         if dc_lobe {
             self.shifted[1] = self.spectrum[1];
         }
         if neutral {
-            self.shifted[..BINS].copy_from_slice(&self.spectrum[..BINS]);
+            self.shifted[..bins].copy_from_slice(&self.spectrum[..bins]);
         } else {
-            let bin_scale = WINDOW as f64 / (std::f64::consts::TAU * HOP as f64);
+            let bin_scale = window as f64 / (std::f64::consts::TAU * HOP as f64);
             let ratio_delta = ratio - 1.0;
             let preserve = self.preserve_formants;
             let inverse_formant = 1.0 / self.formant_ratio;
             for (region, &peak) in self.peaks[..count].iter().enumerate() {
                 self.rotation_angles[region] =
                     self.synthesis_phase[peak] - self.phase[peak] - centre_step * peak as f64;
+            }
+            // Large analysis windows can exceed SIMD argument reduction's bound.
+            // Reduce only these angles, retaining default-window arithmetic exactly.
+            for angle in &mut self.rotation_angles[..count] {
+                if angle.abs() > 16384.0 {
+                    *angle = wrap(*angle);
+                }
             }
             phase::unit_phasors(
                 &self.rotation_angles[..count],
@@ -926,7 +1029,7 @@ impl PitchShifter {
             if preserve {
                 self.gains.fill(0.0);
             }
-            for region in 0..if count == 0 { BINS - 2 } else { count } {
+            for region in 0..if count == 0 { bins - 2 } else { count } {
                 let peak = if count == 0 {
                     region + 1
                 } else {
@@ -935,7 +1038,7 @@ impl PitchShifter {
                 let end = if count == 0 {
                     peak + 1
                 } else if region + 1 == count {
-                    BINS - 1
+                    bins - 1
                 } else {
                     (peak + self.peaks[region + 1]) / 2 + 1
                 };
@@ -955,7 +1058,7 @@ impl PitchShifter {
                 // Clip the source range before indexing rotation tables. Entire
                 // lobes can fall outside the positive-frequency synthesis range.
                 let first = (start as isize).max(-offset) as usize;
-                let last = (end as isize).min((BINS - 1) as isize - offset).max(0) as usize;
+                let last = (end as isize).min((bins - 1) as isize - offset).max(0) as usize;
                 start = end;
                 if first >= last {
                     continue;
@@ -989,11 +1092,11 @@ impl PitchShifter {
                             let destination = i as f64 + translation;
                             self.gains[i] = {
                                 let position =
-                                    (destination * inverse_formant).clamp(0.0, (BINS - 1) as f64);
+                                    (destination * inverse_formant).clamp(0.0, (bins - 1) as f64);
                                 let env_lower = position.floor() as usize;
                                 let env_fraction = position - env_lower as f64;
                                 let desired = self.envelope[env_lower] * (1.0 - env_fraction)
-                                    + self.envelope[(env_lower + 1).min(BINS - 1)] * env_fraction;
+                                    + self.envelope[(env_lower + 1).min(bins - 1)] * env_fraction;
                                 // Bound envelope correction, rather than clipping the synthesis waveform.
                                 desired - self.envelope[i]
                             };
@@ -1062,7 +1165,7 @@ impl PitchShifter {
                         (lower, 1.0 - fraction, weighted_lower),
                         (lower + 1, fraction, weighted_upper),
                     ] {
-                        if bin <= 0 || bin >= (BINS - 1) as isize || weight == 0.0 {
+                        if bin <= 0 || bin >= (bins - 1) as isize || weight == 0.0 {
                             continue;
                         }
                         let bin = bin as usize;
@@ -1082,11 +1185,20 @@ impl PitchShifter {
         }
         // inverse_real reconstructs the real sequence from the positive half;
         // it does not need an explicitly mirrored negative-frequency spectrum.
-        self.fft
-            .inverse_real_partial(&mut self.shifted, &mut self.fft_work, false, true);
-        let start = WINDOW - SYNTHESIS;
-        for i in start..WINDOW {
-            self.output[(clock + i - start) % QUEUE] +=
+        if let Some(fft) = &self.custom_fft {
+            mirror_spectrum(&mut self.shifted);
+            fft.inverse(&mut self.shifted);
+        } else {
+            self.fft.inverse_real_partial(
+                self.shifted.as_mut_slice().try_into().unwrap(),
+                &mut self.fft_work,
+                false,
+                true,
+            );
+        }
+        let start = window - synthesis;
+        for i in start..window {
+            self.output[(clock + i - start) % queue] +=
                 self.shifted[i].re * self.synthesis_window[i];
         }
         std::mem::swap(&mut self.previous_spectrum, &mut self.spectrum);
@@ -1108,11 +1220,12 @@ impl PitchShifter {
 
     #[inline(always)]
     fn analyze_peaks(&mut self, count: usize, vector: bool) {
+        let bins = self.spectrum.len();
         let active = if count == 0 {
-            for (i, bin) in self.peaks[..BINS - 2].iter_mut().enumerate() {
+            for (i, bin) in self.peaks[..bins - 2].iter_mut().enumerate() {
                 *bin = i + 1;
             }
-            BINS - 2
+            bins - 2
         } else {
             count
         };
@@ -1146,6 +1259,8 @@ impl PitchShifter {
 
     /// Equal-length blocks; callback storage and FFT tables are never allocated here.
     pub fn process_block<T: Sample>(&mut self, input: &[T], output: &mut [T]) -> u64 {
+        let window = self.windows.analysis;
+        let queue = 2 * window;
         assert_eq!(input.len(), output.len());
         let mut nonzero = 0;
         for (&sample, out) in input.iter().zip(output) {
@@ -1167,7 +1282,7 @@ impl PitchShifter {
             } else {
                 dry
             };
-            self.input[self.clock % WINDOW] = source;
+            self.input[self.clock % window] = source;
             let wet = if let Some(pvsola_wet) = pvsola_wet {
                 pvsola_wet
             } else if self.psola.is_some()
@@ -1175,9 +1290,9 @@ impl PitchShifter {
             {
                 source
             } else {
-                self.output[self.clock % QUEUE]
+                self.output[self.clock % queue]
             };
-            self.output[self.clock % QUEUE] = 0.0;
+            self.output[self.clock % queue] = 0.0;
             if self.remaining != 0 {
                 self.ratio += self.ratio_step;
                 self.remaining -= 1;
@@ -1197,7 +1312,7 @@ impl PitchShifter {
             } else {
                 T::from_normalized((dry * (1.0 - self.wet) + wet * self.wet).clamp(-1.0, 1.0))
             };
-            self.clock = (self.clock + 1) % QUEUE;
+            self.clock = (self.clock + 1) % queue;
             self.until_frame -= 1;
             if self.until_frame == 0 {
                 if self.pvsola.is_none()
@@ -1418,10 +1533,22 @@ mod tests {
                 } else {
                     &[0.0][..]
                 } {
-                    let mut vector =
-                        PitchShifter::new(-12.0, preserve, *formant, algorithm).unwrap();
-                    let mut portable =
-                        PitchShifter::new(-12.0, preserve, *formant, algorithm).unwrap();
+                    let mut vector = PitchShifter::new(
+                        -12.0,
+                        preserve,
+                        *formant,
+                        algorithm,
+                        crate::pitch::SpectralWindows::default(),
+                    )
+                    .unwrap();
+                    let mut portable = PitchShifter::new(
+                        -12.0,
+                        preserve,
+                        *formant,
+                        algorithm,
+                        crate::pitch::SpectralWindows::default(),
+                    )
+                    .unwrap();
                     portable.fft.avx2 = false;
                     for pitch in [-12.0, -3.0, 0.0, 3.0, 7.0, 12.0, 0.0] {
                         vector.set_semitones(pitch).unwrap();
@@ -1470,9 +1597,22 @@ mod tests {
                 } else {
                     &[0.0][..]
                 } {
-                    let mut lazy = PitchShifter::new(-12.0, preserve, *formant, algorithm).unwrap();
-                    let mut eager =
-                        PitchShifter::new(-12.0, preserve, *formant, algorithm).unwrap();
+                    let mut lazy = PitchShifter::new(
+                        -12.0,
+                        preserve,
+                        *formant,
+                        algorithm,
+                        crate::pitch::SpectralWindows::default(),
+                    )
+                    .unwrap();
+                    let mut eager = PitchShifter::new(
+                        -12.0,
+                        preserve,
+                        *formant,
+                        algorithm,
+                        crate::pitch::SpectralWindows::default(),
+                    )
+                    .unwrap();
                     eager.eager_phase = true;
                     for pitch in [-12.0, -3.0, 0.0, 3.0, 7.0, 12.0, 0.0] {
                         lazy.set_semitones(pitch).unwrap();
@@ -1534,7 +1674,14 @@ mod tests {
                 } else {
                     &[0.0][..]
                 } {
-                    let mut dsp = PitchShifter::new(-12.0, preserve, *formant, algorithm).unwrap();
+                    let mut dsp = PitchShifter::new(
+                        -12.0,
+                        preserve,
+                        *formant,
+                        algorithm,
+                        crate::pitch::SpectralWindows::default(),
+                    )
+                    .unwrap();
                     // Silence exercises the spectrum with no detected peaks.
                     dsp.process_block(&vec![0.0_f32; WINDOW], &mut output[..WINDOW]);
                     for pitch in [-12.0, -3.0, 0.0, 3.0, 7.0, 12.0] {
@@ -1670,10 +1817,10 @@ mod tests {
 
     #[test]
     fn asymmetric_windows_product_is_right_aligned_hann() {
-        let (analysis, synthesis, phase_center) = asymmetric_windows();
+        let (analysis, synthesis, phase_center) = asymmetric_windows(SpectralWindows::default());
         assert!((1330.0..1340.0).contains(&phase_center), "{phase_center}");
-        for i in 0..WINDOW - SYNTHESIS {
-            assert_eq!(synthesis[i], 0.0);
+        for &value in synthesis.iter().take(WINDOW - SYNTHESIS) {
+            assert_eq!(value, 0.0);
         }
         for i in WINDOW - SYNTHESIS..WINDOW {
             let product = analysis[i] * synthesis[i];
@@ -1686,8 +1833,62 @@ mod tests {
     }
 
     #[test]
+    fn configured_wet_paths_reconstruct_at_their_declared_latency() {
+        for analysis in [1024, 2048, 4096, 8192] {
+            for synthesis in [256, 512, 1024, 2048] {
+                if synthesis > analysis {
+                    continue;
+                }
+                let windows = SpectralWindows {
+                    analysis,
+                    synthesis,
+                };
+                let (a, b, _) = asymmetric_windows(windows);
+                for i in 0..analysis {
+                    let expected = if i < analysis - synthesis {
+                        0.0
+                    } else {
+                        hann(i - (analysis - synthesis), synthesis)
+                    };
+                    assert!((a[i] * b[i] - expected).abs() < 1e-12);
+                }
+                for algorithm in PitchAlgorithm::SPECTRAL {
+                    let mut dsp = PitchShifter::new(0.0, false, 0.0, algorithm, windows).unwrap();
+                    dsp.wet = 1.0;
+                    dsp.target_wet = 1.0;
+                    let input: Vec<f32> = (0..24000)
+                        .map(|i| {
+                            if i % 157 == 0 {
+                                0.5
+                            } else {
+                                (0.1 * (i as f64 * 0.13).sin()) as f32
+                            }
+                        })
+                        .collect();
+                    let mut output = vec![0.0; input.len()];
+                    dsp.process_block(&input, &mut output);
+                    assert!(output[..synthesis].iter().all(|x| x.abs() < 1e-6));
+                    for (expected, actual) in input.iter().zip(&output[synthesis..]) {
+                        assert!(
+                            (expected - actual).abs() < 1e-6,
+                            "{windows:?} {expected} != {actual}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn neutral_wet_path_reconstructs_at_declared_latency() {
-        let mut dsp = PitchShifter::new(0.0, false, 0.0, PitchAlgorithm::PhaseLocked).unwrap();
+        let mut dsp = PitchShifter::new(
+            0.0,
+            false,
+            0.0,
+            PitchAlgorithm::PhaseLocked,
+            crate::pitch::SpectralWindows::default(),
+        )
+        .unwrap();
         // Exercise the transform, rather than the public neutral bypass.
         dsp.wet = 1.0;
         dsp.target_wet = 1.0;

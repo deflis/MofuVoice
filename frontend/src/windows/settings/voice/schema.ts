@@ -10,6 +10,8 @@ export const voiceSchema = v.object({
     "td-psola-resampled",
     "fd-psola",
   ]),
+  analysisWindow: v.picklist([1024, 2048, 4096, 8192]),
+  synthesisWindow: v.picklist([256, 512, 1024, 2048]),
   pitch: numberRange(-12, 12, "ピッチ"),
   formantShift: numberRange(-12, 12, "フォルマント"),
   preserveFormants: v.boolean(),

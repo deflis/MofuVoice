@@ -15,6 +15,8 @@ export const settings = {
   },
   voice: {
     pitchAlgorithm: "phase-locked",
+    analysisWindow: 2048,
+    synthesisWindow: 512,
     pitch: 0,
     formantShift: 0,
     preserveFormants: true,

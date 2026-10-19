@@ -35,6 +35,10 @@ fn arguments(options: &Options) -> Vec<String> {
         options.sample_rate.to_string(),
         "--frames".into(),
         options.frames.to_string(),
+        "--analysis-window".into(),
+        options.pitch.windows.analysis.to_string(),
+        "--synthesis-window".into(),
+        options.pitch.windows.synthesis.to_string(),
         "--pitch".into(),
         options.pitch.semitones.to_string(),
         "--pitch-algorithm".into(),
@@ -129,6 +133,8 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
             "sample_rate",
             "pitch",
             "pitch_algorithm",
+            "analysis_window",
+            "synthesis_window",
             "formant_shift",
             "preserve_formants",
             "rumble_filter",
@@ -195,6 +201,10 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
         values.get("sample_rate").copied().unwrap_or("48000"),
         "--frames",
         value("frames")?,
+        "--analysis-window",
+        value("analysis_window")?,
+        "--synthesis-window",
+        value("synthesis_window")?,
         "--pitch",
         value("pitch")?,
         "--pitch-algorithm",
@@ -297,6 +307,8 @@ pub(crate) fn merge(saved: &Options, args: Vec<String>) -> Result<Options, Box<d
             "--sample-rate",
             "--pitch",
             "--pitch-algorithm",
+            "--analysis-window",
+            "--synthesis-window",
             "--formant-shift",
             "--formant",
             "--rumble-filter",
@@ -381,6 +393,10 @@ pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>>
         options.sample_rate,
         options.pitch.algorithm.name()
     ));
+    text.push_str(&format!(
+        "analysis_window={}\nsynthesis_window={}\n",
+        options.pitch.windows.analysis, options.pitch.windows.synthesis
+    ));
     text.push_str(&format!("rumble_filter={}\n", options.rumble_filter));
     text.push_str(&format!("deesser={}\n", options.deesser));
     text.push_str(&format!(
@@ -422,6 +438,33 @@ pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>>
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn spectral_windows_persist_merge_and_reject_invalid_or_missing_values() {
+        let path =
+            std::env::temp_dir().join(format!("spectral-windows-{}.ini", std::process::id()));
+        let options = super::Options::parse_gui(
+            ["--analysis-window", "4096", "--synthesis-window", "1024"].map(String::from),
+        )
+        .unwrap();
+        super::save(&path, &options).unwrap();
+        assert_eq!(
+            super::load(&path).unwrap().pitch.windows,
+            options.pitch.windows
+        );
+        assert_eq!(
+            super::merge(&options, vec![]).unwrap().pitch.windows,
+            options.pitch.windows
+        );
+        let text = std::fs::read_to_string(&path).unwrap();
+        for invalid in [
+            text.replace("analysis_window=4096", "analysis_window=1234"),
+            text.replace("synthesis_window=1024", "synthesis_window=128"),
+            text.replace("analysis_window=4096\n", ""),
+        ] {
+            assert!(super::decode(&invalid).is_err());
+        }
+        std::fs::remove_file(path).unwrap();
+    }
     #[test]
     fn pitch_algorithm_round_trips_and_defaults_for_existing_ini_files() {
         use crate::pitch::PitchAlgorithm;
@@ -751,12 +794,12 @@ mod tests {
             .join("settings.ini");
         let defaults = load(&path).unwrap();
         assert!(defaults.device.is_empty());
-        let options = decode("[gui]\ndevice=日本語 ASIO = Device\nframes=256\npitch_algorithm=phase-locked\npitch=-2.5\nformant_shift=3.25\npreserve_formants=true\ngate=true\ngate_threshold=-35\ngate_attack_ms=3\ngate_release_ms=120\nauto_level=true\ncompressor=true\nlevel_target_db=-18\nlevel_max_gain_db=6\nlevel_floor_db=-55\nlevel_response_ms=1200\ncompress_threshold_db=-10\ncompress_ratio=4\ncompress_attack_ms=3\ncompress_release_ms=100\neq=off\neq_mode=simple\neq_band1=250,0,0.7\neq_band2=3000,0,0.8\neq_band3=8000,0,0.7\neq_output=0\n").unwrap();
+        let options = decode("[gui]\nanalysis_window=2048\nsynthesis_window=512\ndevice=日本語 ASIO = Device\nframes=256\npitch_algorithm=phase-locked\npitch=-2.5\nformant_shift=3.25\npreserve_formants=true\ngate=true\ngate_threshold=-35\ngate_attack_ms=3\ngate_release_ms=120\nauto_level=true\ncompressor=true\nlevel_target_db=-18\nlevel_max_gain_db=6\nlevel_floor_db=-55\nlevel_response_ms=1200\ncompress_threshold_db=-10\ncompress_ratio=4\ncompress_attack_ms=3\ncompress_release_ms=100\neq=off\neq_mode=simple\neq_band1=250,0,0.7\neq_band2=3000,0,0.8\neq_band3=8000,0,0.7\neq_output=0\n").unwrap();
         save(&path, &options).unwrap();
         assert_eq!(load(&path).unwrap(), options);
         let invalid = Options {
             frames: 0,
-            ..decode("[gui]\ndevice=Other\nframes=512\npitch_algorithm=phase-locked\npitch=0\nformant_shift=0\npreserve_formants=true\ngate=false\ngate_threshold=auto\ngate_attack_ms=5\ngate_release_ms=80\nauto_level=false\ncompressor=false\nlevel_target_db=-20\nlevel_max_gain_db=9\nlevel_floor_db=-50\nlevel_response_ms=1500\ncompress_threshold_db=-12\ncompress_ratio=3\ncompress_attack_ms=5\ncompress_release_ms=150\neq=off\neq_mode=simple\neq_band1=250,0,0.7\neq_band2=3000,0,0.8\neq_band3=8000,0,0.7\neq_output=0\n").unwrap()
+            ..decode("[gui]\nanalysis_window=2048\nsynthesis_window=512\ndevice=Other\nframes=512\npitch_algorithm=phase-locked\npitch=0\nformant_shift=0\npreserve_formants=true\ngate=false\ngate_threshold=auto\ngate_attack_ms=5\ngate_release_ms=80\nauto_level=false\ncompressor=false\nlevel_target_db=-20\nlevel_max_gain_db=9\nlevel_floor_db=-50\nlevel_response_ms=1500\ncompress_threshold_db=-12\ncompress_ratio=3\ncompress_attack_ms=5\ncompress_release_ms=150\neq=off\neq_mode=simple\neq_band1=250,0,0.7\neq_band2=3000,0,0.8\neq_band3=8000,0,0.7\neq_output=0\n").unwrap()
         };
         assert!(save(&path, &invalid).is_err());
         assert_eq!(load(&path).unwrap(), options);
@@ -789,7 +832,7 @@ mod tests {
     }
     #[test]
     fn explicit_values_override_only_their_fields() {
-        let saved = decode("[gui]\ndevice=ASIO Device\nframes=256\npitch_algorithm=phase-locked\npitch=-3\nformant_shift=2\npreserve_formants=true\ngate=true\ngate_threshold=auto\ngate_attack_ms=5\ngate_release_ms=80\nauto_level=false\ncompressor=false\nlevel_target_db=-20\nlevel_max_gain_db=9\nlevel_floor_db=-50\nlevel_response_ms=1500\ncompress_threshold_db=-12\ncompress_ratio=3\ncompress_attack_ms=5\ncompress_release_ms=150\neq=off\neq_mode=simple\neq_band1=250,0,0.7\neq_band2=3000,0,0.8\neq_band3=8000,0,0.7\neq_output=0\n").unwrap();
+        let saved = decode("[gui]\nanalysis_window=2048\nsynthesis_window=512\ndevice=ASIO Device\nframes=256\npitch_algorithm=phase-locked\npitch=-3\nformant_shift=2\npreserve_formants=true\ngate=true\ngate_threshold=auto\ngate_attack_ms=5\ngate_release_ms=80\nauto_level=false\ncompressor=false\nlevel_target_db=-20\nlevel_max_gain_db=9\nlevel_floor_db=-50\nlevel_response_ms=1500\ncompress_threshold_db=-12\ncompress_ratio=3\ncompress_attack_ms=5\ncompress_release_ms=150\neq=off\neq_mode=simple\neq_band1=250,0,0.7\neq_band2=3000,0,0.8\neq_band3=8000,0,0.7\neq_output=0\n").unwrap();
         let result = merge(&saved, vec!["--pitch".into(), "4.5".into()]).unwrap();
         assert_eq!(result.pitch.semitones, 4.5);
         assert_eq!(result.device, saved.device);
@@ -820,7 +863,7 @@ mod tests {
     }
     #[test]
     fn ini_comments_order_and_invalid_entries() {
-        let text = "\u{feff}; preferences\r\n[gui]\r\n# voice\r\npreserve_formants = false\r\nformant_shift=0\r\npitch_algorithm=phase-locked\r\npitch = -2.5\r\nframes=256\r\ndevice=日本語 ASIO = Device\r\ngate=false\r\ngate_threshold=auto\r\ngate_attack_ms=5\r\ngate_release_ms=80\r\nauto_level=false\r\ncompressor=false\r\nlevel_target_db=-20\r\nlevel_max_gain_db=9\r\nlevel_floor_db=-50\r\nlevel_response_ms=1500\r\ncompress_threshold_db=-12\r\ncompress_ratio=3\r\ncompress_attack_ms=5\r\ncompress_release_ms=150\r\neq=off\r\neq_mode=simple\r\neq_band1=250,0,0.7\r\neq_band2=3000,0,0.8\r\neq_band3=8000,0,0.7\r\neq_output=0\r\n";
+        let text = "\u{feff}; preferences\r\n[gui]\r\nanalysis_window=2048\r\nsynthesis_window=512\r\n# voice\r\npreserve_formants = false\r\nformant_shift=0\r\npitch_algorithm=phase-locked\r\npitch = -2.5\r\nframes=256\r\ndevice=日本語 ASIO = Device\r\ngate=false\r\ngate_threshold=auto\r\ngate_attack_ms=5\r\ngate_release_ms=80\r\nauto_level=false\r\ncompressor=false\r\nlevel_target_db=-20\r\nlevel_max_gain_db=9\r\nlevel_floor_db=-50\r\nlevel_response_ms=1500\r\ncompress_threshold_db=-12\r\ncompress_ratio=3\r\ncompress_attack_ms=5\r\ncompress_release_ms=150\r\neq=off\r\neq_mode=simple\r\neq_band1=250,0,0.7\r\neq_band2=3000,0,0.8\r\neq_band3=8000,0,0.7\r\neq_output=0\r\n";
         let options = decode(text).unwrap();
         assert_eq!(options.device, "日本語 ASIO = Device");
         assert_eq!(options.frames, 256);
@@ -835,7 +878,10 @@ mod tests {
             format!("{text}unknown=1\n"),
             format!("{text}[other]\n"),
             text.replace("frames=256\r\n", ""),
-            text.replace("[gui]\r\n", ""),
+            text.replace(
+                "[gui]\r\nanalysis_window=2048\r\nsynthesis_window=512\r\n",
+                "",
+            ),
         ] {
             assert!(decode(&invalid).is_err(), "{invalid:?}");
         }
