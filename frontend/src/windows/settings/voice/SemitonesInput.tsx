@@ -18,7 +18,9 @@ export function SemitonesInput({
   onChange: (value: number) => void;
 }) {
   const number = percent ? Number(semitonesToPercent(value).toFixed(4)) : value;
-  const change = (number: number) => onChange(percent ? percentToSemitones(number) : number);
+  const change = (nextValue: number) =>
+    onChange(percent ? percentToSemitones(nextValue) : nextValue);
+  const neutral = percent ? 100 : 0;
   const sliderId = useId();
   return (
     <div className="semitones">
@@ -33,7 +35,7 @@ export function SemitonesInput({
           min={percent ? 50 : -12}
           max={percent ? 200 : 12}
           step={percent ? 0.1 : 0.01}
-          value={Number.isFinite(number) ? number : percent ? 100 : 0}
+          value={Number.isFinite(number) ? number : neutral}
           onChange={(event) => change(event.currentTarget.valueAsNumber)}
         />
         <NumberInput
