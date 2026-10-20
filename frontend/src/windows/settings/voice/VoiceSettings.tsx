@@ -1,4 +1,3 @@
-import { percentToSemitones, semitonesToPercent } from "./pitchUnits";
 import { pitchLatency } from "./latency";
 import { DetailsPopup } from "../DetailsPopup";
 import { useSettingsStore } from "../store";
@@ -6,8 +5,6 @@ import { useVoiceSettings } from "./hooks";
 import { SemitonesInput } from "./SemitonesInput";
 import * as v from "valibot";
 import { voiceSchema, type VoiceValues } from "./schema";
-
-const pitchPresets = [50, 75, 100, 110, 120, 125, 130, 140, 150, 175, 200];
 
 export function VoiceSettings() {
   const {
@@ -131,33 +128,7 @@ export function VoiceSettings() {
         </select>
       </label>
       {pitchUnit === "percent" && (
-        <>
-          <label>
-            ピッチの選択肢
-            <select
-              value={
-                pitchPresets.find(
-                  (preset) => Math.abs(semitonesToPercent(pitch) - preset) < 0.000001,
-                ) ?? "custom"
-              }
-              onChange={(event) => {
-                if (event.target.value !== "custom") {
-                  setPitch(percentToSemitones(Number(event.target.value)));
-                }
-              }}
-            >
-              <option value="custom" disabled>
-                カスタム
-              </option>
-              {pitchPresets.map((percent) => (
-                <option key={percent} value={percent}>
-                  {percent}%{percent === 100 ? "（元の高さ）" : ""}
-                </option>
-              ))}
-            </select>
-          </label>
-          <p>100%が元の高さ、50%で1オクターブ下、200%で1オクターブ上です。</p>
-        </>
+        <p>100%が元の高さ、50%で1オクターブ下、200%で1オクターブ上です。</p>
       )}
       <SemitonesInput
         percent={pitchUnit === "percent"}
