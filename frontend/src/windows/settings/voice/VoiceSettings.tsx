@@ -55,7 +55,7 @@ export function VoiceSettings() {
               setPitchAlgorithm(v.parse(voiceSchema.entries.pitchAlgorithm, event.target.value))
             }
           >
-            <optgroup label="スペクトル">
+            <optgroup label="フェーズボコーダー">
               <option value="phase-locked">位相ロック（標準）</option>
               <option value="pvsola-sync">スペクトル位相同期</option>
             </optgroup>
@@ -63,7 +63,7 @@ export function VoiceSettings() {
               <option value="pvsola">PVSOLA</option>
             </optgroup>
             <optgroup label="PSOLA">
-              <option value="td-psola">TD-PSOLA</option>
+              <option value="td-psola">TD-PSOLA＋フェーズボコーダー</option>
               <option value="td-psola-resampled">TD-PSOLA＋リサンプリング</option>
               <option value="fd-psola">FD-PSOLA</option>
             </optgroup>
@@ -82,7 +82,7 @@ export function VoiceSettings() {
           disabled={!vocoder}
         />
         <p>
-          位相ロック（標準）・スペクトル位相同期と、TD-PSOLA／FD-PSOLAに組み合わせるフォルマント補正に使います。
+          位相ロック（標準）・スペクトル位相同期と、TD-PSOLA＋フェーズボコーダー／FD-PSOLAのフォルマント補正に使います。
         </p>
         <label>
           PSOLAのピッチ推定
@@ -119,7 +119,7 @@ export function VoiceSettings() {
           disabled={!psola}
         />
         <p>
-          TD-PSOLAとTD-PSOLA＋リサンプリングはピッチ周期（波形単位）を基準にウィンドウを適用し、FD-PSOLAは解析ウィンドウと合成ウィンドウのサイズを設定します。設定値によって遅延時間や音質が変化します。
+          TD-PSOLA＋フェーズボコーダーとTD-PSOLA＋リサンプリングはピッチ周期（波形単位）を基準にウィンドウを適用し、FD-PSOLAは解析ウィンドウと合成ウィンドウのサイズを設定します。設定値によって遅延時間や音質が変化します。
         </p>
         <p>
           変換時のDSP遅延の合計：{((delay / sampleRate) * 1000).toFixed(1)}{" "}
@@ -191,7 +191,7 @@ export function VoiceSettings() {
 function algorithmDescription(algorithm: string): string {
   switch (algorithm) {
     case "td-psola":
-      return "TD-PSOLAで高さを変え、フォルマントの移動にはスペクトル処理を使います。DSP遅延はウィンドウ設定とフォルマント移動の有無で変わります。";
+      return "TD-PSOLA＋フェーズボコーダーは、TD-PSOLAで高さを変え、フォルマントの移動にはフェーズボコーダーを使います。DSP遅延はウィンドウ設定とフォルマント移動の有無で変わります。";
     case "td-psola-resampled":
       return "TD-PSOLA＋リサンプリングは、時間伸縮と帯域制限リサンプリングで高さとフォルマントを独立して変えます。DSP遅延はウィンドウ設定で変わります。";
     case "pvsola":
