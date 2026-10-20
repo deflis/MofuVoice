@@ -511,11 +511,91 @@ mod tests {
         }
     }
 
+    #[test]
+    fn reused_energy_preserves_mpm_voicing_periods_and_audio() {
+        for analysis in [1024, 2048, 4096, 8192] {
+            for rate in crate::SAMPLE_RATES {
+                let windows = crate::pitch::SpectralWindows {
+                    analysis,
+                    synthesis: 512,
+                };
+                let make = || {
+                    TdPsola::with_synthesis(
+                        Box::new(crate::td_synthesis::TdSynthesis::new(1.0, windows)),
+                        windows,
+                    )
+                };
+                let (mut reference, mut reused) = (make(), make());
+                for dsp in [&mut reference, &mut reused] {
+                    dsp.set_pitch_estimator(crate::pitch::PitchEstimator::Mpm);
+                }
+                reference.correlation = correlation::select_reference();
+                let mut seed = 17u32;
+                let mut phase = 0.0;
+                let mut maximum_audio_error = 0.0f64;
+                for i in 0..40000 {
+                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                    let noise = seed as f64 / u32::MAX as f64 - 0.5;
+                    phase += TAU * (60.0 + 290.0 * i as f64 / 40000.0) / rate as f64;
+                    let sample = match i / 5000 {
+                        0 | 4 => 0.0,
+                        1 | 5 => 0.1 * noise,
+                        _ => {
+                            0.001 * phase.cos()
+                                + 0.08 * (2.0 * phase).cos()
+                                + 0.06 * (3.0 * phase).cos()
+                                + 0.0001 * noise
+                        }
+                    };
+                    let ratio = [0.5, 2.0f64.powf(3.0 / 12.0), 2.0][i / 14000];
+                    let a = reference.push(sample, ratio);
+                    let b = reused.push(sample, ratio);
+                    maximum_audio_error = maximum_audio_error.max((a - b).abs());
+                    if i % HOP == HOP - 1 {
+                        assert_eq!(
+                            reference.next_analysis.is_some(),
+                            reused.next_analysis.is_some(),
+                            "rate={rate} window={analysis} sample={i}"
+                        );
+                        let cents = 1200.0 * (reference.period / reused.period).log2();
+                        assert!(
+                            cents.abs() < 1e-8,
+                            "rate={rate} window={analysis} sample={i} cents={cents}"
+                        );
+                        assert_eq!(reference.segment, reused.segment);
+                    }
+                }
+                assert!(
+                    maximum_audio_error < 1e-9,
+                    "rate={rate} window={analysis} audio error={maximum_audio_error:e}"
+                );
+                eprintln!("MPM energy reuse rate={rate} window={analysis} maximum audio error={maximum_audio_error:e}");
+            }
+        }
+    }
+
     // Manual performance comparison; no timing threshold in the test suite.
     #[test]
     #[ignore]
     fn benchmark_scalar_and_simd_pitch_analysis() {
+        benchmark_pitch_kernels(false);
+    }
+
+    #[test]
+    #[ignore]
+    fn benchmark_mpm_energy_reuse() {
+        benchmark_pitch_kernels(true);
+    }
+
+    fn benchmark_pitch_kernels(reference: bool) {
         use std::hint::black_box;
+        let baseline_label = if reference { "previous" } else { "scalar" };
+        let optimized_label = if reference { "reused" } else { "SIMD" };
+        let baseline_kernel = if reference {
+            correlation::select_reference()
+        } else {
+            correlation::scalar
+        };
         fn median(mut samples: Vec<f64>) -> f64 {
             samples.sort_by(f64::total_cmp);
             samples[samples.len() / 2]
@@ -549,6 +629,9 @@ mod tests {
             crate::pitch::PitchEstimator::Yin,
             crate::pitch::PitchEstimator::Mpm,
         ] {
+            if reference && estimator != crate::pitch::PitchEstimator::Mpm {
+                continue;
+            }
             for analysis in [1024, 2048, 4096, 8192] {
                 let windows = crate::pitch::SpectralWindows {
                     analysis,
@@ -567,7 +650,7 @@ mod tests {
                 for round in 0..8 {
                     for index in [round % 2, 1 - round % 2] {
                         dsp.correlation = if index == 0 {
-                            correlation::scalar
+                            baseline_kernel
                         } else {
                             correlation::select()
                         };
@@ -582,7 +665,7 @@ mod tests {
                 }
                 let scalar = median(times[0].clone());
                 let simd = median(times[1].clone());
-                eprintln!("analysis {estimator:?} window={analysis}: scalar={scalar:.2}us SIMD={simd:.2}us speedup={:.2}x", scalar / simd);
+                eprintln!("analysis {estimator:?} window={analysis}: {baseline_label}={scalar:.2}us {optimized_label}={simd:.2}us speedup={:.2}x", scalar / simd);
             }
             let input: Vec<_> = (0..24000)
                 .map(|i| {
@@ -597,7 +680,7 @@ mod tests {
                         let mut dsp = TdPsola::new(1.0);
                         dsp.set_pitch_estimator(estimator);
                         dsp.correlation = if index == 0 {
-                            correlation::scalar
+                            baseline_kernel
                         } else {
                             correlation::select()
                         };
@@ -613,7 +696,7 @@ mod tests {
                 }
                 let scalar = median(times[0].clone());
                 let simd = median(times[1].clone());
-                eprintln!("stream {estimator:?} {semitones:+}st: scalar={scalar:.2}ms SIMD={simd:.2}ms / 0.5s audio speedup={:.2}x", scalar / simd);
+                eprintln!("stream {estimator:?} {semitones:+}st: {baseline_label}={scalar:.2}ms {optimized_label}={simd:.2}ms / 0.5s audio speedup={:.2}x", scalar / simd);
             }
         }
     }
