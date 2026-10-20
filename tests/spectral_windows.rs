@@ -64,8 +64,7 @@ fn windows_validate_and_report_only_the_selected_algorithms_delay() {
     }
 }
 
-#[test]
-fn all_windows_preserve_neutral_bits_and_block_boundaries() {
+fn all_windows_preserve_neutral_bits_and_block_boundaries(windows: SpectralWindows) {
     let input: Vec<f32> = (0..32768)
         .map(|i| {
             if i % 113 == 0 {
@@ -77,101 +76,105 @@ fn all_windows_preserve_neutral_bits_and_block_boundaries() {
             }
         })
         .collect();
-    for windows in configurations() {
-        for algorithm in PitchAlgorithm::ALL {
-            let mut settings = PitchSettings {
+    for algorithm in PitchAlgorithm::ALL {
+        let mut settings = PitchSettings {
+            windows,
+            psola_windows: windows,
+            algorithm,
+            ..Default::default()
+        };
+        let mut output = vec![0.0; input.len()];
+        settings.build().unwrap().process_block(&input, &mut output);
+        assert!(input
+            .iter()
+            .zip(&output)
+            .all(|(a, b)| a.to_bits() == b.to_bits()));
+        let integers = [i32::MIN, -123456789, 0, 123456789, i32::MAX];
+        let mut integers_out = [0; 5];
+        settings
+            .build()
+            .unwrap()
+            .process_block(&integers, &mut integers_out);
+        assert_eq!(integers, integers_out);
+        let shorts = [i16::MIN, -123, 0, 123, i16::MAX];
+        let mut shorts_out = [0; 5];
+        settings
+            .build()
+            .unwrap()
+            .process_block(&shorts, &mut shorts_out);
+        assert_eq!(shorts, shorts_out);
+        settings.semitones = 7.0;
+        settings.formant_shift = 2.53;
+        settings.build().unwrap().process_block(&input, &mut output);
+        let mut chunked = vec![0.0; input.len()];
+        let mut dsp = settings.build().unwrap();
+        let mut position = 0;
+        for size in [1, 127, 129, 511, 3, 2049].into_iter().cycle() {
+            let end = (position + size).min(input.len());
+            dsp.process_block(&input[position..end], &mut chunked[position..end]);
+            position = end;
+            if position == input.len() {
+                break;
+            }
+        }
+        assert_eq!(output, chunked, "{windows:?} {algorithm:?}");
+        assert!(output.iter().all(|x| x.is_finite() && x.abs() <= 1.0));
+        assert!(
+            output[16384..].iter().any(|x| x.abs() > 0.01),
+            "{windows:?} {algorithm:?}"
+        );
+    }
+}
+
+fn configured_windows_keep_pitch_and_phase_continuous(windows: SpectralWindows) {
+    let input: Vec<f32> = (0..48000)
+        .map(|i| (0.2 * (std::f64::consts::TAU * 203.0 * i as f64 / 48000.0).sin()) as f32)
+        .collect();
+    for algorithm in PitchAlgorithm::SPECTRAL {
+        for semitones in [-12.0, -3.0, 3.0, 7.0, 12.0] {
+            let settings = PitchSettings {
                 windows,
                 psola_windows: windows,
                 algorithm,
-                ..Default::default()
+                semitones,
+                preserve_formants: false,
+                formant_shift: 0.0,
             };
             let mut output = vec![0.0; input.len()];
-            settings.build().unwrap().process_block(&input, &mut output);
-            assert!(input
-                .iter()
-                .zip(&output)
-                .all(|(a, b)| a.to_bits() == b.to_bits()));
-            let integers = [i32::MIN, -123456789, 0, 123456789, i32::MAX];
-            let mut integers_out = [0; 5];
-            settings
-                .build()
-                .unwrap()
-                .process_block(&integers, &mut integers_out);
-            assert_eq!(integers, integers_out);
-            let shorts = [i16::MIN, -123, 0, 123, i16::MAX];
-            let mut shorts_out = [0; 5];
-            settings
-                .build()
-                .unwrap()
-                .process_block(&shorts, &mut shorts_out);
-            assert_eq!(shorts, shorts_out);
-            settings.semitones = 7.0;
-            settings.formant_shift = 2.53;
-            settings.build().unwrap().process_block(&input, &mut output);
-            let mut chunked = vec![0.0; input.len()];
             let mut dsp = settings.build().unwrap();
-            let mut position = 0;
-            for size in [1, 127, 129, 511, 3, 2049].into_iter().cycle() {
-                let end = (position + size).min(input.len());
-                dsp.process_block(&input[position..end], &mut chunked[position..end]);
-                position = end;
-                if position == input.len() {
-                    break;
-                }
+            let start = std::time::Instant::now();
+            dsp.process_block(&input, &mut output);
+            let elapsed = start.elapsed();
+            let signal = &output[16384..];
+            let frequency = 203.0 * 2.0_f64.powf(semitones / 12.0);
+            let (mut re, mut im) = (0.0, 0.0);
+            for (i, &x) in signal.iter().enumerate() {
+                let angle = std::f64::consts::TAU * frequency * i as f64 / 48000.0;
+                re += x as f64 * angle.cos();
+                im += x as f64 * angle.sin();
             }
-            assert_eq!(output, chunked, "{windows:?} {algorithm:?}");
-            assert!(output.iter().all(|x| x.is_finite() && x.abs() <= 1.0));
+            let amplitude = 2.0 * re.hypot(im) / signal.len() as f64;
+            let residual = signal.iter().map(|x| (*x as f64).powi(2)).sum::<f64>()
+                / signal.len() as f64
+                - amplitude.powi(2) / 2.0;
+            eprintln!("{windows:?} {algorithm:?} pitch={semitones}: {elapsed:?}/audio second, amplitude={amplitude}, residual={residual}");
             assert!(
-                output[16384..].iter().any(|x| x.abs() > 0.01),
-                "{windows:?} {algorithm:?}"
+                (0.08..0.25).contains(&amplitude),
+                "{windows:?} {algorithm:?} pitch={semitones}: {amplitude}"
+            );
+            assert!(
+                residual < 0.001,
+                "{windows:?} {algorithm:?} pitch={semitones}: {residual}"
             );
         }
     }
 }
 
-#[test]
-fn configured_windows_keep_pitch_and_phase_continuous() {
-    let input: Vec<f32> = (0..48000)
-        .map(|i| (0.2 * (std::f64::consts::TAU * 203.0 * i as f64 / 48000.0).sin()) as f32)
-        .collect();
-    for windows in configurations() {
-        for algorithm in PitchAlgorithm::SPECTRAL {
-            for semitones in [-12.0, -3.0, 3.0, 7.0, 12.0] {
-                let settings = PitchSettings {
-                    windows,
-                    psola_windows: windows,
-                    algorithm,
-                    semitones,
-                    preserve_formants: false,
-                    formant_shift: 0.0,
-                };
-                let mut output = vec![0.0; input.len()];
-                let mut dsp = settings.build().unwrap();
-                let start = std::time::Instant::now();
-                dsp.process_block(&input, &mut output);
-                let elapsed = start.elapsed();
-                let signal = &output[16384..];
-                let frequency = 203.0 * 2.0_f64.powf(semitones / 12.0);
-                let (mut re, mut im) = (0.0, 0.0);
-                for (i, &x) in signal.iter().enumerate() {
-                    let angle = std::f64::consts::TAU * frequency * i as f64 / 48000.0;
-                    re += x as f64 * angle.cos();
-                    im += x as f64 * angle.sin();
-                }
-                let amplitude = 2.0 * re.hypot(im) / signal.len() as f64;
-                let residual = signal.iter().map(|x| (*x as f64).powi(2)).sum::<f64>()
-                    / signal.len() as f64
-                    - amplitude.powi(2) / 2.0;
-                eprintln!("{windows:?} {algorithm:?} pitch={semitones}: {elapsed:?}/audio second, amplitude={amplitude}, residual={residual}");
-                assert!(
-                    (0.08..0.25).contains(&amplitude),
-                    "{windows:?} {algorithm:?} pitch={semitones}: {amplitude}"
-                );
-                assert!(
-                    residual < 0.001,
-                    "{windows:?} {algorithm:?} pitch={semitones}: {residual}"
-                );
-            }
-        }
-    }
-}
+#[macro_use]
+#[path = "common/window_cases.rs"]
+mod window_cases;
+
+window_cases!(
+    all_windows_preserve_neutral_bits_and_block_boundaries,
+    configured_windows_keep_pitch_and_phase_continuous,
+);

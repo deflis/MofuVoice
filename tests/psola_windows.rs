@@ -1,18 +1,6 @@
 use rust_low_latency_voice_changer::pitch::{PitchAlgorithm, PitchSettings, SpectralWindows};
 use std::f64::consts::TAU;
 
-fn configurations() -> impl Iterator<Item = SpectralWindows> {
-    [1024, 2048, 4096, 8192].into_iter().flat_map(|analysis| {
-        [256, 512, 1024, 2048]
-            .into_iter()
-            .filter_map(move |synthesis| {
-                (synthesis <= analysis).then_some(SpectralWindows {
-                    analysis,
-                    synthesis,
-                })
-            })
-    })
-}
 const ALGORITHMS: [PitchAlgorithm; 3] = [
     PitchAlgorithm::TdPsola,
     PitchAlgorithm::TdPsolaResampled,
@@ -30,58 +18,58 @@ fn power(signal: &[f32], frequency: f64) -> f64 {
     re * re + im * im
 }
 
-#[test]
-fn configured_psola_windows_keep_pitch_and_measure_processing_per_setting() {
-    for windows in configurations() {
-        for algorithm in ALGORITHMS {
-            for semitones in [-12.0, -3.0, 3.0, 7.0, 12.0] {
-                let settings = PitchSettings {
-                    windows,
-                    psola_windows: windows,
-                    algorithm,
-                    semitones,
-                    preserve_formants: algorithm != PitchAlgorithm::FdPsola,
-                    ..Default::default()
-                };
-                let input: Vec<f32> = (0..48000)
-                    .map(|i| {
-                        let phase = TAU * 113.0 * i as f64 / 48000.0;
-                        (0.1 * phase.cos() + 0.02 * (3.0 * phase).cos()) as f32
-                    })
-                    .collect();
-                let mut output = vec![0.0; input.len()];
-                let mut dsp = settings.build().unwrap();
-                let start = std::time::Instant::now();
-                dsp.process_block(&input, &mut output);
-                eprintln!(
-                    "{windows:?} {algorithm:?} pitch={semitones}: {:?}/audio second",
-                    start.elapsed()
-                );
-                let signal = &output[24000..];
-                let expected = 113.0 * 2.0_f64.powf(semitones / 12.0);
-                let peak = (-8..=8)
-                    .map(|i| expected + i as f64 * 0.5)
-                    .max_by(|&a, &b| power(signal, a).total_cmp(&power(signal, b)))
-                    .unwrap();
-                assert!(
-                    (peak - expected).abs() <= 1.0,
-                    "{settings:?}: peak={peak}, expected={expected}"
-                );
-                assert!(
-                    power(signal, expected) > 1.0,
-                    "{settings:?}: lost voiced fundamental"
-                );
-                assert!(
-                    output.iter().all(|x| x.is_finite() && x.abs() < 0.9),
-                    "{settings:?}"
-                );
-            }
+fn configured_psola_windows_keep_pitch_and_measure_processing_per_setting(
+    windows: SpectralWindows,
+) {
+    for algorithm in ALGORITHMS {
+        for semitones in [-12.0, -3.0, 3.0, 7.0, 12.0] {
+            let settings = PitchSettings {
+                windows,
+                psola_windows: windows,
+                algorithm,
+                semitones,
+                preserve_formants: algorithm != PitchAlgorithm::FdPsola,
+                ..Default::default()
+            };
+            let input: Vec<f32> = (0..48000)
+                .map(|i| {
+                    let phase = TAU * 113.0 * i as f64 / 48000.0;
+                    (0.1 * phase.cos() + 0.02 * (3.0 * phase).cos()) as f32
+                })
+                .collect();
+            let mut output = vec![0.0; input.len()];
+            let mut dsp = settings.build().unwrap();
+            let start = std::time::Instant::now();
+            dsp.process_block(&input, &mut output);
+            eprintln!(
+                "{windows:?} {algorithm:?} pitch={semitones}: {:?}/audio second",
+                start.elapsed()
+            );
+            let signal = &output[24000..];
+            let expected = 113.0 * 2.0_f64.powf(semitones / 12.0);
+            let peak = (-8..=8)
+                .map(|i| expected + i as f64 * 0.5)
+                .map(|frequency| (frequency, power(signal, frequency)))
+                .max_by(|a, b| a.1.total_cmp(&b.1))
+                .unwrap()
+                .0;
+            assert!(
+                (peak - expected).abs() <= 1.0,
+                "{settings:?}: peak={peak}, expected={expected}"
+            );
+            assert!(
+                power(signal, expected) > 1.0,
+                "{settings:?}: lost voiced fundamental"
+            );
+            assert!(
+                output.iter().all(|x| x.is_finite() && x.abs() < 0.9),
+                "{settings:?}"
+            );
         }
     }
 }
 
-#[test]
-fn configured_psola_windows_preserve_and_shift_vowel_resonance() {
+fn configured_psola_windows_preserve_and_shift_vowel_resonance(windows: SpectralWindows) {
     let input: Vec<f32> = (0..48000)
         .map(|i| {
             let phase = TAU * 100.0 * i as f64 / 48000.0;
@@ -95,48 +83,47 @@ fn configured_psola_windows_preserve_and_shift_vowel_resonance() {
                 .sum::<f64>() as f32
         })
         .collect();
-    for windows in configurations() {
-        for algorithm in ALGORITHMS {
-            for formant_shift in [-4.0, 0.0, 4.0] {
-                let settings = PitchSettings {
-                    windows,
-                    psola_windows: windows,
-                    algorithm,
-                    semitones: 7.0,
-                    formant_shift,
-                    ..Default::default()
-                };
-                let mut output = vec![0.0; input.len()];
-                settings.build().unwrap().process_block(&input, &mut output);
-                let signal = &output[24000..];
-                let fundamental = 100.0 * 2.0_f64.powf(7.0 / 12.0);
-                let expected = 1500.0 * 2.0_f64.powf(formant_shift / 12.0);
-                let peak = (4..=20)
-                    .map(|h| h as f64 * fundamental)
-                    .max_by(|&a, &b| power(signal, a).total_cmp(&power(signal, b)))
-                    .unwrap();
-                // A short FD synthesis window broadens the reconstructed spectrum.
-                // Keep the existing 280 Hz bound except when two synthesis bins are wider.
-                let tolerance = if algorithm == PitchAlgorithm::FdPsola {
-                    280.0_f64.max(2.0 * 48000.0 / windows.synthesis as f64)
-                } else {
-                    280.0
-                };
-                assert!(
-                    (peak - expected).abs() < tolerance,
-                    "{settings:?}: resonance={peak}, expected={expected}"
-                );
-                assert!(
-                    output.iter().all(|x| x.is_finite() && x.abs() < 0.9),
-                    "{settings:?}"
-                );
-            }
+    for algorithm in ALGORITHMS {
+        for formant_shift in [-4.0, 0.0, 4.0] {
+            let settings = PitchSettings {
+                windows,
+                psola_windows: windows,
+                algorithm,
+                semitones: 7.0,
+                formant_shift,
+                ..Default::default()
+            };
+            let mut output = vec![0.0; input.len()];
+            settings.build().unwrap().process_block(&input, &mut output);
+            let signal = &output[24000..];
+            let fundamental = 100.0 * 2.0_f64.powf(7.0 / 12.0);
+            let expected = 1500.0 * 2.0_f64.powf(formant_shift / 12.0);
+            let peak = (4..=20)
+                .map(|h| h as f64 * fundamental)
+                .map(|frequency| (frequency, power(signal, frequency)))
+                .max_by(|a, b| a.1.total_cmp(&b.1))
+                .unwrap()
+                .0;
+            // A short FD synthesis window broadens the reconstructed spectrum.
+            // Keep the existing 280 Hz bound except when two synthesis bins are wider.
+            let tolerance = if algorithm == PitchAlgorithm::FdPsola {
+                280.0_f64.max(2.0 * 48000.0 / windows.synthesis as f64)
+            } else {
+                280.0
+            };
+            assert!(
+                (peak - expected).abs() < tolerance,
+                "{settings:?}: resonance={peak}, expected={expected}"
+            );
+            assert!(
+                output.iter().all(|x| x.is_finite() && x.abs() < 0.9),
+                "{settings:?}"
+            );
         }
     }
 }
 
-#[test]
-fn configured_psola_unvoiced_delay_matches_settings_after_ring_wrap() {
+fn configured_psola_unvoiced_delay_matches_settings_after_ring_wrap(windows: SpectralWindows) {
     let mut seed = 17_u32;
     let input: Vec<f32> = (0..72000)
         .map(|_| {
@@ -144,23 +131,31 @@ fn configured_psola_unvoiced_delay_matches_settings_after_ring_wrap() {
             (0.1 * (seed as f64 / u32::MAX as f64 - 0.5)) as f32
         })
         .collect();
-    for windows in configurations() {
-        for algorithm in ALGORITHMS {
-            let settings = PitchSettings {
-                windows,
-                psola_windows: windows,
-                algorithm,
-                semitones: 7.0,
-                ..Default::default()
-            };
-            let mut output = vec![0.0; input.len()];
-            settings.build().unwrap().process_block(&input, &mut output);
-            assert!(output[..settings.latency()].iter().all(|x| *x == 0.0));
-            assert_eq!(
-                &output[settings.latency()..],
-                &input[..input.len() - settings.latency()],
-                "{settings:?}"
-            );
-        }
+    for algorithm in ALGORITHMS {
+        let settings = PitchSettings {
+            windows,
+            psola_windows: windows,
+            algorithm,
+            semitones: 7.0,
+            ..Default::default()
+        };
+        let mut output = vec![0.0; input.len()];
+        settings.build().unwrap().process_block(&input, &mut output);
+        assert!(output[..settings.latency()].iter().all(|x| *x == 0.0));
+        assert_eq!(
+            &output[settings.latency()..],
+            &input[..input.len() - settings.latency()],
+            "{settings:?}"
+        );
     }
 }
+
+#[macro_use]
+#[path = "common/window_cases.rs"]
+mod window_cases;
+
+window_cases!(
+    configured_psola_windows_keep_pitch_and_measure_processing_per_setting,
+    configured_psola_windows_preserve_and_shift_vowel_resonance,
+    configured_psola_unvoiced_delay_matches_settings_after_ring_wrap,
+);
