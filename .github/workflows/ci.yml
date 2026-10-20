@@ -13,6 +13,17 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # CI does not need debugger symbols. Smaller artifacts also reduce Windows
+  # linker work and Cargo cache transfer time; release DSP settings stay intact.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  # Window-quality matrices process hundreds of seconds of audio. Optimize test
+  # execution while retaining test-profile debug assertions and overflow checks.
+  CARGO_PROFILE_TEST_OPT_LEVEL: "2"
+  # Incremental state is not reused by rust-cache across ephemeral runners.
+  CARGO_INCREMENTAL: "0"
+
 jobs:
   changes:
     runs-on: ubuntu-latest
@@ -156,9 +167,6 @@ jobs:
       - name: Test Windows ASIO backend
         run: "cargo test --no-default-features --features asio --locked --lib asio::"
 
-      - name: Test Windows native spectrum
-        run: cargo test --no-default-features --locked --test native_spectrum
-
   portable:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
@@ -181,6 +189,8 @@ jobs:
       - name: Check shared core without ASIO SDK
         run: cargo clippy --no-default-features --all-targets --locked -- -D warnings
       - name: Test portable core
+        # On Windows this includes tests/native_spectrum.rs, so the ASIO job
+        # does not need another no-default-features build to run it separately.
         run: cargo test --no-default-features --locked
 
   dsp:
@@ -195,6 +205,8 @@ jobs:
           shared-key: dsp-release
       - name: Validate DSP in release mode
         run: cargo test --no-default-features --release --locked
+      - name: Measure processing time per window and pitch
+        run: cargo bench --no-default-features --locked --bench window_settings
       - name: Measure DSP performance
         run: cargo bench --no-default-features --locked --bench spectral
 
