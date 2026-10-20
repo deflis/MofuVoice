@@ -177,6 +177,32 @@ test("PSOLA and vocoder window edits validate and persist independently", async 
   }
 });
 
+test("pitch display unit is saved and restored without changing pitch", async () => {
+  settingsStore.getState().voice.setPitch(3.25);
+  for (const pitchUnit of ["percent", "semitones"]) {
+    settingsStore.getState().voice.setPitchUnit(pitchUnit);
+    await settingsStore.getState().save();
+    const saved = calls("save_settings").at(-1).arguments[1].settings;
+    assert.equal(saved.voice.pitchUnit, pitchUnit);
+    assert.equal(saved.voice.pitch, 3.25);
+    handlers.set("settings_view", async () => ({ ...settingsView, settings: saved }));
+    assert.equal((await settingsApi.getView()).settings.voice.pitchUnit, pitchUnit);
+  }
+  const legacyVoice = { ...settings.voice };
+  delete legacyVoice.pitchUnit;
+  assert.equal(
+    v.parse(settingsSchema, { ...settings, voice: legacyVoice }).voice.pitchUnit,
+    "semitones",
+  );
+  for (const invalid of ["invalid", "", null]) {
+    assert.equal(
+      v.safeParse(settingsSchema, { ...settings, voice: { ...settings.voice, pitchUnit: invalid } })
+        .success,
+      false,
+    );
+  }
+});
+
 test("PSOLA estimator choice is saved and invalid estimators rejected", async () => {
   for (const estimator of ["yin", "mpm", "mpm-fft", "nccf"]) {
     settingsStore.getState().voice.setPsolaPitchEstimator(estimator);

@@ -8,6 +8,8 @@ import { voiceSchema, type VoiceValues } from "./schema";
 
 export function VoiceSettings() {
   const {
+    pitchUnit,
+    setPitchUnit,
     psolaPitchEstimator,
     setPsolaPitchEstimator,
     psolaAnalysisWindow,
@@ -113,7 +115,23 @@ export function VoiceSettings() {
         </p>
         <p>変更は保存後、次の音声開始時に反映します。PVSOLA論文方式は固定長です。</p>
       </DetailsPopup>
+      <label>
+        ピッチの表示単位
+        <select
+          value={pitchUnit}
+          onChange={(event) =>
+            setPitchUnit(v.parse(voiceSchema.entries.pitchUnit, event.target.value))
+          }
+        >
+          <option value="semitones">半音</option>
+          <option value="percent">パーセント</option>
+        </select>
+      </label>
+      {pitchUnit === "percent" && (
+        <p>100%が元の高さ、50%で1オクターブ下、200%で1オクターブ上です。</p>
+      )}
       <SemitonesInput
+        percent={pitchUnit === "percent"}
         lowerLabel="低く"
         upperLabel="高く"
         label="声の高さ（ピッチ）"

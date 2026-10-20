@@ -170,6 +170,7 @@ struct DeviceSettings {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct VoiceSettings {
+    pitch_unit: String,
     psola_pitch_estimator: String,
     psola_analysis_window: usize,
     psola_synthesis_window: usize,
@@ -203,6 +204,7 @@ impl Settings {
                 sample_rate: options.sample_rate,
             },
             voice: VoiceSettings {
+                pitch_unit: options.pitch_unit.clone(),
                 psola_pitch_estimator: options.pitch.psola_pitch_estimator.name().into(),
                 psola_analysis_window: options.pitch.psola_windows.analysis,
                 psola_synthesis_window: options.pitch.psola_windows.synthesis,
@@ -236,6 +238,7 @@ impl Settings {
         let mut options = Options {
             eq: self.eq.settings(),
             eq_mode: self.eq.mode.clone(),
+            pitch_unit: self.voice.pitch_unit.clone(),
             level: self.level.settings(),
             device: self.devices.device.clone(),
             output_device: self.devices.output_device.clone(),
@@ -1041,6 +1044,21 @@ mod tests {
         settings.voice.analysis_window = 1024;
         assert!(settings.options().is_err());
     }
+    #[test]
+    fn pitch_display_unit_controls_round_trip_and_reject_unknown_values() {
+        for unit in ["semitones", "percent"] {
+            let options = Options {
+                pitch_unit: unit.into(),
+                ..Options::default()
+            };
+            let mut settings = Settings::from_options(&options);
+            assert_eq!(settings.voice.pitch_unit, unit);
+            assert_eq!(settings.options().unwrap(), options);
+            settings.voice.pitch_unit = "invalid".into();
+            assert!(settings.options().is_err());
+        }
+    }
+
     #[test]
     fn pitch_estimator_controls_round_trip_and_reject_unknown_values() {
         for estimator in crate::pitch::PitchEstimator::ALL {
