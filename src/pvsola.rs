@@ -5,7 +5,7 @@
 //! aligned against the completed vocoder output by cross-correlation and
 //! overlap-added, resetting the vocoder phases as described by Moinet & Dutoit.
 //! All storage is allocated at construction; the audio callback does no I/O.
-use crate::dsp::{complex::Complex, fft::Fft, window::hann};
+use crate::dsp::{complex::Complex, fft::Fft, phase, window::hann};
 
 const FRAME: usize = 1024;
 const HOP: usize = FRAME / 4;
@@ -23,6 +23,7 @@ const _: () = assert!(LATENCY >= FRAME + (FRAME + TOLERANCE) * 2 + RESAMPLE_RADI
 pub(crate) struct PvsOla {
     fft: Fft,
     correlation_fft: Fft,
+    vector_phase: bool,
     correlation_output: Box<[Complex; CORRELATION_SIZE]>,
     correlation_input: Box<[Complex; CORRELATION_SIZE]>,
     input: Box<[f64; RING]>,
@@ -60,6 +61,16 @@ impl PvsOla {
         let window = Box::new(std::array::from_fn(|i| hann(i, FRAME)));
         Self {
             fft: Fft::new(FRAME),
+            vector_phase: {
+                #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+                {
+                    std::is_x86_feature_detected!("avx2")
+                }
+                #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+                {
+                    false
+                }
+            },
             correlation_fft: Fft::new(CORRELATION_SIZE),
             correlation_output: Box::new([Complex::default(); CORRELATION_SIZE]),
             correlation_input: Box::new([Complex::default(); CORRELATION_SIZE]),
@@ -180,6 +191,19 @@ impl PvsOla {
         }
     }
 
+    // Both regular frames and correlation resets use the same spectral analysis.
+    // Dispatch is detected once at construction; buffers are reused in callbacks.
+    fn analyze_spectrum(&mut self) {
+        phase::angles(
+            &self.frame[..],
+            &mut self.current_phase[..],
+            self.vector_phase,
+        );
+        for (value, magnitude) in self.frame.iter().zip(self.magnitude.iter_mut()) {
+            *magnitude = value.re.hypot(value.im);
+        }
+    }
+
     fn vocode_frame(&mut self, output_start: usize) {
         for i in 0..FRAME {
             let position = self.analysis_position + i as f64;
@@ -201,13 +225,7 @@ impl PvsOla {
             HOP as f64 / self.ratio
         };
         let stretch = HOP as f64 / alpha;
-        for bin in 0..FRAME {
-            let value = self.frame[bin];
-            let magnitude = value.re.hypot(value.im);
-            let phase = value.im.atan2(value.re);
-            self.current_phase[bin] = phase;
-            self.magnitude[bin] = magnitude;
-        }
+        self.analyze_spectrum();
         if self.preserve_formants && (self.ratio != 1.0 || self.formant_ratio != 1.0) {
             for bin in 0..FRAME {
                 self.frame[bin] = Complex {
@@ -367,11 +385,7 @@ impl PvsOla {
             };
         }
         self.fft.forward(&mut self.frame[..]);
-        for bin in 0..FRAME {
-            let value = self.frame[bin];
-            self.magnitude[bin] = value.re.hypot(value.im);
-            self.current_phase[bin] = value.im.atan2(value.re);
-        }
+        self.analyze_spectrum();
         if self.preserve_formants && (self.ratio != 1.0 || self.formant_ratio != 1.0) {
             for bin in 0..FRAME {
                 self.frame[bin] = Complex {
@@ -474,6 +488,27 @@ fn wrap(phase: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_analysis_matches_scalar_for_regular_frames_and_resets() {
+        for ratio in [0.5, 0.83, 1.3, 2.0] {
+            for preserve in [false, true] {
+                let mut scalar = PvsOla::new(ratio, preserve, 1.1);
+                scalar.vector_phase = false;
+                let mut vector = PvsOla::new(ratio, preserve, 1.1);
+                for i in 0..24000 {
+                    let input = 0.1 * (i as f64 * 0.071).sin() + 0.03 * (i as f64 * 0.213).cos();
+                    let expected = scalar.push(input, ratio, preserve, 1.1);
+                    let actual = vector.push(input, ratio, preserve, 1.1);
+                    assert!(
+                        (actual - expected).abs() < 1e-10,
+                        "ratio={ratio}, preserve={preserve}, sample={i}: {actual} != {expected}"
+                    );
+                }
+                assert!(vector.previous_valid);
+            }
+        }
+    }
 
     #[test]
     fn fractional_analysis_hops_keep_the_vocoder_frame_real() {
