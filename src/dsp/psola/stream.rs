@@ -295,8 +295,7 @@ impl PsolaStream {
                 }
                 lag += 1;
             }
-            if best >= MIN_LAG
-                && best <= MAX_LAG
+            if (MIN_LAG..=MAX_LAG).contains(&best)
                 && self.difference[best] >= self.difference[best - 1]
                 && self.difference[best] > self.difference[best + 1]
             {
