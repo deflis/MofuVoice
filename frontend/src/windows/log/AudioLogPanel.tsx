@@ -1,3 +1,4 @@
+import styles from "../../styles.module.css";
 import { useLogStore } from "./store";
 
 export function AudioLogPanel() {
@@ -5,8 +6,8 @@ export function AudioLogPanel() {
   const metrics = log?.telemetry;
   const elapsedSeconds = log?.elapsedSeconds;
   return (
-    <div className="log-panel">
-      <dl className="status-grid">
+    <div className={styles["log-panel"]}>
+      <dl className={styles["status-grid"]}>
         <div>
           <dt>経過時間</dt>
           <dd>
@@ -100,7 +101,7 @@ export function AudioLogPanel() {
           </>
         )}
       </dl>
-      <p className="muted">
+      <p className={styles.muted}>
         非ゼロ入力は信号の到着を示します。タイムスタンプが0または未取得の場合、欠落検出は利用できません。
       </p>
     </div>

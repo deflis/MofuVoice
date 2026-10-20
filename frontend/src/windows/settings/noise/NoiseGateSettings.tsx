@@ -1,3 +1,4 @@
+import styles from "../../../styles.module.css";
 import { NumberInput } from "../NumberInput";
 import { DetailsPopup } from "../DetailsPopup";
 import { useNoiseGateSettings } from "./hooks";
@@ -18,9 +19,9 @@ export function NoiseGateSettings() {
   const automatic = thresholdMode === "auto";
   return (
     <section>
-      <div className="section-heading">
+      <div>
         <h2>話していないときの雑音を減らす（ノイズゲート）</h2>
-        <label className="check">
+        <label className={styles.check}>
           <input
             type="checkbox"
             checked={enabled}
@@ -29,7 +30,7 @@ export function NoiseGateSettings() {
           有効
         </label>
       </div>
-      <fieldset className="settings" disabled={!enabled} hidden={!enabled}>
+      <fieldset className={styles.settings} disabled={!enabled} hidden={!enabled}>
         <DetailsPopup title="ノイズゲート" buttonLabel="詳細設定">
           <div>
             <div>
@@ -65,7 +66,7 @@ export function NoiseGateSettings() {
           </div>
 
           <p>アタックは音が通り始める速さ、リリースは話し終わったあとに音を閉じる速さです。</p>
-          <div className="level-fields">
+          <div className={styles["level-fields"]}>
             <label>
               アタック（ms）
               <NumberInput

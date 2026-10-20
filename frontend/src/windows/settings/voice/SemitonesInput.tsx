@@ -1,3 +1,4 @@
+import styles from "../../../styles.module.css";
 import { NumberInput } from "../NumberInput";
 import { useId } from "react";
 
@@ -17,12 +18,12 @@ export function SemitonesInput({
   const number = value;
   const sliderId = useId();
   return (
-    <div className="semitones">
+    <div className={styles.semitones}>
       <label htmlFor={sliderId}>
         {label}
         <small>半音</small>
       </label>
-      <div className="slider-row">
+      <div className={styles["slider-row"]}>
         <input
           id={sliderId}
           type="range"
@@ -42,7 +43,7 @@ export function SemitonesInput({
           value={value}
           onChange={(event) => onChange(event.currentTarget.valueAsNumber)}
         />
-        <div className="eq-scale">
+        <div className={styles["eq-scale"]}>
           <span>{lowerLabel}</span>
           <span>元の声</span>
           <span>{upperLabel}</span>

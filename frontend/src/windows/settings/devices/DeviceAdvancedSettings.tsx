@@ -1,3 +1,4 @@
+import styles from "../../../styles.module.css";
 import { NumberInput } from "../NumberInput";
 import { DetailsPopup } from "../DetailsPopup";
 import { ChannelRoutingDetails } from "./ChannelRoutingSettings";
@@ -6,9 +7,9 @@ import { useBackendSettings, useBufferSettings } from "./hooks";
 function BackendSettings() {
   const { backend, backends, changeBackend } = useBackendSettings();
   return (
-    <fieldset className="settings">
+    <fieldset className={styles.settings}>
       <legend>音声バックエンド</legend>
-      <div className="routing-choices">
+      <div className={styles["routing-choices"]}>
         {backends.map((available) => (
           <button
             key={available}

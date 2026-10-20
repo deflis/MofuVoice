@@ -1,3 +1,4 @@
+import styles from "../../../styles.module.css";
 import { NumberField } from "../NumberField";
 import { DetailsPopup } from "../DetailsPopup";
 import { useAutoLevelSettings } from "./hooks";
@@ -8,7 +9,7 @@ export function AutoLevelSettings() {
       <section>
         <h2>音量の自動調整</h2>
         <p>声の平均音量を目標に近づけます。</p>
-        <label className="check">
+        <label className={styles.check}>
           <input
             type="checkbox"
             checked={level.enabled}
@@ -16,9 +17,9 @@ export function AutoLevelSettings() {
           />
           有効
         </label>
-        <fieldset className="settings" disabled={!level.enabled} hidden={!level.enabled}>
+        <fieldset className={styles.settings} disabled={!level.enabled} hidden={!level.enabled}>
           <DetailsPopup title="音量の自動調整" buttonLabel="詳細設定">
-            <div className="level-fields">
+            <div className={styles["level-fields"]}>
               <NumberField
                 label="目標音量（dBFS・RMS）"
                 value={level.targetDb}
@@ -61,7 +62,7 @@ export function AutoLevelSettings() {
       <section>
         <h2>コンプレッサー</h2>
         <p>大きな声を抑え、音量差を小さくします。</p>
-        <label className="check">
+        <label className={styles.check}>
           <input
             type="checkbox"
             checked={level.compressorEnabled}
@@ -70,12 +71,12 @@ export function AutoLevelSettings() {
           有効
         </label>
         <fieldset
-          className="settings"
+          className={styles.settings}
           disabled={!level.compressorEnabled}
           hidden={!level.compressorEnabled}
         >
           <DetailsPopup title="コンプレッサー" buttonLabel="詳細設定">
-            <div className="level-fields">
+            <div className={styles["level-fields"]}>
               <NumberField
                 label="圧縮しきい値（dBFS）"
                 value={level.thresholdDb}

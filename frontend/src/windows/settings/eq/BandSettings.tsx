@@ -1,3 +1,4 @@
+import styles from "../../../styles.module.css";
 import { useId } from "react";
 import { NumberField } from "../NumberField";
 import type { EqBand } from "../../../types";
@@ -13,7 +14,7 @@ export function EqSimpleBand({ title, left, right, value, onChange }: SimpleProp
   const id = useId();
   const valid = Number.isFinite(value) && Math.abs(value) <= 12;
   return (
-    <div className="eq-simple-band">
+    <div className={styles["eq-simple-band"]}>
       <label htmlFor={id}>{title} </label>
       <input
         id={id}
@@ -25,7 +26,7 @@ export function EqSimpleBand({ title, left, right, value, onChange }: SimpleProp
         disabled={!valid}
         onChange={(event) => onChange(event.currentTarget.valueAsNumber)}
       />
-      <div className="eq-scale">
+      <div className={styles["eq-scale"]}>
         <span>{left}</span>
         <span>そのまま</span>
         <span>{right}</span>
@@ -43,9 +44,9 @@ type DetailsProps = {
 };
 export function EqBandDetails({ title, band, setFrequency, setGainDb, setQ }: DetailsProps) {
   return (
-    <fieldset className="eq-pro-band">
+    <fieldset className={styles["eq-pro-band"]}>
       <legend>{title}</legend>
-      <div className="eq-fields">
+      <div className={styles["eq-fields"]}>
         <NumberField
           label="周波数（Hz）"
           value={band.frequency}
