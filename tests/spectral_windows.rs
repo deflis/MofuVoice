@@ -20,13 +20,27 @@ fn windows_validate_and_report_only_the_selected_algorithms_delay() {
         for algorithm in PitchAlgorithm::ALL {
             let settings = PitchSettings {
                 windows,
+                psola_windows: windows,
                 algorithm,
                 ..Default::default()
             };
             let expected = if PitchAlgorithm::SPECTRAL.contains(&algorithm) {
                 windows.synthesis
-            } else {
+            } else if algorithm == PitchAlgorithm::Pvsola {
                 algorithm.latency()
+            } else {
+                let left = (1600.0 * 2.0
+                    / (1.0 + (windows.synthesis as f64 / windows.analysis as f64).sqrt()))
+                .ceil() as usize;
+                (windows.analysis / 2
+                    + 400
+                    + 16
+                    + 1600
+                    + left.max(windows.synthesis / 2)
+                    + 128
+                    + 66)
+                    .div_ceil(128)
+                    * 128
             };
             assert_eq!(settings.latency(), expected);
         }
@@ -57,14 +71,17 @@ fn all_windows_preserve_neutral_bits_and_block_boundaries() {
             if i % 113 == 0 {
                 -0.0
             } else {
-                (0.1 * (i as f64 * 0.017).sin()) as f32
+                (1..=12)
+                    .map(|h| (0.025 / h as f64) * (i as f64 * 0.017 * h as f64).cos())
+                    .sum::<f64>() as f32
             }
         })
         .collect();
     for windows in configurations() {
-        for algorithm in PitchAlgorithm::SPECTRAL {
+        for algorithm in PitchAlgorithm::ALL {
             let mut settings = PitchSettings {
                 windows,
+                psola_windows: windows,
                 algorithm,
                 ..Default::default()
             };
@@ -104,7 +121,10 @@ fn all_windows_preserve_neutral_bits_and_block_boundaries() {
             }
             assert_eq!(output, chunked, "{windows:?} {algorithm:?}");
             assert!(output.iter().all(|x| x.is_finite() && x.abs() <= 1.0));
-            assert!(output[16384..].iter().any(|x| x.abs() > 0.01));
+            assert!(
+                output[16384..].iter().any(|x| x.abs() > 0.01),
+                "{windows:?} {algorithm:?}"
+            );
         }
     }
 }
@@ -119,6 +139,7 @@ fn configured_windows_keep_pitch_and_phase_continuous() {
             for semitones in [-12.0, -3.0, 3.0, 7.0, 12.0] {
                 let settings = PitchSettings {
                     windows,
+                    psola_windows: windows,
                     algorithm,
                     semitones,
                     preserve_formants: false,

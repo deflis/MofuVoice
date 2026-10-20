@@ -1,12 +1,17 @@
+import { pitchLatency } from "./latency";
 import { DetailsPopup } from "../DetailsPopup";
 import { useSettingsStore } from "../store";
 import { useVoiceSettings } from "./hooks";
 import { SemitonesInput } from "./SemitonesInput";
 import * as v from "valibot";
-import { voiceSchema } from "./schema";
+import { voiceSchema, type VoiceValues } from "./schema";
 
 export function VoiceSettings() {
   const {
+    psolaAnalysisWindow,
+    psolaSynthesisWindow,
+    setPsolaAnalysisWindow,
+    setPsolaSynthesisWindow,
     analysisWindow,
     synthesisWindow,
     setAnalysisWindow,
@@ -21,7 +26,18 @@ export function VoiceSettings() {
     setPreserveFormants,
   } = useVoiceSettings();
   const sampleRate = useSettingsStore((state) => state.devices.sampleRate);
-  const spectral = pitchAlgorithm === "phase-locked" || pitchAlgorithm === "pvsola-sync";
+  const delay = pitchLatency(
+    pitchAlgorithm,
+    synthesisWindow,
+    psolaAnalysisWindow,
+    psolaSynthesisWindow,
+    formantShift,
+  );
+  const psola = pitchAlgorithm === "fd-psola" || pitchAlgorithm.startsWith("td-psola");
+  const vocoder =
+    pitchAlgorithm === "phase-locked" ||
+    pitchAlgorithm === "pvsola-sync" ||
+    ((pitchAlgorithm === "td-psola" || pitchAlgorithm === "fd-psola") && formantShift !== 0);
   const tdPsola = pitchAlgorithm === "td-psola" || pitchAlgorithm === "td-psola-resampled";
   return (
     <section>
@@ -47,63 +63,33 @@ export function VoiceSettings() {
           同じピッチ・響きの設定で聞き比べてください。変更は保存後、次の音声開始時に反映します。
         </p>
         <p>{algorithmDescription(pitchAlgorithm)}</p>
-        <fieldset className="settings" disabled={!spectral}>
-          <label>
-            解析ウィンドウ長
-            <select
-              value={analysisWindow}
-              onChange={(event) =>
-                setAnalysisWindow(
-                  v.parse(voiceSchema.entries.analysisWindow, Number(event.target.value)),
-                )
-              }
-            >
-              {[1024, 2048, 4096, 8192].map((size) => (
-                <option key={size} value={size}>
-                  {size}サンプル（{((size / sampleRate) * 1000).toFixed(1)} ms）
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            合成ウィンドウ長
-            <select
-              value={synthesisWindow}
-              onChange={(event) =>
-                setSynthesisWindow(
-                  v.parse(voiceSchema.entries.synthesisWindow, Number(event.target.value)),
-                )
-              }
-            >
-              {[256, 512, 1024, 2048]
-                .filter((size) => size <= analysisWindow)
-                .map((size) => (
-                  <option key={size} value={size}>
-                    {size}サンプル（{((size / sampleRate) * 1000).toFixed(1)} ms）
-                  </option>
-                ))}
-            </select>
-          </label>
-          <p>
-            解析ウィンドウ長を長くすると周波数を細かく分析できます。合成ウィンドウ長を短くすると遅延を減らせます。音質は声や設定によって変わるため、聞き比べて調整してください。
-          </p>
-          <p>
-            変換時のDSP遅延：{((synthesisWindow / sampleRate) * 1000).toFixed(1)}{" "}
-            ms。高さと響きがともに0の場合は0 msです。入出力バッファーと機器の遅延は含みません。
-          </p>
-          <button
-            type="button"
-            onClick={() => {
-              setAnalysisWindow(2048);
-              setSynthesisWindow(512);
-            }}
-          >
-            ウィンドウ長を標準に戻す
-          </button>
-        </fieldset>
+        <WindowControls
+          title="ボコーダーのウィンドウ"
+          analysis={analysisWindow}
+          synthesis={synthesisWindow}
+          setAnalysis={setAnalysisWindow}
+          setSynthesis={setSynthesisWindow}
+          disabled={!vocoder}
+        />
         <p>
-          フェーズロックとスペクトル位相同期に適用します。変更は保存後、次の音声開始時に反映します。
+          フェーズロック・スペクトル位相同期と、TD-PSOLA／FD-PSOLAに組み合わせる響きの補正に使います。
         </p>
+        <WindowControls
+          title="PSOLAのウィンドウ"
+          analysis={psolaAnalysisWindow}
+          synthesis={psolaSynthesisWindow}
+          setAnalysis={setPsolaAnalysisWindow}
+          setSynthesis={setPsolaSynthesisWindow}
+          disabled={!psola}
+        />
+        <p>
+          TD系は粒子全体の長さを保って左右に振り分け、FD系は解析窓と合成窓を設定します。TD系の値は粒子の固定サンプル長ではありません。音質は声や設定によって変わります。
+        </p>
+        <p>
+          変換時のDSP遅延の合計：{((delay / sampleRate) * 1000).toFixed(1)}{" "}
+          ms。高さと響きがともに0の場合は0 msです。入出力バッファーと機器の遅延は含みません。
+        </p>
+        <p>変更は保存後、次の音声開始時に反映します。PVSOLA論文方式は固定長です。</p>
       </DetailsPopup>
       <SemitonesInput
         lowerLabel="低く"
@@ -151,16 +137,80 @@ export function VoiceSettings() {
 function algorithmDescription(algorithm: string): string {
   switch (algorithm) {
     case "td-psola":
-      return "TD-PSOLAで高さを変え、響きの移動にはスペクトル処理を使います。DSP遅延は48 kHzで96 ms、響きの移動時に約106.7 msです。";
+      return "TD-PSOLAで高さを変え、響きの移動にはスペクトル処理を使います。DSP遅延はウィンドウ設定と響きの移動の有無で変わります。";
     case "td-psola-resampled":
-      return "TD-PSOLAの時間伸縮と帯域制限リサンプリングで高さと響きを独立して変えます。DSP遅延は48 kHzで96 msです。";
+      return "TD-PSOLAの時間伸縮と帯域制限リサンプリングで高さと響きを独立して変えます。DSP遅延はウィンドウ設定で変わります。";
     case "pvsola":
       return "PVSOLA論文方式は位相ボコーダーで時間伸縮し、相互相関で整列した入力フレームを周期的に挿入してから再生速度を変えます。DSP遅延は48 kHzで約96 msです。響きの保持と独立調整に対応します。";
     case "pvsola-sync":
       return "スペクトル位相同期は既存の直接スペクトル変換方式です。主要な周波数成分の相関を使って位相を補正します。DSP遅延は詳細設定の合成ウィンドウ長で変わります。";
     case "fd-psola":
-      return "FD-PSOLAはピッチ同期フレームのスペクトルを変換します。フォルマント保持を有効にすると響きの包絡を維持します。DSP遅延は48 kHzで96 ms、響きの移動時に約106.7 msです。";
+      return "FD-PSOLAはピッチ同期フレームのスペクトルを変換します。フォルマント保持を有効にすると響きの包絡を維持します。DSP遅延はウィンドウ設定と響きの移動の有無で変わります。";
     default:
       return "フェーズロックは周波数成分の位相関係を保ちながら高さを変えます。DSP遅延は合成ウィンドウ長で変わります。";
   }
+}
+
+function WindowControls({
+  title,
+  analysis,
+  synthesis,
+  setAnalysis,
+  setSynthesis,
+  disabled,
+}: {
+  title: string;
+  analysis: VoiceValues["analysisWindow"];
+  synthesis: VoiceValues["synthesisWindow"];
+  setAnalysis: (value: VoiceValues["analysisWindow"]) => void;
+  setSynthesis: (value: VoiceValues["synthesisWindow"]) => void;
+  disabled: boolean;
+}) {
+  const sampleRate = useSettingsStore((state) => state.devices.sampleRate);
+  return (
+    <fieldset className="settings" disabled={disabled}>
+      <legend>{title}</legend>
+      <label>
+        解析ウィンドウ長
+        <select
+          value={analysis}
+          onChange={(event) =>
+            setAnalysis(v.parse(voiceSchema.entries.analysisWindow, Number(event.target.value)))
+          }
+        >
+          {([1024, 2048, 4096, 8192] as const).map((size) => (
+            <option key={size} value={size}>
+              {size}サンプル（{((size / sampleRate) * 1000).toFixed(1)} ms）
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        合成ウィンドウ長
+        <select
+          value={synthesis}
+          onChange={(event) =>
+            setSynthesis(v.parse(voiceSchema.entries.synthesisWindow, Number(event.target.value)))
+          }
+        >
+          {([256, 512, 1024, 2048] as const)
+            .filter((size) => size <= analysis)
+            .map((size) => (
+              <option key={size} value={size}>
+                {size}サンプル（{((size / sampleRate) * 1000).toFixed(1)} ms）
+              </option>
+            ))}
+        </select>
+      </label>
+      <button
+        type="button"
+        onClick={() => {
+          setAnalysis(2048);
+          setSynthesis(512);
+        }}
+      >
+        この段のウィンドウ長を標準に戻す
+      </button>
+    </fieldset>
+  );
 }

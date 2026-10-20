@@ -31,6 +31,7 @@ fn voiced_glides_keep_the_fundamental_phase_continuous() {
                 0.0,
                 algorithm,
                 rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+                Default::default(),
             )
             .unwrap()
             .process_block(&input, &mut output);
@@ -118,6 +119,7 @@ fn voiced_harmonics_keep_their_relative_phase_shape() {
                             0.0,
                             algorithm,
                             rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+                            Default::default(),
                         )
                         .unwrap()
                         .process_block(&input, &mut output);

@@ -72,6 +72,7 @@ fn main() {
                             shift,
                             algorithm,
                             rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+                            Default::default(),
                         )
                         .unwrap();
                         let mut level = LevelSettings {

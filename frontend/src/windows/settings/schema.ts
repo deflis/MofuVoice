@@ -17,6 +17,10 @@ export const settingsSchema = v.pipe(
     level: levelSchema,
   }),
   v.check(
+    (settings) => settings.voice.psolaSynthesisWindow <= settings.voice.psolaAnalysisWindow,
+    "PSOLAの合成ウィンドウ長は解析ウィンドウ長以下にしてください。",
+  ),
+  v.check(
     (settings) => settings.voice.synthesisWindow <= settings.voice.analysisWindow,
     "合成ウィンドウ長は解析ウィンドウ長以下にしてください。",
   ),

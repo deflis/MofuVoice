@@ -8,6 +8,7 @@ fn shifter(pitch: f64, preserve_formants: bool) -> PitchShifter {
         0.0,
         PitchAlgorithm::FdPsola,
         rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+        Default::default(),
     )
     .unwrap()
 }
@@ -146,13 +147,14 @@ fn fd_psola_applies_independent_formant_shift_and_emits_audio() {
         .collect();
     for shift in [-4.0, 4.0] {
         let settings = PitchSettings {
+            psola_windows: Default::default(),
             windows: Default::default(),
             algorithm: PitchAlgorithm::FdPsola,
             semitones: 0.0,
             preserve_formants: true,
             formant_shift: shift,
         };
-        assert_eq!(settings.latency(), 5120);
+        assert_eq!(settings.latency(), 5888);
         let mut output = vec![0.0; input.len()];
         settings.build().unwrap().process_block(&input, &mut output);
         let signal = &output[16384..];

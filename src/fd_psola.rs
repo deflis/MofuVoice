@@ -6,36 +6,38 @@
 //! synthesis-mark schedule are owned by the streaming PSOLA stage.
 use crate::dsp::{complex::Complex, fft::Fft};
 
-/// Fixed frame size for the first FD-PSOLA implementation. At 48 kHz this
-/// accommodates the longest analysis support used by the current voice range.
-pub(crate) const FRAME: usize = 2048;
-pub(crate) const LATENCY: usize = crate::psola_common::LATENCY;
-const _: () = assert!(
-    LATENCY
-        >= crate::psola_common::LOOKAHEAD + 2 * crate::psola_common::MAX_PERIOD + FRAME / 2 + 128
-);
-
 pub(crate) struct FdFrameTransform {
+    center: f64,
     fft: Fft,
-    spectrum: Box<[Complex; FRAME]>,
-    warped: Box<[Complex; FRAME]>,
-    envelope: Box<[f64; FRAME / 2 + 1]>,
+    spectrum: Vec<Complex>,
+    warped: Vec<Complex>,
+    envelope: Vec<f64>,
+    log_prefix: Vec<f64>,
 }
 
 /// FD-specific frame analysis and overlap-add state. The shared PSOLA tracker
 /// supplies each source and synthesis mark; TD-PSOLA never owns these buffers.
 pub(crate) struct FdSynthesis {
+    analysis_window: Vec<f64>,
+    synthesis_window: Vec<f64>,
+    synthesis: usize,
     transform: FdFrameTransform,
-    input: Box<[f64; FRAME]>,
-    output: Box<[f64; FRAME]>,
+    input: Vec<f64>,
+    output: Vec<f64>,
 }
 
 impl FdSynthesis {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(windows: crate::pitch::SpectralWindows) -> Self {
+        windows.validate().expect("invalid FD-PSOLA windows");
+        let (analysis_window, synthesis_window, _) = crate::pitch::asymmetric_windows(windows);
+        let center = (windows.analysis - windows.synthesis / 2) as f64;
         Self {
-            transform: FdFrameTransform::new(),
-            input: Box::new([0.0; FRAME]),
-            output: Box::new([0.0; FRAME]),
+            analysis_window,
+            synthesis_window,
+            synthesis: windows.synthesis,
+            transform: FdFrameTransform::new(windows.analysis, center),
+            input: vec![0.0; windows.analysis],
+            output: vec![0.0; windows.analysis],
         }
     }
 
@@ -44,9 +46,9 @@ impl FdSynthesis {
         &mut self,
         source: f64,
         destination: f64,
-        left: f64,
-        right: f64,
-        gain: f64,
+        _left: f64,
+        _right: f64,
+        _gain: f64,
         ratio: f64,
         preserve_formants: bool,
         clock: usize,
@@ -55,40 +57,36 @@ impl FdSynthesis {
         weights: &mut [f64],
         coverage: &mut [bool],
     ) {
-        let half = FRAME / 2;
-        let support = ((left + right).ceil() as usize).clamp(128, half);
-        for i in 0..FRAME {
-            let offset = i as isize - half as isize;
-            if offset.unsigned_abs() > support {
-                self.input[i] = 0.0;
-            } else {
-                let window =
-                    0.5 + 0.5 * (std::f64::consts::PI * offset as f64 / support as f64).cos();
-                self.input[i] =
-                    crate::psola_common::interpolate(input, source + offset as f64) * window;
-            }
+        let size = self.input.len();
+        let center = self.transform.center;
+        assert!(source + (size as f64 - 1.0 - center) + 2.0 < clock as f64);
+        assert!(
+            source - center - 1.0 >= clock.saturating_sub(crate::psola_common::RING) as f64
+                || clock < crate::psola_common::RING
+        );
+        for i in 0..size {
+            let offset = i as f64 - center;
+            self.input[i] =
+                crate::psola_common::interpolate(input, source + offset) * self.analysis_window[i];
         }
         self.transform
             .process_grain(&self.input, &mut self.output, ratio, preserve_formants);
-        let first = (destination - half as f64).floor().max(clock as f64) as usize;
-        let last = (destination + half as f64).ceil() as usize;
+        let radius = self.synthesis as f64 / 2.0;
         assert!(
-            first >= clock,
-            "FD-PSOLA grain missed its synthesis deadline"
+            destination - radius >= clock as f64 - 1.0,
+            "FD-PSOLA missed its synthesis deadline"
         );
-        assert!(
-            last < clock + crate::psola_common::RING,
-            "FD-PSOLA synthesis exceeded its preallocated queue"
-        );
-        for target in first..=last {
-            let frame = (target as f64 - (destination - half as f64))
+        let first = (destination - radius).ceil().max(clock as f64) as usize;
+        let last = (destination + radius).ceil() as usize;
+        assert!(last < clock + crate::psola_common::RING);
+        for target in first..last {
+            let frame = (target as f64 - destination + center)
                 .round()
-                .clamp(0.0, (FRAME - 1) as f64) as usize;
-            let phase = std::f64::consts::TAU * frame as f64 / (FRAME - 1) as f64;
-            let window = 0.5 - 0.5 * phase.cos();
+                .clamp(0.0, (size - 1) as f64) as usize;
+            let window = self.synthesis_window[frame];
             let index = target % crate::psola_common::RING;
-            output[index] += self.output[frame] * window * gain;
-            weights[index] += window * window;
+            output[index] += self.output[frame] * window;
+            weights[index] += window * self.analysis_window[frame];
             coverage[index] = true;
         }
     }
@@ -120,11 +118,9 @@ impl crate::psola_synthesis::PsolaSynthesis for FdSynthesis {
     }
 
     fn normalize_output(&self, sample: f64, weight: f64) -> f64 {
-        if weight > 1e-12 {
-            sample / weight
-        } else {
-            sample
-        }
+        // Pitch-synchronous hops can exceed a short synthesis window. Fade weakly
+        // covered edges instead of amplifying FFT leakage by a vanishing weight.
+        sample / weight.max(0.25)
     }
 
     fn has_unvoiced_transform(&self) -> bool {
@@ -172,19 +168,22 @@ impl crate::psola_synthesis::PsolaSynthesis for FdSynthesis {
 }
 
 impl FdFrameTransform {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(size: usize, center: f64) -> Self {
+        assert!(center.is_finite() && (0.0..size as f64).contains(&center));
         Self {
-            fft: Fft::new(FRAME),
-            spectrum: Box::new([Complex::default(); FRAME]),
-            warped: Box::new([Complex::default(); FRAME]),
-            envelope: Box::new([0.0; FRAME / 2 + 1]),
+            center,
+            fft: Fft::new(size),
+            spectrum: vec![Complex::default(); size],
+            warped: vec![Complex::default(); size],
+            envelope: vec![0.0; size / 2 + 1],
+            log_prefix: vec![0.0; size / 2 + 2],
         }
     }
 
     pub(crate) fn process_grain(
         &mut self,
-        input: &[f64; FRAME],
-        output: &mut [f64; FRAME],
+        input: &[f64],
+        output: &mut [f64],
         ratio: f64,
         preserve_formants: bool,
     ) {
@@ -197,11 +196,14 @@ impl FdFrameTransform {
     /// real frame, ready for synthesis-windowing and overlap-add.
     pub(crate) fn transform(
         &mut self,
-        input: &[f64; FRAME],
-        output: &mut [f64; FRAME],
+        input: &[f64],
+        output: &mut [f64],
         ratio: f64,
         preserve_formants: bool,
     ) {
+        let size = self.spectrum.len();
+        assert_eq!(input.len(), size);
+        assert_eq!(output.len(), size);
         assert!(ratio.is_finite() && ratio > 0.0);
         for (dst, &sample) in self.spectrum.iter_mut().zip(input) {
             *dst = Complex {
@@ -213,20 +215,23 @@ impl FdFrameTransform {
 
         // Resample positive frequencies linearly. Conjugate symmetry is
         // restored explicitly so the inverse transform remains real-valued.
-        let half = FRAME / 2;
+        let half = size / 2;
         self.warped.fill(Complex::default());
         if preserve_formants {
             // Smooth log magnitude isolates broad vocal-tract resonances from
             // the fine harmonic source before pitch scaling.
+            self.log_prefix[0] = 0.0;
             for k in 0..=half {
-                let first = k.saturating_sub(12);
-                let last = (k + 12).min(half);
-                let mut sum = 0.0;
-                for bin in first..=last {
-                    let value = self.spectrum[bin];
-                    sum += value.re.hypot(value.im).max(1e-12).ln();
-                }
-                self.envelope[k] = sum / (last - first + 1) as f64;
+                let value = self.spectrum[k];
+                self.log_prefix[k + 1] =
+                    self.log_prefix[k] + value.re.hypot(value.im).max(1e-12).ln();
+            }
+            let radius = (12 * size / 2048).max(1);
+            for k in 0..=half {
+                let first = k.saturating_sub(radius);
+                let last = (k + radius).min(half);
+                self.envelope[k] = (self.log_prefix[last + 1] - self.log_prefix[first])
+                    / (last - first + 1) as f64;
             }
         }
         for k in 0..=half {
@@ -256,7 +261,7 @@ impl FdFrameTransform {
             // Re-reference each warped component to the pitch mark at frame
             // centre so neighbouring PSOLA grains keep a coherent excitation.
             let phase_correction =
-                -std::f64::consts::TAU * (k as f64 - source) * (half as f64 / FRAME as f64);
+                -std::f64::consts::TAU * (k as f64 - source) * (self.center / size as f64);
             value = value.mul(Complex::polar(1.0, phase_correction));
             self.warped[k] = if k == 0 || k == half {
                 Complex {
@@ -267,7 +272,7 @@ impl FdFrameTransform {
                 value
             };
             if k != 0 && k != half {
-                self.warped[FRAME - k] = Complex {
+                self.warped[size - k] = Complex {
                     re: value.re,
                     im: -value.im,
                 };
@@ -276,6 +281,59 @@ impl FdFrameTransform {
         self.fft.inverse(&mut self.warped[..]);
         for (dst, value) in output.iter_mut().zip(self.warped.iter()) {
             *dst = value.re;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn variable_frames_reconstruct_about_the_configured_pitch_mark() {
+        for analysis in [1024, 2048, 4096, 8192] {
+            for synthesis in [256, 512, 1024, 2048] {
+                if synthesis > analysis {
+                    continue;
+                }
+                let windows = crate::pitch::SpectralWindows {
+                    analysis,
+                    synthesis,
+                };
+                let mut dsp = FdSynthesis::new(windows);
+                let center = dsp.transform.center;
+                let input: Vec<_> = (0..analysis)
+                    .map(|i| {
+                        (0.1 * (std::f64::consts::TAU * 7.0 * (i as f64 - center)
+                            / analysis as f64)
+                            .cos()
+                            + 0.03 * (i as f64 * 0.19).sin())
+                            * dsp.analysis_window[i]
+                    })
+                    .collect();
+                let mut output = vec![0.0; analysis];
+                for preserve in [false, true] {
+                    dsp.transform
+                        .process_grain(&input, &mut output, 1.0, preserve);
+                    assert!(
+                        input
+                            .iter()
+                            .zip(&output)
+                            .all(|(a, b)| (a - b).abs() < 1e-12),
+                        "{windows:?}"
+                    );
+                }
+                for i in 0..analysis {
+                    let expected = if i >= analysis - synthesis {
+                        crate::dsp::window::hann(i - (analysis - synthesis), synthesis)
+                    } else {
+                        0.0
+                    };
+                    assert!(
+                        (dsp.analysis_window[i] * dsp.synthesis_window[i] - expected).abs() < 1e-12
+                    );
+                }
+            }
         }
     }
 }

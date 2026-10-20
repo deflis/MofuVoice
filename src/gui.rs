@@ -170,6 +170,8 @@ struct DeviceSettings {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct VoiceSettings {
+    psola_analysis_window: usize,
+    psola_synthesis_window: usize,
     analysis_window: usize,
     synthesis_window: usize,
     pitch_algorithm: String,
@@ -200,6 +202,8 @@ impl Settings {
                 sample_rate: options.sample_rate,
             },
             voice: VoiceSettings {
+                psola_analysis_window: options.pitch.psola_windows.analysis,
+                psola_synthesis_window: options.pitch.psola_windows.synthesis,
                 analysis_window: options.pitch.windows.analysis,
                 synthesis_window: options.pitch.windows.synthesis,
                 pitch_algorithm: options.pitch.algorithm.name().into(),
@@ -240,6 +244,10 @@ impl Settings {
             frames: self.devices.frames,
             sample_rate: self.devices.sample_rate,
             pitch: crate::pitch::PitchSettings {
+                psola_windows: crate::pitch::SpectralWindows {
+                    analysis: self.voice.psola_analysis_window,
+                    synthesis: self.voice.psola_synthesis_window,
+                },
                 windows: crate::pitch::SpectralWindows {
                     analysis: self.voice.analysis_window,
                     synthesis: self.voice.synthesis_window,
@@ -1006,11 +1014,24 @@ mod tests {
     #[test]
     fn spectral_windows_round_trip_and_reject_invalid_combinations() {
         let options = Options::parse_gui(
-            ["--analysis-window", "8192", "--synthesis-window", "2048"].map(String::from),
+            [
+                "--analysis-window",
+                "8192",
+                "--synthesis-window",
+                "2048",
+                "--psola-analysis-window",
+                "1024",
+                "--psola-synthesis-window",
+                "256",
+            ]
+            .map(String::from),
         )
         .unwrap();
         let mut settings = Settings::from_options(&options);
         assert_eq!(settings.options().unwrap(), options);
+        settings.voice.psola_synthesis_window = 2048;
+        assert!(settings.options().is_err());
+        settings.voice.psola_synthesis_window = 256;
         settings.voice.analysis_window = 1024;
         assert!(settings.options().is_err());
     }
