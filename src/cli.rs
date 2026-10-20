@@ -71,6 +71,7 @@ impl Options {
         let mut rate_given = false;
         let mut pitch_given = false;
         let mut algorithm_given = false;
+        let mut estimator_given = false;
         let mut window_given = [false; 4];
         let mut formant_given = false;
         let mut shift_given = false;
@@ -161,6 +162,13 @@ impl Options {
                         windows.analysis = value;
                     }
                     window_given[index] = true;
+                }
+                "--psola-pitch-estimator" if !estimator_given => {
+                    options.pitch.psola_pitch_estimator =
+                        crate::pitch::PitchEstimator::parse(&args.next().ok_or(
+                            "--psola-pitch-estimator requires yin, mpm, mpm-fft or nccf",
+                        )?)?;
+                    estimator_given = true;
                 }
                 "--pitch-algorithm" if !algorithm_given => {
                     options.pitch.algorithm =
@@ -381,6 +389,7 @@ impl Options {
             || (modes > 0
                 && (options.seconds.is_some()
                     || pitch_given
+                    || estimator_given
                     || algorithm_given
                     || window_given.iter().any(|given| *given)
                     || formant_given
@@ -404,7 +413,7 @@ impl Options {
                     || input_channel_given
                     || output_channels_given))
         {
-            return Err("Choose one CLI mode: --help, --list-devices, --inspect [--device NAME] [--frames N] [--sample-rate HZ], or [--device NAME] [--frames N] [--sample-rate HZ] [--seconds N] [--pitch SEMITONES] [--analysis-window 1024|2048|4096|8192] [--synthesis-window 256|512|1024|2048] [--psola-analysis-window 1024|2048|4096|8192] [--psola-synthesis-window 256|512|1024|2048] [--pitch-algorithm phase-locked|pvsola|pvsola-sync|td-psola|td-psola-resampled|fd-psola] [--formant preserve|off] [--formant-shift SEMITONES] [--eq on|off] [--eq-mode simple|pro] [--eq-bandN HZ,DB,Q] [--eq-output DB] [--auto-level on|off] [--compressor on|off] [--level-target DB] [--level-max-gain DB] [--level-floor DB] [--level-response MS] [--compress-threshold DB] [--compress-ratio N] [--compress-attack MS] [--compress-release MS] [--deesser on|off] [--deesser-mode simple|pro] [--deesser-frequency HZ] [--deesser-threshold DBFS] [--deesser-range DB] [--deesser-attack MS] [--deesser-release MS] [--rumble-filter on|off] [--gate on|off] [--gate-threshold auto|DB] [--gate-attack MS] [--gate-release MS]".into());
+            return Err("Choose one CLI mode: --help, --list-devices, --inspect [--device NAME] [--frames N] [--sample-rate HZ], or [--device NAME] [--frames N] [--sample-rate HZ] [--seconds N] [--pitch SEMITONES] [--analysis-window 1024|2048|4096|8192] [--synthesis-window 256|512|1024|2048] [--psola-pitch-estimator yin|mpm|mpm-fft|nccf] [--psola-analysis-window 1024|2048|4096|8192] [--psola-synthesis-window 256|512|1024|2048] [--pitch-algorithm phase-locked|pvsola|pvsola-sync|td-psola|td-psola-resampled|fd-psola] [--formant preserve|off] [--formant-shift SEMITONES] [--eq on|off] [--eq-mode simple|pro] [--eq-bandN HZ,DB,Q] [--eq-output DB] [--auto-level on|off] [--compressor on|off] [--level-target DB] [--level-max-gain DB] [--level-floor DB] [--level-response MS] [--compress-threshold DB] [--compress-ratio N] [--compress-attack MS] [--compress-release MS] [--deesser on|off] [--deesser-mode simple|pro] [--deesser-frequency HZ] [--deesser-threshold DBFS] [--deesser-range DB] [--deesser-attack MS] [--deesser-release MS] [--rumble-filter on|off] [--gate on|off] [--gate-threshold auto|DB] [--gate-attack MS] [--gate-release MS]".into());
         }
         Ok(options)
     }

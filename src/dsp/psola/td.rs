@@ -1,9 +1,6 @@
 //! Time-domain PSOLA grain synthesis and its formant-ratio resampling path.
 
-#[path = "td_resampler.rs"]
-mod resampler;
-
-use crate::{psola_common, psola_synthesis::PsolaSynthesis};
+use super::{common as psola_common, resampler, synthesis::PsolaSynthesis};
 
 const UNVOICED_RADIUS: usize = 256;
 
@@ -69,7 +66,7 @@ impl PsolaSynthesis for TdSynthesis {
         right_source_span: f64,
         pitch_ratio: f64,
         previous_synthesis_period: f64,
-    ) -> crate::psola_synthesis::GrainTiming {
+    ) -> crate::dsp::psola::synthesis::GrainTiming {
         let intermediate_ratio = pitch_ratio / self.formant_ratio;
         let intermediate_period = source_period / intermediate_ratio;
         let period = intermediate_period / self.formant_ratio;
@@ -80,7 +77,7 @@ impl PsolaSynthesis for TdSynthesis {
                 period
             });
         let right = (right_source_span / self.formant_ratio).min(period);
-        crate::psola_synthesis::GrainTiming {
+        crate::dsp::psola::synthesis::GrainTiming {
             period,
             left: left * self.left_scale,
             right: right * self.right_scale,

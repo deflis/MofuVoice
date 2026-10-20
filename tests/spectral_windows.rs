@@ -21,6 +21,7 @@ fn windows_validate_and_report_only_the_selected_algorithms_delay() {
             let settings = PitchSettings {
                 windows,
                 psola_windows: windows,
+                psola_pitch_estimator: Default::default(),
                 algorithm,
                 ..Default::default()
             };
@@ -80,6 +81,7 @@ fn all_windows_preserve_neutral_bits_and_block_boundaries(windows: SpectralWindo
         let mut settings = PitchSettings {
             windows,
             psola_windows: windows,
+            psola_pitch_estimator: Default::default(),
             algorithm,
             ..Default::default()
         };
@@ -135,6 +137,7 @@ fn configured_windows_keep_pitch_and_phase_continuous(windows: SpectralWindows) 
             let settings = PitchSettings {
                 windows,
                 psola_windows: windows,
+                psola_pitch_estimator: Default::default(),
                 algorithm,
                 semitones,
                 preserve_formants: false,

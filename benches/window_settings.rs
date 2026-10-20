@@ -43,6 +43,7 @@ fn main() {
                     let settings = PitchSettings {
                         windows,
                         psola_windows: windows,
+                        psola_pitch_estimator: Default::default(),
                         algorithm,
                         semitones,
                         preserve_formants: !spectral && algorithm != PitchAlgorithm::FdPsola,
