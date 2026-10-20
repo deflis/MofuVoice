@@ -10,6 +10,8 @@
 //! Reference: https://praat.org/manual/overlap-add.html
 //! Pitch estimator: de Cheveigne & Kawahara, JASA 2002, doi:10.1121/1.1458024.
 use std::f64::consts::TAU;
+#[path = "psola_correlation.rs"]
+mod correlation;
 
 #[cfg(test)]
 const LATENCY: usize = 5376;
@@ -46,6 +48,7 @@ struct Mark {
 }
 
 pub(crate) struct PsolaStream {
+    correlation: correlation::Kernel,
     estimator: crate::pitch::PitchEstimator,
     latency: usize,
     lookahead: usize,
@@ -106,6 +109,7 @@ impl PsolaStream {
             *tap /= sum;
         }
         Self {
+            correlation: correlation::select(),
             estimator: crate::pitch::PitchEstimator::default(),
             latency: latency(windows),
             lookahead: windows.analysis / 2 + MAX_PERIOD / 2 + TAPS / 2,
@@ -192,7 +196,6 @@ impl PsolaStream {
         for i in 0..self.filtered.len() {
             self.analysis[i] = self.filtered[(start + i) % self.filtered.len()];
         }
-        let length = self.filtered.len() - MAX_LAG - 1;
         let energy: f64 = self.analysis.iter().map(|x| x * x).sum();
         if energy / (self.filtered.len() as f64) < 1e-10 {
             return None;
@@ -200,13 +203,10 @@ impl PsolaStream {
         if self.estimator == crate::pitch::PitchEstimator::Mpm {
             return self.detect_mpm();
         }
+        (self.correlation)(&self.analysis, &mut self.difference, false);
         let mut cumulative = 0.0;
         for lag in 1..=MAX_LAG + 1 {
-            let mut difference = 0.0;
-            for i in 0..length {
-                let delta = self.analysis[i] - self.analysis[i + lag];
-                difference += delta * delta;
-            }
+            let difference = self.difference[lag];
             cumulative += difference;
             self.difference[lag] = if cumulative > 1e-20 {
                 difference * lag as f64 / cumulative
@@ -249,20 +249,7 @@ impl PsolaStream {
     // Use shrinking overlap so both sides of NSDF have identical support.
     // No allocations or additional lookahead in the streaming callback.
     fn detect_mpm(&mut self) -> Option<f64> {
-        for lag in 0..=MAX_LAG + 1 {
-            let (mut correlation, mut energy) = (0.0, 0.0);
-            for i in 0..self.analysis.len() - lag {
-                let a = self.analysis[i];
-                let b = self.analysis[i + lag];
-                correlation += a * b;
-                energy += a * a + b * b;
-            }
-            self.difference[lag] = if energy > 1e-20 {
-                2.0 * correlation / energy
-            } else {
-                0.0
-            };
-        }
+        (self.correlation)(&self.analysis, &mut self.difference, true);
         // Skip the zero-lag lobe, then retain one maximum per positive lobe.
         let mut peaks = [0usize; MAX_LAG + 2];
         let mut count = 0;
@@ -479,6 +466,157 @@ impl PsolaStream {
 mod tests {
     use super::PsolaStream as TdPsola;
     use super::*;
+
+    #[test]
+    fn scalar_and_simd_streams_match_bits_through_pitch_and_voicing_changes() {
+        for estimator in [
+            crate::pitch::PitchEstimator::Yin,
+            crate::pitch::PitchEstimator::Mpm,
+        ] {
+            for analysis in [1024, 2048, 4096, 8192] {
+                let windows = crate::pitch::SpectralWindows {
+                    analysis,
+                    synthesis: 512,
+                };
+                let make = || {
+                    TdPsola::with_synthesis(
+                        Box::new(crate::td_synthesis::TdSynthesis::new(1.0, windows)),
+                        windows,
+                    )
+                };
+                let (mut scalar, mut vector) = (make(), make());
+                scalar.correlation = correlation::scalar;
+                scalar.set_pitch_estimator(estimator);
+                vector.set_pitch_estimator(estimator);
+                let mut seed = 17u32;
+                let mut phase = 0.0;
+                for i in 0..32000 {
+                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                    let noise = seed as f64 / u32::MAX as f64 - 0.5;
+                    phase += TAU * (60.0 + 290.0 * i as f64 / 32000.0) / 48000.0;
+                    let sample = match i / 4000 {
+                        0 | 4 => 0.0,
+                        1 | 5 => 0.1 * noise,
+                        _ => 0.1 * phase.cos() + 0.04 * (3.0 * phase).cos() + 0.001 * noise,
+                    };
+                    let ratio = [0.5, 2.0f64.powf(3.0 / 12.0), 2.0][i / 11000];
+                    assert_eq!(
+                        scalar.push(sample, ratio).to_bits(),
+                        vector.push(sample, ratio).to_bits(),
+                        "{estimator:?} window={analysis} sample={i}"
+                    );
+                    assert_eq!(scalar.period.to_bits(), vector.period.to_bits());
+                }
+            }
+        }
+    }
+
+    // Manual performance comparison; no timing threshold in the test suite.
+    #[test]
+    #[ignore]
+    fn benchmark_scalar_and_simd_pitch_analysis() {
+        use std::hint::black_box;
+        fn median(mut samples: Vec<f64>) -> f64 {
+            samples.sort_by(f64::total_cmp);
+            samples[samples.len() / 2]
+        }
+        fn clock() -> std::time::Duration {
+            #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+            {
+                #[repr(C)]
+                struct Timespec {
+                    seconds: std::ffi::c_long,
+                    nanoseconds: std::ffi::c_long,
+                }
+                unsafe extern "C" {
+                    fn clock_gettime(clock: i32, value: *mut Timespec) -> i32;
+                }
+                let mut value = Timespec {
+                    seconds: 0,
+                    nanoseconds: 0,
+                };
+                // SAFETY: Linux CLOCK_THREAD_CPUTIME_ID=3, writable timespec.
+                assert_eq!(unsafe { clock_gettime(3, &mut value) }, 0);
+                std::time::Duration::new(value.seconds as u64, value.nanoseconds as u32)
+            }
+            #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+            {
+                static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+                START.get_or_init(std::time::Instant::now).elapsed()
+            }
+        }
+        for estimator in [
+            crate::pitch::PitchEstimator::Yin,
+            crate::pitch::PitchEstimator::Mpm,
+        ] {
+            for analysis in [1024, 2048, 4096, 8192] {
+                let windows = crate::pitch::SpectralWindows {
+                    analysis,
+                    synthesis: 512,
+                };
+                let mut dsp = TdPsola::with_synthesis(
+                    Box::new(crate::td_synthesis::TdSynthesis::new(1.0, windows)),
+                    windows,
+                );
+                dsp.set_pitch_estimator(estimator);
+                for i in 0..dsp.filtered.len() {
+                    let phase = TAU * 113.0 * (i * DECIMATION) as f64 / 48000.0;
+                    dsp.filtered[i] = 0.1 * phase.cos() + 0.04 * (3.0 * phase).cos();
+                }
+                let mut times = [Vec::new(), Vec::new()];
+                for round in 0..8 {
+                    for index in [round % 2, 1 - round % 2] {
+                        dsp.correlation = if index == 0 {
+                            correlation::scalar
+                        } else {
+                            correlation::select()
+                        };
+                        let start = clock();
+                        for _ in 0..500 {
+                            black_box(dsp.detect_period());
+                        }
+                        if round > 0 {
+                            times[index].push((clock() - start).as_secs_f64() * 1e6 / 500.0);
+                        }
+                    }
+                }
+                let scalar = median(times[0].clone());
+                let simd = median(times[1].clone());
+                eprintln!("analysis {estimator:?} window={analysis}: scalar={scalar:.2}us SIMD={simd:.2}us speedup={:.2}x", scalar / simd);
+            }
+            let input: Vec<_> = (0..24000)
+                .map(|i| {
+                    let phase = TAU * 113.0 * i as f64 / 48000.0;
+                    0.1 * phase.cos() + 0.04 * (3.0 * phase).cos()
+                })
+                .collect();
+            for semitones in [-12.0, 3.0, 12.0] {
+                let mut times = [Vec::new(), Vec::new()];
+                for round in 0..8 {
+                    for index in [round % 2, 1 - round % 2] {
+                        let mut dsp = TdPsola::new(1.0);
+                        dsp.set_pitch_estimator(estimator);
+                        dsp.correlation = if index == 0 {
+                            correlation::scalar
+                        } else {
+                            correlation::select()
+                        };
+                        let ratio = 2.0f64.powf(semitones / 12.0);
+                        let start = clock();
+                        for &sample in &input {
+                            black_box(dsp.push(black_box(sample), ratio));
+                        }
+                        if round > 0 {
+                            times[index].push((clock() - start).as_secs_f64() * 1e3);
+                        }
+                    }
+                }
+                let scalar = median(times[0].clone());
+                let simd = median(times[1].clone());
+                eprintln!("stream {estimator:?} {semitones:+}st: scalar={scalar:.2}ms SIMD={simd:.2}ms / 0.5s audio speedup={:.2}x", scalar / simd);
+            }
+        }
+    }
 
     #[test]
     fn estimators_cover_low_voice_missing_fundamental_and_noise() {
