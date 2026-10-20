@@ -3,6 +3,7 @@ import { DetailsPopup } from "../DetailsPopup";
 import { useSettingsStore } from "../store";
 import { useVoiceSettings } from "./hooks";
 import { SemitonesInput } from "./SemitonesInput";
+import { useId } from "react";
 import * as v from "valibot";
 import { voiceSchema, type VoiceValues } from "./schema";
 
@@ -43,13 +44,16 @@ export function VoiceSettings() {
     pitchAlgorithm === "pvsola-sync" ||
     ((pitchAlgorithm === "td-psola" || pitchAlgorithm === "fd-psola") && formantShift !== 0);
   const tdPsola = pitchAlgorithm === "td-psola" || pitchAlgorithm === "td-psola-resampled";
+  const pitchAlgorithmId = useId();
+  const pitchEstimatorId = useId();
   return (
     <section>
       <h2>声の変換</h2>
       <DetailsPopup title="声の変換" buttonLabel="詳細設定">
         <label>
-          ピッチ変換方式
+          <span id={pitchAlgorithmId}>ピッチ変換方式</span>
           <select
+            aria-labelledby={pitchAlgorithmId}
             value={pitchAlgorithm}
             onChange={(event) =>
               setPitchAlgorithm(v.parse(voiceSchema.entries.pitchAlgorithm, event.target.value))
@@ -85,8 +89,9 @@ export function VoiceSettings() {
           位相ロック（標準）・スペクトル位相同期と、TD-PSOLA＋フェーズボコーダー／FD-PSOLAのフォルマント補正に使います。
         </p>
         <label>
-          PSOLAのピッチ推定
+          <span id={pitchEstimatorId}>PSOLAのピッチ推定</span>
           <select
+            aria-labelledby={pitchEstimatorId}
             value={psolaPitchEstimator}
             disabled={!psola}
             onChange={(event) =>
