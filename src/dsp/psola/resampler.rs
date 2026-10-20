@@ -68,15 +68,46 @@ impl Resampler {
         let fraction = phase - index as f64;
         let lower = &self.kernels[index * TAPS..(index + 1) * TAPS];
         let upper = &self.kernels[(index + 1) * TAPS..(index + 2) * TAPS];
-        let mut result = 0.0;
-        for i in (-first).max(0) as usize..TAPS {
-            let gain = lower[i] + fraction * (upper[i] - lower[i]);
-            let sample_index = first + i as isize;
-            if sample_index >= 0 {
-                result += input[sample_index as usize % N] * gain;
-            }
+        let skip = (-first).max(0) as usize;
+        if N < TAPS {
+            return (skip..TAPS)
+                .map(|i| {
+                    input[(first + i as isize) as usize % N]
+                        * (lower[i] + fraction * (upper[i] - lower[i]))
+                })
+                .sum();
         }
-        result
+        let start = (first + skip as isize) as usize % N;
+        let count = (TAPS - skip).min(N - start);
+        let dot = |samples: &[f64], lo: &[f64], hi: &[f64]| {
+            let mut sums = [0.0; 4];
+            for ((samples, lo), hi) in samples
+                .chunks_exact(4)
+                .zip(lo.chunks_exact(4))
+                .zip(hi.chunks_exact(4))
+            {
+                for lane in 0..4 {
+                    sums[lane] += samples[lane] * (lo[lane] + fraction * (hi[lane] - lo[lane]));
+                }
+            }
+            let mut sum = (sums[0] + sums[1]) + (sums[2] + sums[3]);
+            for ((&sample, &lo), &hi) in samples
+                .chunks_exact(4)
+                .remainder()
+                .iter()
+                .zip(lo.chunks_exact(4).remainder())
+                .zip(hi.chunks_exact(4).remainder())
+            {
+                sum += sample * (lo + fraction * (hi - lo));
+            }
+            sum
+        };
+        let split = skip + count;
+        dot(
+            &input[start..start + count],
+            &lower[skip..split],
+            &upper[skip..split],
+        ) + dot(&input[..TAPS - split], &lower[split..], &upper[split..])
     }
 }
 
@@ -118,6 +149,30 @@ mod tests {
     }
 
     #[test]
+    fn parallel_sum_matches_scalar_at_startup_and_ring_boundaries() {
+        let sampler = Resampler::new(1.3);
+        let input = std::array::from_fn::<_, 1024, _>(|i| (i as f64 * 0.17).sin());
+        for position in [-65.2_f64, -63.7, -0.1, 0.0, 12.31, 128.9, 2047.31, 2050.7] {
+            let center = position.floor() as isize;
+            let first = center - RADIUS as isize;
+            let phase = (position - center as f64) * PHASES as f64;
+            let index = phase.floor() as usize;
+            let fraction = phase - index as f64;
+            let mut expected = 0.0;
+            for i in 0..TAPS {
+                if first + i as isize >= 0 {
+                    let lower = sampler.kernels[index * TAPS + i];
+                    let upper = sampler.kernels[(index + 1) * TAPS + i];
+                    expected += input[(first + i as isize) as usize % input.len()]
+                        * (lower + fraction * (upper - lower));
+                }
+            }
+            let available = if position < 1000.0 { 512 } else { 2200 };
+            assert!((sampler.sample(&input, available, position) - expected).abs() < 1e-12);
+        }
+    }
+
+    #[test]
     fn fractional_reads_match_after_ring_wrap() {
         let sampler = Resampler::new(1.3);
         let unwrapped = std::array::from_fn::<_, 4096, _>(|i| (i as f64 * 0.17).sin());
@@ -126,9 +181,11 @@ mod tests {
             ring[i % 1024] = unwrapped[i];
         }
         for i in 2200..2900 {
-            assert_eq!(
-                sampler.sample(&ring, 3072, i as f64 + 0.31),
-                sampler.sample(&unwrapped, 4096, i as f64 + 0.31)
+            assert!(
+                (sampler.sample(&ring, 3072, i as f64 + 0.31)
+                    - sampler.sample(&unwrapped, 4096, i as f64 + 0.31))
+                .abs()
+                    < 1e-12
             );
         }
     }
