@@ -127,7 +127,7 @@ export function VoiceSettings() {
           }
         >
           <option value="semitones">半音</option>
-          <option value="percent">パーセント（恋声風）</option>
+          <option value="percent">パーセント</option>
         </select>
       </label>
       {pitchUnit === "percent" && (
