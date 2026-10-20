@@ -116,45 +116,30 @@ fn callback_does_not_allocate_including_first_frames_and_transitions() {
     }
 }
 
-#[test]
-fn configured_windows_do_not_allocate_in_callbacks_or_pitch_transitions() {
-    use rust_low_latency_voice_changer::pitch::SpectralWindows;
-    for analysis in [1024, 2048, 4096, 8192] {
-        for synthesis in [256, 512, 1024, 2048] {
-            if synthesis > analysis {
-                continue;
-            }
-            for algorithm in PitchAlgorithm::ALL {
-                let mut dsp = PitchShifter::new(
-                    7.0,
-                    true,
-                    2.53,
-                    algorithm,
-                    SpectralWindows {
-                        analysis,
-                        synthesis,
-                    },
-                    SpectralWindows {
-                        analysis,
-                        synthesis,
-                    },
-                )
-                .unwrap();
-                let input = std::array::from_fn::<_, 511, _>(|i| {
-                    (0.1 * (std::f64::consts::TAU * i as f64 / 511.0).cos()) as f32
-                });
-                let mut output = [0.0; 511];
-                ALLOCATIONS.with(|n| n.set(0));
-                ENABLED.with(|enabled| enabled.set(true));
-                for pitch in [-12.0, 0.0, 12.0] {
-                    dsp.set_semitones(pitch).unwrap();
-                    for _ in 0..32 {
-                        dsp.process_block(&input, &mut output);
-                    }
-                }
-                ENABLED.with(|enabled| enabled.set(false));
-                assert_eq!(ALLOCATIONS.with(Cell::get), 0);
+fn configured_windows_do_not_allocate_in_callbacks_or_pitch_transitions(
+    windows: rust_low_latency_voice_changer::pitch::SpectralWindows,
+) {
+    for algorithm in PitchAlgorithm::ALL {
+        let mut dsp = PitchShifter::new(7.0, true, 2.53, algorithm, windows, windows).unwrap();
+        let input = std::array::from_fn::<_, 511, _>(|i| {
+            (0.1 * (std::f64::consts::TAU * i as f64 / 511.0).cos()) as f32
+        });
+        let mut output = [0.0; 511];
+        ALLOCATIONS.with(|n| n.set(0));
+        ENABLED.with(|enabled| enabled.set(true));
+        for pitch in [-12.0, 0.0, 12.0] {
+            dsp.set_semitones(pitch).unwrap();
+            for _ in 0..32 {
+                dsp.process_block(&input, &mut output);
             }
         }
+        ENABLED.with(|enabled| enabled.set(false));
+        assert_eq!(ALLOCATIONS.with(Cell::get), 0);
     }
 }
+
+#[macro_use]
+#[path = "common/window_cases.rs"]
+mod window_cases;
+
+window_cases!(configured_windows_do_not_allocate_in_callbacks_or_pitch_transitions);

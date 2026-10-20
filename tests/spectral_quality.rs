@@ -237,18 +237,18 @@ fn formant_quality_at_rate(
         }
         let peak = (1000..=2600)
             .step_by(25)
-            .max_by(|&a, &b| {
-                let energy = |frequency| {
-                    output[8192..]
-                        .as_chunks::<2048>()
-                        .0
-                        .iter()
-                        .map(|block| power_at_rate(block, frequency as f64, rate))
-                        .sum::<f64>()
-                };
-                energy(a).total_cmp(&energy(b))
+            .map(|frequency| {
+                let energy = output[8192..]
+                    .as_chunks::<2048>()
+                    .0
+                    .iter()
+                    .map(|block| power_at_rate(block, frequency as f64, rate))
+                    .sum::<f64>();
+                (frequency, energy)
             })
-            .unwrap() as f64;
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .unwrap()
+            .0 as f64;
         let expected = 1500.0 * pitch_ratio(if preserve { shift } else { pitch }).unwrap();
         assert!(
             (peak - expected).abs() < maximum_error_hz,
@@ -411,26 +411,18 @@ fn silence_and_impulse_delay_and_invalid_settings() {
     }
 }
 
-#[test]
-fn configured_windows_preserve_and_shift_formants() {
+fn configured_windows_preserve_and_shift_formants(
+    windows: rust_low_latency_voice_changer::pitch::SpectralWindows,
+) {
     // Alternate time/frequency resolutions allow up to 250 Hz resonance error.
     // The default configuration retains its existing 200 Hz quality check.
-    for analysis in [1024, 2048, 4096, 8192] {
-        for synthesis in [256, 512, 1024, 2048] {
-            if synthesis > analysis {
-                continue;
-            }
-            for algorithm in PitchAlgorithm::SPECTRAL {
-                formant_quality_at_rate(
-                    RATE,
-                    algorithm,
-                    rust_low_latency_voice_changer::pitch::SpectralWindows {
-                        analysis,
-                        synthesis,
-                    },
-                    250.0,
-                );
-            }
-        }
+    for algorithm in PitchAlgorithm::SPECTRAL {
+        formant_quality_at_rate(RATE, algorithm, windows, 250.0);
     }
 }
+
+#[macro_use]
+#[path = "common/window_cases.rs"]
+mod window_cases;
+
+window_cases!(configured_windows_preserve_and_shift_formants);

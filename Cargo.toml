@@ -50,6 +50,10 @@ name = "spectral"
 harness = false
 
 [[bench]]
+name = "window_settings"
+harness = false
+
+[[bench]]
 name = "eq"
 harness = false
 
