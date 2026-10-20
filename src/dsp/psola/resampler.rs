@@ -113,24 +113,17 @@ fn select_dot() -> Dot {
 }
 
 fn scalar_dot(samples: &[f64], lo: &[f64], hi: &[f64], fraction: f64) -> f64 {
+    let (samples, sample_tail) = samples.as_chunks::<4>();
+    let (lo, lo_tail) = lo.as_chunks::<4>();
+    let (hi, hi_tail) = hi.as_chunks::<4>();
     let mut sums = [0.0; 4];
-    for ((samples, lo), hi) in samples
-        .chunks_exact(4)
-        .zip(lo.chunks_exact(4))
-        .zip(hi.chunks_exact(4))
-    {
+    for ((samples, lo), hi) in samples.iter().zip(lo).zip(hi) {
         for lane in 0..4 {
             sums[lane] += samples[lane] * (lo[lane] + fraction * (hi[lane] - lo[lane]));
         }
     }
     let mut sum = (sums[0] + sums[1]) + (sums[2] + sums[3]);
-    for ((&sample, &lo), &hi) in samples
-        .chunks_exact(4)
-        .remainder()
-        .iter()
-        .zip(lo.chunks_exact(4).remainder())
-        .zip(hi.chunks_exact(4).remainder())
-    {
+    for ((&sample, &lo), &hi) in sample_tail.iter().zip(lo_tail).zip(hi_tail) {
         sum += sample * (lo + fraction * (hi - lo));
     }
     sum
