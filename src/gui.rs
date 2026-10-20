@@ -1042,6 +1042,20 @@ mod tests {
         assert!(settings.options().is_err());
     }
     #[test]
+    fn pitch_estimator_controls_round_trip_and_reject_unknown_values() {
+        for estimator in crate::pitch::PitchEstimator::ALL {
+            let options =
+                Options::parse_gui(["--psola-pitch-estimator", estimator.name()].map(String::from))
+                    .unwrap();
+            let mut settings = Settings::from_options(&options);
+            assert_eq!(settings.voice.psola_pitch_estimator, estimator.name());
+            assert_eq!(settings.options().unwrap(), options);
+            settings.voice.psola_pitch_estimator = "unknown".into();
+            assert!(settings.options().is_err());
+        }
+    }
+
+    #[test]
     fn pitch_algorithm_controls_round_trip_and_reject_unknown_values() {
         for algorithm in crate::pitch::PitchAlgorithm::ALL {
             let options =

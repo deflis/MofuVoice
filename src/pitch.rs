@@ -98,19 +98,28 @@ pub enum PitchEstimator {
     Yin,
     /// McLeod Pitch Method: normalized square difference and relative peak selection.
     Mpm,
+    /// MPM with zero-padded FFT linear autocorrelation.
+    MpmFft,
+    /// Fixed-support normalized cross-correlation with causal period tracking.
+    Nccf,
 }
 impl PitchEstimator {
+    pub const ALL: [Self; 4] = [Self::Yin, Self::Mpm, Self::MpmFft, Self::Nccf];
     pub fn name(self) -> &'static str {
         match self {
             Self::Yin => "yin",
             Self::Mpm => "mpm",
+            Self::MpmFft => "mpm-fft",
+            Self::Nccf => "nccf",
         }
     }
     pub fn parse(value: &str) -> Result<Self, &'static str> {
         match value {
             "yin" => Ok(Self::Yin),
             "mpm" => Ok(Self::Mpm),
-            _ => Err("PSOLA pitch estimator must be yin or mpm"),
+            "mpm-fft" => Ok(Self::MpmFft),
+            "nccf" => Ok(Self::Nccf),
+            _ => Err("PSOLA pitch estimator must be yin, mpm, mpm-fft or nccf"),
         }
     }
 }

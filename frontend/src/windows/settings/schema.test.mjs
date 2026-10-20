@@ -178,10 +178,15 @@ test("PSOLA and vocoder window edits validate and persist independently", async 
 });
 
 test("PSOLA estimator choice is saved and invalid estimators rejected", async () => {
-  settingsStore.getState().voice.setPsolaPitchEstimator("mpm");
-  await settingsStore.getState().save();
-  assert.equal(calls("save_settings")[0].arguments[1].settings.voice.psolaPitchEstimator, "mpm");
-  for (const psolaPitchEstimator of ["yin", "mpm"]) {
+  for (const estimator of ["yin", "mpm", "mpm-fft", "nccf"]) {
+    settingsStore.getState().voice.setPsolaPitchEstimator(estimator);
+    await settingsStore.getState().save();
+    assert.equal(
+      calls("save_settings").at(-1).arguments[1].settings.voice.psolaPitchEstimator,
+      estimator,
+    );
+  }
+  for (const psolaPitchEstimator of ["yin", "mpm", "mpm-fft", "nccf"]) {
     assert.equal(
       v.safeParse(settingsSchema, {
         ...settings,

@@ -39,7 +39,7 @@ fn scalar_impl<const MPM: bool, const REUSE: bool>(input: &[f64], output: &mut [
 /// m(tau) = sum(x[0..N-tau]^2) + sum(x[tau..N]^2).
 /// Advancing tau removes exactly one sample from each side. This costs O(N+L)
 /// instead of O(N*L) and uses no scratch allocation or additional lookahead.
-fn normalize_mpm(input: &[f64], output: &mut [f64]) {
+pub(super) fn normalize_mpm(input: &[f64], output: &mut [f64]) {
     let initial = 2.0 * input.iter().map(|x| x * x).sum::<f64>();
     let mut energy = initial;
     // Conservative accumulated roundoff bound. Normally every overlap retains
@@ -62,6 +62,33 @@ fn normalize_mpm(input: &[f64], output: &mut [f64]) {
         let left = input[lag];
         let right = input[input.len() - lag - 1];
         energy -= left * left + right * right;
+    }
+}
+
+/// Fixed-support normalized cross-correlation. Reuse the SIMD squared-difference
+/// kernel via 2*r = E_left + E_right - difference, and roll the right energy.
+pub(super) fn nccf(input: &[f64], output: &mut [f64], kernel: Kernel) {
+    assert!(input.len() >= output.len());
+    kernel(input, output, false);
+    let length = input.len() - output.len() + 1;
+    let left: f64 = input[..length].iter().map(|x| x * x).sum();
+    let mut right = left;
+    let tolerance = input.iter().map(|x| x * x).sum::<f64>()
+        * f64::EPSILON
+        * (input.len() + output.len()) as f64
+        * 4.0;
+    for (lag, difference) in output.iter_mut().enumerate() {
+        if right <= tolerance || (right - 1e-20).abs() <= tolerance {
+            right = input[lag..lag + length].iter().map(|x| x * x).sum();
+        }
+        *difference = if left > 1e-20 && right > 1e-20 {
+            ((left + right - *difference) / (2.0 * (left * right).sqrt())).clamp(-1.0, 1.0)
+        } else {
+            0.0
+        };
+        if lag + length < input.len() {
+            right += input[lag + length] * input[lag + length] - input[lag] * input[lag];
+        }
     }
 }
 
@@ -209,6 +236,51 @@ fn vector_reference(input: &[f64], output: &mut [f64], mpm: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nccf_matches_direct_dot_products_and_handles_empty_energy() {
+        let mut seed = 17u32;
+        for window in [1024, 2048, 4096, 8192] {
+            let length = window / 4;
+            let mut input: Vec<_> = (0..length + 201)
+                .map(|_| {
+                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                    seed as f64 / u32::MAX as f64 - 0.5
+                })
+                .collect();
+            for kind in 0..4 {
+                if kind == 1 {
+                    input.fill(0.0);
+                    input[0] = 1.0;
+                }
+                if kind == 2 {
+                    input.fill(0.0);
+                }
+                if kind == 3 {
+                    input.fill(1e-15);
+                }
+                let mut actual = [0.0; 202];
+                nccf(&input, &mut actual, select());
+                for (lag, &value) in actual.iter().enumerate() {
+                    let (mut cross, mut left, mut right) = (0.0, 0.0, 0.0);
+                    for (&a, &b) in input[..length].iter().zip(&input[lag..lag + length]) {
+                        cross += a * b;
+                        left += a * a;
+                        right += b * b;
+                    }
+                    let expected = if left > 1e-20 && right > 1e-20 {
+                        cross / (left * right).sqrt()
+                    } else {
+                        0.0
+                    };
+                    assert!(
+                        value.is_finite() && (value - expected).abs() < 2e-12,
+                        "window={window} kind={kind} lag={lag}: {value} vs {expected}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn reused_energy_matches_direct_normalization_with_roundoff_tolerance() {

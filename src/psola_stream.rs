@@ -5,13 +5,16 @@
 //! specific grain timing, windowing, resampling, and overlap-add are delegated
 //! to the selected synthesis backend.
 //!
-//! Pitch analysis uses an in-repository FIR decimator and YIN or McLeod normalized square difference.
+//! Pitch analysis uses an in-repository FIR decimator with selectable YIN,
+//! direct/FFT McLeod NSDF, or causal normalized cross-correlation tracking.
 //! Pitch marks track a consistent waveform polarity near predicted epochs.
 //! Reference: https://praat.org/manual/overlap-add.html
 //! Pitch estimator: de Cheveigne & Kawahara, JASA 2002, doi:10.1121/1.1458024.
 use std::f64::consts::TAU;
 #[path = "psola_correlation.rs"]
 mod correlation;
+#[path = "psola_fft.rs"]
+mod fft_correlation;
 
 #[cfg(test)]
 const LATENCY: usize = 5376;
@@ -49,6 +52,8 @@ struct Mark {
 
 pub(crate) struct PsolaStream {
     correlation: correlation::Kernel,
+    fft_correlation: Option<fft_correlation::FftCorrelation>,
+    previous_nccf: Option<f64>,
     estimator: crate::pitch::PitchEstimator,
     latency: usize,
     lookahead: usize,
@@ -110,6 +115,8 @@ impl PsolaStream {
         }
         Self {
             correlation: correlation::select(),
+            fft_correlation: None,
+            previous_nccf: None,
             estimator: crate::pitch::PitchEstimator::default(),
             latency: latency(windows),
             lookahead: windows.analysis / 2 + MAX_PERIOD / 2 + TAPS / 2,
@@ -188,6 +195,13 @@ impl PsolaStream {
     }
 
     pub(crate) fn set_pitch_estimator(&mut self, estimator: crate::pitch::PitchEstimator) {
+        if estimator == crate::pitch::PitchEstimator::MpmFft && self.fft_correlation.is_none() {
+            self.fft_correlation = Some(fft_correlation::FftCorrelation::new(
+                self.analysis.len(),
+                MAX_LAG + 1,
+            ));
+        }
+        self.previous_nccf = None;
         self.estimator = estimator;
     }
 
@@ -196,12 +210,24 @@ impl PsolaStream {
         for i in 0..self.filtered.len() {
             self.analysis[i] = self.filtered[(start + i) % self.filtered.len()];
         }
+        if self.estimator == crate::pitch::PitchEstimator::Nccf {
+            // A DC offset must not turn unvoiced noise into high correlation.
+            let mean = self.analysis.iter().sum::<f64>() / self.analysis.len() as f64;
+            for sample in &mut self.analysis {
+                *sample -= mean;
+            }
+        }
         let energy: f64 = self.analysis.iter().map(|x| x * x).sum();
         if energy / (self.filtered.len() as f64) < 1e-10 {
+            self.previous_nccf = None;
             return None;
         }
-        if self.estimator == crate::pitch::PitchEstimator::Mpm {
-            return self.detect_mpm();
+        match self.estimator {
+            crate::pitch::PitchEstimator::Mpm | crate::pitch::PitchEstimator::MpmFft => {
+                return self.detect_mpm()
+            }
+            crate::pitch::PitchEstimator::Nccf => return self.detect_nccf(),
+            crate::pitch::PitchEstimator::Yin => {}
         }
         (self.correlation)(&self.analysis, &mut self.difference, false);
         let mut cumulative = 0.0;
@@ -249,7 +275,14 @@ impl PsolaStream {
     // Use shrinking overlap so both sides of NSDF have identical support.
     // No allocations or additional lookahead in the streaming callback.
     fn detect_mpm(&mut self) -> Option<f64> {
-        (self.correlation)(&self.analysis, &mut self.difference, true);
+        if self.estimator == crate::pitch::PitchEstimator::MpmFft {
+            self.fft_correlation
+                .as_mut()
+                .expect("FFT configured before streaming")
+                .mpm(&self.analysis, &mut self.difference);
+        } else {
+            (self.correlation)(&self.analysis, &mut self.difference, true);
+        }
         // Skip the zero-lag lobe, then retain one maximum per positive lobe.
         let mut peaks = [0usize; MAX_LAG + 2];
         let mut count = 0;
@@ -300,6 +333,48 @@ impl PsolaStream {
             ((best as f64 + fraction) * DECIMATION as f64)
                 .clamp(MIN_PERIOD as f64, MAX_PERIOD as f64),
         )
+    }
+
+    // Causal NCCF tracker: prefer high-clarity peaks and shorter fundamental
+    // periods, with a weak continuity cost. The octave bias exceeds the maximum
+    // history cost, so an exact octave change cannot remain locked to history.
+    fn detect_nccf(&mut self) -> Option<f64> {
+        correlation::nccf(&self.analysis, &mut self.difference, self.correlation);
+        let is_peak = |lag: usize| {
+            self.difference[lag] >= self.difference[lag - 1]
+                && self.difference[lag] > self.difference[lag + 1]
+        };
+        let maximum = (MIN_LAG..=MAX_LAG)
+            .filter(|&lag| is_peak(lag))
+            .map(|lag| self.difference[lag])
+            .fold(0.0, f64::max);
+        if maximum < 0.8 {
+            self.previous_nccf = None;
+            return None;
+        }
+        let score = |lag: usize| {
+            let continuity = self.previous_nccf.map_or(0.0, |previous| {
+                ((lag * DECIMATION) as f64 / previous).log2().abs().min(1.0)
+            });
+            self.difference[lag] - 0.025 * (lag as f64 / MIN_LAG as f64).log2() - 0.02 * continuity
+        };
+        let best = (MIN_LAG..=MAX_LAG)
+            .filter(|&lag| is_peak(lag) && self.difference[lag] >= 0.93 * maximum)
+            .max_by(|&a, &b| score(a).total_cmp(&score(b)));
+        let best = best?;
+        let left = self.difference[best - 1];
+        let middle = self.difference[best];
+        let right = self.difference[best + 1];
+        let curvature = left - 2.0 * middle + right;
+        let fraction = if curvature < -1e-12 {
+            (0.5 * (left - right) / curvature).clamp(-0.5, 0.5)
+        } else {
+            0.0
+        };
+        let period = ((best as f64 + fraction) * DECIMATION as f64)
+            .clamp(MIN_PERIOD as f64, MAX_PERIOD as f64);
+        self.previous_nccf = Some(period);
+        Some(period)
     }
 
     fn mark(&self, index: usize) -> Mark {
@@ -469,10 +544,7 @@ mod tests {
 
     #[test]
     fn scalar_and_simd_streams_match_bits_through_pitch_and_voicing_changes() {
-        for estimator in [
-            crate::pitch::PitchEstimator::Yin,
-            crate::pitch::PitchEstimator::Mpm,
-        ] {
+        for estimator in crate::pitch::PitchEstimator::ALL {
             for analysis in [1024, 2048, 4096, 8192] {
                 let windows = crate::pitch::SpectralWindows {
                     analysis,
@@ -574,24 +646,141 @@ mod tests {
         }
     }
 
+    #[test]
+    fn fft_mpm_preserves_voicing_and_periods_across_windows_and_transitions() {
+        for analysis in [1024, 2048, 4096, 8192] {
+            let windows = crate::pitch::SpectralWindows {
+                analysis,
+                synthesis: 512,
+            };
+            let make = || {
+                TdPsola::with_synthesis(
+                    Box::new(crate::td_synthesis::TdSynthesis::new(1.0, windows)),
+                    windows,
+                )
+            };
+            let (mut direct, mut fft) = (make(), make());
+            direct.set_pitch_estimator(crate::pitch::PitchEstimator::Mpm);
+            fft.set_pitch_estimator(crate::pitch::PitchEstimator::MpmFft);
+            assert_eq!(direct.latency, fft.latency);
+            let mut phase = 0.0;
+            let mut seed = 17u32;
+            for i in 0..40000 {
+                phase += TAU * (70.0 + 250.0 * i as f64 / 40000.0) / 48000.0;
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                let sample = if i / 5000 % 3 == 0 {
+                    0.0
+                } else if i / 5000 % 3 == 1 {
+                    0.1 * (seed as f64 / u32::MAX as f64 - 0.5)
+                } else {
+                    0.1 * phase.cos() + 0.04 * (3.0 * phase).cos()
+                };
+                let ratio = [0.5, 2.0f64.powf(3.0 / 12.0), 2.0][i / 14000];
+                let a = direct.push(sample, ratio);
+                let b = fft.push(sample, ratio);
+                assert!(
+                    (a - b).abs() < 1e-8,
+                    "window={analysis} sample={i} audio delta={}",
+                    a - b
+                );
+                assert_eq!(direct.next_analysis.is_some(), fft.next_analysis.is_some());
+                assert!((1200.0 * (direct.period / fft.period).log2()).abs() < 1e-7);
+            }
+        }
+    }
+
+    #[test]
+    fn nccf_does_not_treat_dc_offset_or_offset_noise_as_voiced() {
+        let mut dsp = TdPsola::new(1.0);
+        dsp.set_pitch_estimator(crate::pitch::PitchEstimator::Nccf);
+        dsp.filtered.fill(0.3);
+        assert!(dsp.detect_period().is_none());
+        let mut seed = 17u32;
+        for sample in &mut dsp.filtered {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            *sample = 0.3 + 0.01 * (seed as f64 / u32::MAX as f64 - 0.5);
+        }
+        assert!(dsp.detect_period().is_none());
+        for (i, sample) in dsp.filtered.iter_mut().enumerate() {
+            *sample = 0.3 + 0.1 * (TAU * 113.0 * (i * DECIMATION) as f64 / 48000.0).cos();
+        }
+        let period = dsp.detect_period().unwrap();
+        assert!((period - 48000.0 / 113.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn nccf_tracker_follows_octave_changes_and_resets_on_silence() {
+        for analysis in [1024, 2048, 4096, 8192] {
+            let windows = crate::pitch::SpectralWindows {
+                analysis,
+                synthesis: 512,
+            };
+            let mut dsp = TdPsola::with_synthesis(
+                Box::new(crate::td_synthesis::TdSynthesis::new(1.0, windows)),
+                windows,
+            );
+            dsp.set_pitch_estimator(crate::pitch::PitchEstimator::Nccf);
+            for frequency in [113.0, 226.0, 113.0, 80.0, 160.0] {
+                for (i, sample) in dsp.filtered.iter_mut().enumerate() {
+                    let phase = TAU * frequency * (i * DECIMATION) as f64 / 48000.0;
+                    *sample = 0.1 * phase.cos() + 0.04 * (3.0 * phase).cos();
+                }
+                let period = dsp.detect_period().unwrap();
+                let cents = 1200.0 * (period * frequency / 48000.0).log2();
+                assert!(
+                    cents.abs() < 10.0,
+                    "window={analysis} frequency={frequency} cents={cents}"
+                );
+                assert!(dsp.previous_nccf.is_some());
+            }
+            dsp.filtered.fill(0.0);
+            assert!(dsp.detect_period().is_none());
+            assert!(dsp.previous_nccf.is_none());
+            dsp.set_pitch_estimator(crate::pitch::PitchEstimator::MpmFft);
+            assert!(dsp.fft_correlation.is_some());
+            dsp.set_pitch_estimator(crate::pitch::PitchEstimator::Nccf);
+            assert!(dsp.previous_nccf.is_none());
+        }
+    }
+
     // Manual performance comparison; no timing threshold in the test suite.
     #[test]
     #[ignore]
     fn benchmark_scalar_and_simd_pitch_analysis() {
-        benchmark_pitch_kernels(false);
+        benchmark_pitch_kernels(false, false);
     }
 
     #[test]
     #[ignore]
     fn benchmark_mpm_energy_reuse() {
-        benchmark_pitch_kernels(true);
+        benchmark_pitch_kernels(true, false);
     }
 
-    fn benchmark_pitch_kernels(reference: bool) {
+    #[test]
+    #[ignore]
+    fn benchmark_all_estimators() {
+        benchmark_pitch_kernels(false, true);
+    }
+
+    fn benchmark_pitch_kernels(reference: bool, all: bool) {
         use std::hint::black_box;
-        let baseline_label = if reference { "previous" } else { "scalar" };
-        let optimized_label = if reference { "reused" } else { "SIMD" };
-        let baseline_kernel = if reference {
+        let baseline_label = if all {
+            "MPM"
+        } else if reference {
+            "previous"
+        } else {
+            "scalar"
+        };
+        let optimized_label = if all {
+            "candidate"
+        } else if reference {
+            "reused"
+        } else {
+            "SIMD"
+        };
+        let baseline_kernel = if all {
+            correlation::select()
+        } else if reference {
             correlation::select_reference()
         } else {
             correlation::scalar
@@ -625,10 +814,15 @@ mod tests {
                 START.get_or_init(std::time::Instant::now).elapsed()
             }
         }
-        for estimator in [
-            crate::pitch::PitchEstimator::Yin,
-            crate::pitch::PitchEstimator::Mpm,
-        ] {
+        for estimator in crate::pitch::PitchEstimator::ALL {
+            if !all
+                && !matches!(
+                    estimator,
+                    crate::pitch::PitchEstimator::Yin | crate::pitch::PitchEstimator::Mpm
+                )
+            {
+                continue;
+            }
             if reference && estimator != crate::pitch::PitchEstimator::Mpm {
                 continue;
             }
@@ -654,6 +848,13 @@ mod tests {
                         } else {
                             correlation::select()
                         };
+                        if all {
+                            dsp.set_pitch_estimator(if index == 0 {
+                                crate::pitch::PitchEstimator::Mpm
+                            } else {
+                                estimator
+                            });
+                        }
                         let start = clock();
                         for _ in 0..500 {
                             black_box(dsp.detect_period());
@@ -685,6 +886,13 @@ mod tests {
                             correlation::select()
                         };
                         let ratio = 2.0f64.powf(semitones / 12.0);
+                        if all {
+                            dsp.set_pitch_estimator(if index == 0 {
+                                crate::pitch::PitchEstimator::Mpm
+                            } else {
+                                estimator
+                            });
+                        }
                         let start = clock();
                         for &sample in &input {
                             black_box(dsp.push(black_box(sample), ratio));
@@ -703,10 +911,7 @@ mod tests {
 
     #[test]
     fn estimators_cover_low_voice_missing_fundamental_and_noise() {
-        for estimator in [
-            crate::pitch::PitchEstimator::Yin,
-            crate::pitch::PitchEstimator::Mpm,
-        ] {
+        for estimator in crate::pitch::PitchEstimator::ALL {
             for frequency in [60.0, 80.0, 113.0, 203.0, 350.0] {
                 for fundamental in [0.1, 0.0] {
                     let mut dsp = TdPsola::new(1.0);
@@ -740,10 +945,7 @@ mod tests {
 
     #[test]
     fn estimator_streaming_quality_and_cost() {
-        for estimator in [
-            crate::pitch::PitchEstimator::Yin,
-            crate::pitch::PitchEstimator::Mpm,
-        ] {
+        for estimator in crate::pitch::PitchEstimator::ALL {
             for semitones in [-12.0, 3.0, 12.0] {
                 let mut dsp = TdPsola::new(1.0);
                 dsp.set_pitch_estimator(estimator);
@@ -826,22 +1028,25 @@ mod tests {
 
     #[test]
     fn unvoiced_noise_is_copied_at_the_declared_sample_delay() {
-        let mut dsp = TdPsola::new(1.0);
-        let mut seed = 17_u32;
-        let input: Vec<_> = (0..RING * 3)
-            .map(|_| {
-                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
-                0.1 * (seed as f64 / u32::MAX as f64 - 0.5)
-            })
-            .collect();
-        for (i, &sample) in input.iter().enumerate() {
-            let output = dsp.push(sample, 2.0);
-            assert_eq!(
-                output,
-                if i < LATENCY { 0.0 } else { input[i - LATENCY] },
-                "sample {i}"
-            );
+        for estimator in crate::pitch::PitchEstimator::ALL {
+            let mut dsp = TdPsola::new(1.0);
+            dsp.set_pitch_estimator(estimator);
+            let mut seed = 17_u32;
+            let input: Vec<_> = (0..RING * 3)
+                .map(|_| {
+                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                    0.1 * (seed as f64 / u32::MAX as f64 - 0.5)
+                })
+                .collect();
+            for (i, &sample) in input.iter().enumerate() {
+                let output = dsp.push(sample, 2.0);
+                assert_eq!(
+                    output,
+                    if i < LATENCY { 0.0 } else { input[i - LATENCY] },
+                    "sample {i}"
+                );
+            }
+            assert!(dsp.detect_period().is_none());
         }
-        assert!(dsp.detect_period().is_none());
     }
 }

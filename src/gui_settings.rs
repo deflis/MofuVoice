@@ -474,6 +474,26 @@ pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>>
 #[cfg(test)]
 mod tests {
     #[test]
+    fn all_pitch_estimators_persist_and_merge() {
+        let path =
+            std::env::temp_dir().join(format!("all-pitch-estimators-{}.ini", std::process::id()));
+        for estimator in crate::pitch::PitchEstimator::ALL {
+            let options =
+                Options::parse(["--psola-pitch-estimator", estimator.name()].map(String::from))
+                    .unwrap();
+            save(&path, &options).unwrap();
+            assert_eq!(load(&path).unwrap().pitch.psola_pitch_estimator, estimator);
+            let merged = merge(
+                &Options::default(),
+                vec!["--psola-pitch-estimator".into(), estimator.name().into()],
+            )
+            .unwrap();
+            assert_eq!(merged.pitch.psola_pitch_estimator, estimator);
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn pitch_estimator_persists_merges_and_validates() {
         let path = std::env::temp_dir().join(format!("pitch-estimator-{}.ini", std::process::id()));
         let options = Options::parse(["--psola-pitch-estimator", "mpm"].map(String::from)).unwrap();

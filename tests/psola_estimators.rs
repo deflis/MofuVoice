@@ -3,7 +3,7 @@ use std::f64::consts::TAU;
 
 #[test]
 fn estimator_selection_preserves_pitch_mapping_and_block_boundaries() {
-    for estimator in [PitchEstimator::Yin, PitchEstimator::Mpm] {
+    for estimator in PitchEstimator::ALL {
         for algorithm in [
             PitchAlgorithm::TdPsola,
             PitchAlgorithm::TdPsolaResampled,
