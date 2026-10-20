@@ -64,7 +64,7 @@ export function VoiceSettings() {
           </select>
         </label>
         <p>
-          同じピッチ・響きの設定で聞き比べてください。変更は保存後、次の音声開始時に反映します。
+          同じピッチとフォルマントの設定で聞き比べてください。変更は保存後、次の音声開始時に反映します。
         </p>
         <p>{algorithmDescription(pitchAlgorithm)}</p>
         <WindowControls
@@ -76,7 +76,7 @@ export function VoiceSettings() {
           disabled={!vocoder}
         />
         <p>
-          フェーズロック・スペクトル位相同期と、TD-PSOLA／FD-PSOLAに組み合わせる響きの補正に使います。
+          フェーズロック・スペクトル位相同期と、TD-PSOLA／FD-PSOLAに組み合わせるフォルマント補正に使います。
         </p>
         <label>
           PSOLAのピッチ推定
@@ -107,11 +107,12 @@ export function VoiceSettings() {
           disabled={!psola}
         />
         <p>
-          TD系は粒子全体の長さを保って左右に振り分け、FD系は解析窓と合成窓を設定します。TD系の値は粒子の固定サンプル長ではありません。音質は声や設定によって変わります。
+          TD-PSOLA系はピッチ周期（波形単位）を基準にウィンドウを適用し、FD-PSOLA系は解析ウィンドウと合成ウィンドウのサイズを設定します。設定値によって遅延時間や音質が変化します。
         </p>
         <p>
           変換時のDSP遅延の合計：{((delay / sampleRate) * 1000).toFixed(1)}{" "}
-          ms。高さと響きがともに0の場合は0 msです。入出力バッファーと機器の遅延は含みません。
+          ms。高さとフォルマントがともに0の場合は0
+          msです。入出力バッファーと機器の遅延は含みません。
         </p>
         <p>変更は保存後、次の音声開始時に反映します。PVSOLA論文方式は固定長です。</p>
       </DetailsPopup>
@@ -140,13 +141,14 @@ export function VoiceSettings() {
       />
       <fieldset className="settings" disabled={!preserveFormants}>
         <SemitonesInput
-          label="声の響き（フォルマント）"
+          label="フォルマント"
           lowerLabel="太く"
           upperLabel="明るく"
           value={formantShift}
           onChange={(value) => setFormantShift(value)}
         />
       </fieldset>
+      <p>声の太さ・明るさです。残響（リバーブ）とは別の調整です。</p>
       <button
         type="button"
         onClick={() => {
@@ -168,7 +170,7 @@ export function VoiceSettings() {
             }
           }}
         />
-        声の響きを独立して調整する
+        フォルマントを独立して調整する
       </label>
     </section>
   );
@@ -177,15 +179,15 @@ export function VoiceSettings() {
 function algorithmDescription(algorithm: string): string {
   switch (algorithm) {
     case "td-psola":
-      return "TD-PSOLAで高さを変え、響きの移動にはスペクトル処理を使います。DSP遅延はウィンドウ設定と響きの移動の有無で変わります。";
+      return "TD-PSOLAで高さを変え、フォルマントの移動にはスペクトル処理を使います。DSP遅延はウィンドウ設定とフォルマント移動の有無で変わります。";
     case "td-psola-resampled":
-      return "TD-PSOLAの時間伸縮と帯域制限リサンプリングで高さと響きを独立して変えます。DSP遅延はウィンドウ設定で変わります。";
+      return "TD-PSOLAの時間伸縮と帯域制限リサンプリングで高さとフォルマントを独立して変えます。DSP遅延はウィンドウ設定で変わります。";
     case "pvsola":
-      return "PVSOLA論文方式は位相ボコーダーで時間伸縮し、相互相関で整列した入力フレームを周期的に挿入してから再生速度を変えます。DSP遅延は48 kHzで約96 msです。響きの保持と独立調整に対応します。";
+      return "PVSOLA論文方式は位相ボコーダーで時間伸縮し、相互相関で整列した入力フレームを周期的に挿入してから再生速度を変えます。DSP遅延は48 kHzで約96 msです。フォルマントの保持と独立調整に対応します。";
     case "pvsola-sync":
       return "スペクトル位相同期は既存の直接スペクトル変換方式です。主要な周波数成分の相関を使って位相を補正します。DSP遅延は詳細設定の合成ウィンドウ長で変わります。";
     case "fd-psola":
-      return "FD-PSOLAはピッチ同期フレームのスペクトルを変換します。フォルマント保持を有効にすると響きの包絡を維持します。DSP遅延はウィンドウ設定と響きの移動の有無で変わります。";
+      return "FD-PSOLAはピッチ同期フレームのスペクトルを変換します。「フォルマントを独立して調整する」をオンにすると、フォルマントの包絡を維持します。DSP遅延はウィンドウ設定とフォルマント移動の有無で変わります。";
     default:
       return "フェーズロックは周波数成分の位相関係を保ちながら高さを変えます。DSP遅延は合成ウィンドウ長で変わります。";
   }
@@ -249,7 +251,7 @@ function WindowControls({
           setSynthesis(512);
         }}
       >
-        この段のウィンドウ長を標準に戻す
+        ウィンドウ長を既定値に戻す
       </button>
     </fieldset>
   );

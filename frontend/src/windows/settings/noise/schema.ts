@@ -10,8 +10,8 @@ export const noiseSchema = v.pipe(
     thresholdMode: v.picklist(["auto", "manual"]),
     // Manual range is enforced below; automatic mode ignores this value in Rust.
     thresholdDb: v.number(thresholdDbMessage),
-    attackMs: numberRange(0.1, 2000, "ゲートアタック"),
-    releaseMs: numberRange(0.1, 2000, "ゲートリリース"),
+    attackMs: numberRange(0.1, 2000, "ノイズゲートのアタック時間"),
+    releaseMs: numberRange(0.1, 2000, "ノイズゲートのリリース時間"),
   }),
   v.check((noise) => {
     if (!Number.isFinite(noise.thresholdDb)) {

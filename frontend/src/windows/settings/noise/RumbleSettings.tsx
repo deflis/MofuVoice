@@ -4,7 +4,7 @@ export function RumbleSettings() {
   const { rumbleFilter, setRumbleFilter } = useNoiseGateSettings();
   return (
     <section>
-      <h2>低い唸りを減らす（低域ノイズ除去）</h2>
+      <h2>マイクの吹かれ・振動ノイズを減らす（ランブルフィルター）</h2>
       <label className="check">
         <input
           type="checkbox"

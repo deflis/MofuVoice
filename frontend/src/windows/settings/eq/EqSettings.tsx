@@ -53,9 +53,13 @@ export function EqSettings() {
           onOpen={() => eq.setMode("pro")}
         >
           <>
-            {eq.outputDb !== 0 && <p>出力の追加減衰：{eq.outputDb} dB。詳細設定で変更できます。</p>}
+            {eq.outputDb !== 0 && (
+              <p>クリップ防止の出力調整：{eq.outputDb} dB（詳細設定で変更できます）</p>
+            )}
 
-            <p>ピーキングEQです。Qが小さいほど広い帯域、大きいほど狭い帯域に効きます。</p>
+            <p>
+              ピーキングEQです。帯域幅（Q値）が小さいほど広い帯域、大きいほど狭い帯域に効きます。
+            </p>
             {eq.bands.map((band, index) => (
               <EqBandDetails
                 key={index}
@@ -67,7 +71,7 @@ export function EqSettings() {
               />
             ))}
             <label>
-              出力の追加減衰（dB）
+              クリップ防止の出力調整（dB）
               <NumberInput
                 required
                 min="-18"
@@ -87,7 +91,9 @@ export function EqSettings() {
           <button type="button" onClick={eq.reset}>
             EQの補正量を0に戻す
           </button>
-          <p>全バンドの補正と追加減衰を0に戻します。周波数・Qはそのままです。</p>
+          <p>
+            全バンドの補正とクリップ防止の出力調整を0に戻します。周波数と帯域幅（Q値）はそのままです。
+          </p>
         </DetailsPopup>
       </fieldset>
     </section>

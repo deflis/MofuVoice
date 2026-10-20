@@ -26,12 +26,12 @@ export const settingsSchema = v.pipe(
   ),
   v.check(
     (settings) => settings.voice.preserveFormants || settings.voice.formantShift === 0,
-    "フォルマントを独立調整しない場合、調整値は0にしてください。",
+    "「フォルマントを独立して調整する」が無効の場合、調整値は0にしてください。",
   ),
   v.check(
     (settings) =>
       !settings.voice.pitchAlgorithm.startsWith("td-psola") || settings.voice.preserveFormants,
-    "TD-PSOLAではフォルマント保持をオンにしてください。",
+    "TD-PSOLAでは「フォルマントを独立して調整する」をオンにしてください。",
   ),
   v.check(
     (settings) => settings.level.floorDb < settings.level.targetDb,
@@ -39,7 +39,7 @@ export const settingsSchema = v.pipe(
   ),
   v.check(
     (settings) => settings.devices.backend !== "asio" || settings.devices.outputDevice === "",
-    "ASIOでは入出力に同じデバイスを使います。",
+    "ASIO使用時は入力と出力で個別のデバイスを指定できません。同一デバイスを選択するか、出力デバイスの指定を解除してください。",
   ),
 );
 export type Settings = v.InferOutput<typeof settingsSchema>;

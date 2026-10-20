@@ -4,7 +4,7 @@ import { numberRange } from "../validation";
 export const eqBandSchema = v.object({
   frequency: numberRange(40, 16000, "EQ周波数"),
   gainDb: numberRange(-12, 12, "EQゲイン"),
-  q: numberRange(0.2, 8, "EQのQ"),
+  q: numberRange(0.2, 8, "帯域幅（Q値）"),
 });
 export type EqBand = v.InferOutput<typeof eqBandSchema>;
 
@@ -18,6 +18,6 @@ export const eqSchema = v.object({
     v.minLength(1, "EQには1つ以上のバンドが必要です。"),
     v.maxLength(MAX_EQ_BANDS, `EQバンドは${MAX_EQ_BANDS}個までです。`),
   ),
-  outputDb: numberRange(-18, 0, "EQ出力"),
+  outputDb: numberRange(-18, 0, "クリップ防止の出力調整"),
 });
 export type EqValues = v.InferOutput<typeof eqSchema>;
