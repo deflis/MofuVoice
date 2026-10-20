@@ -55,12 +55,18 @@ export function VoiceSettings() {
               setPitchAlgorithm(v.parse(voiceSchema.entries.pitchAlgorithm, event.target.value))
             }
           >
-            <option value="phase-locked">フェーズロック（標準）</option>
-            <option value="pvsola">PVSOLA 論文方式（実験）</option>
-            <option value="pvsola-sync">スペクトル位相同期（従来方式）</option>
-            <option value="td-psola">TD-PSOLA（実験）</option>
-            <option value="td-psola-resampled">TD-PSOLA＋時間伸縮リサンプリング（実験）</option>
-            <option value="fd-psola">FD-PSOLA（実験）</option>
+            <optgroup label="スペクトル">
+              <option value="phase-locked">位相ロック（標準）</option>
+              <option value="pvsola-sync">スペクトル位相同期</option>
+            </optgroup>
+            <optgroup label="PVSOLA">
+              <option value="pvsola">PVSOLA（論文）</option>
+            </optgroup>
+            <optgroup label="PSOLA">
+              <option value="td-psola">TD-PSOLA</option>
+              <option value="td-psola-resampled">TD-PSOLA＋リサンプリング</option>
+              <option value="fd-psola">FD-PSOLA</option>
+            </optgroup>
           </select>
         </label>
         <p>
@@ -76,7 +82,7 @@ export function VoiceSettings() {
           disabled={!vocoder}
         />
         <p>
-          フェーズロック・スペクトル位相同期と、TD-PSOLA／FD-PSOLAに組み合わせるフォルマント補正に使います。
+          位相ロック（標準）・スペクトル位相同期と、TD-PSOLA／FD-PSOLAに組み合わせるフォルマント補正に使います。
         </p>
         <label>
           PSOLAのピッチ推定
@@ -107,14 +113,14 @@ export function VoiceSettings() {
           disabled={!psola}
         />
         <p>
-          TD-PSOLA系はピッチ周期（波形単位）を基準にウィンドウを適用し、FD-PSOLA系は解析ウィンドウと合成ウィンドウのサイズを設定します。設定値によって遅延時間や音質が変化します。
+          TD-PSOLAとTD-PSOLA＋リサンプリングはピッチ周期（波形単位）を基準にウィンドウを適用し、FD-PSOLAは解析ウィンドウと合成ウィンドウのサイズを設定します。設定値によって遅延時間や音質が変化します。
         </p>
         <p>
           変換時のDSP遅延の合計：{((delay / sampleRate) * 1000).toFixed(1)}{" "}
           ms。高さとフォルマントがともに0の場合は0
           msです。入出力バッファーと機器の遅延は含みません。
         </p>
-        <p>変更は保存後、次の音声開始時に反映します。PVSOLA論文方式は固定長です。</p>
+        <p>変更は保存後、次の音声開始時に反映します。PVSOLA（論文）は固定長です。</p>
       </DetailsPopup>
       <label>
         ピッチの表示単位
@@ -181,15 +187,15 @@ function algorithmDescription(algorithm: string): string {
     case "td-psola":
       return "TD-PSOLAで高さを変え、フォルマントの移動にはスペクトル処理を使います。DSP遅延はウィンドウ設定とフォルマント移動の有無で変わります。";
     case "td-psola-resampled":
-      return "TD-PSOLAの時間伸縮と帯域制限リサンプリングで高さとフォルマントを独立して変えます。DSP遅延はウィンドウ設定で変わります。";
+      return "TD-PSOLA＋リサンプリングは、時間伸縮と帯域制限リサンプリングで高さとフォルマントを独立して変えます。DSP遅延はウィンドウ設定で変わります。";
     case "pvsola":
-      return "PVSOLA論文方式は位相ボコーダーで時間伸縮し、相互相関で整列した入力フレームを周期的に挿入してから再生速度を変えます。DSP遅延は48 kHzで約96 msです。フォルマントの保持と独立調整に対応します。";
+      return "PVSOLA（論文）は位相ボコーダーで時間伸縮し、相互相関で整列した入力フレームを周期的に挿入してから再生速度を変えます。DSP遅延は48 kHzで約96 msです。フォルマントの保持と独立調整に対応します。";
     case "pvsola-sync":
-      return "スペクトル位相同期は既存の直接スペクトル変換方式です。主要な周波数成分の相関を使って位相を補正します。DSP遅延は詳細設定の合成ウィンドウ長で変わります。";
+      return "スペクトル位相同期は、直接スペクトル変換で主要な周波数成分の相関を使って位相を補正します。DSP遅延は詳細設定の合成ウィンドウ長で変わります。";
     case "fd-psola":
       return "FD-PSOLAはピッチ同期フレームのスペクトルを変換します。「フォルマントを独立して調整する」をオンにすると、フォルマントの包絡を維持します。DSP遅延はウィンドウ設定とフォルマント移動の有無で変わります。";
     default:
-      return "フェーズロックは周波数成分の位相関係を保ちながら高さを変えます。DSP遅延は合成ウィンドウ長で変わります。";
+      return "位相ロック（標準）は周波数成分の位相関係を保ちながら高さを変えます。DSP遅延は合成ウィンドウ長で変わります。";
   }
 }
 
