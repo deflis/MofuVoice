@@ -139,6 +139,7 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
             "sample_rate",
             "pitch",
             "pitch_algorithm",
+            "pitch_unit",
             "psola_pitch_estimator",
             "psola_analysis_window",
             "psola_synthesis_window",
@@ -301,6 +302,12 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
     }
     let mut options = Options::parse_gui(args.into_iter().map(String::from))?;
     options.eq.bands.truncate(band_count);
+    options.pitch_unit = values
+        .get("pitch_unit")
+        .copied()
+        .unwrap_or("semitones")
+        .into();
+    options.validate()?;
     Ok(options)
 }
 
@@ -374,6 +381,8 @@ pub(crate) fn merge(saved: &Options, args: Vec<String>) -> Result<Options, Box<d
         return Err("EQ bands must be contiguous".into());
     }
     let mut options = Options::parse_gui(base)?;
+    options.pitch_unit = saved.pitch_unit.clone();
+    options.validate()?;
     options.eq.bands.truncate(band_count);
     Ok(options)
 }
@@ -432,6 +441,7 @@ pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>>
         "psola_analysis_window={}\npsola_synthesis_window={}\n",
         options.pitch.psola_windows.analysis, options.pitch.psola_windows.synthesis
     ));
+    text.push_str(&format!("pitch_unit={}\n", options.pitch_unit));
     text.push_str(&format!("rumble_filter={}\n", options.rumble_filter));
     text.push_str(&format!("deesser={}\n", options.deesser));
     text.push_str(&format!(
@@ -473,6 +483,30 @@ pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>>
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pitch_display_unit_persists_defaults_and_survives_cli_overrides() {
+        let path = std::env::temp_dir().join(format!("pitch-unit-{}.ini", std::process::id()));
+        for unit in ["semitones", "percent"] {
+            let options = super::Options {
+                pitch_unit: unit.into(),
+                ..super::Options::default()
+            };
+            super::save(&path, &options).unwrap();
+            assert_eq!(super::load(&path).unwrap(), options);
+            let merged = super::merge(&options, vec!["--pitch".into(), "3.25".into()]).unwrap();
+            assert_eq!(merged.pitch_unit, unit);
+            assert_eq!(merged.pitch.semitones, 3.25);
+            let text = std::fs::read_to_string(&path).unwrap();
+            let legacy = text.replace(&format!("pitch_unit={unit}\n"), "");
+            assert_eq!(super::decode(&legacy).unwrap().pitch_unit, "semitones");
+            assert!(super::decode(
+                &text.replace(&format!("pitch_unit={unit}"), "pitch_unit=invalid")
+            )
+            .is_err());
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
     #[test]
     fn all_pitch_estimators_persist_and_merge() {
         let path =

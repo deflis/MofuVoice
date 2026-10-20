@@ -5,6 +5,7 @@ use std::error::Error;
 pub struct Options {
     pub eq: crate::eq::EqSettings,
     pub eq_mode: String,
+    pub pitch_unit: String,
     pub device: String,
     pub output_device: String,
     pub input_channel: usize,
@@ -33,6 +34,7 @@ impl Default for Options {
         Self {
             eq: crate::eq::EqSettings::default(),
             eq_mode: "simple".into(),
+            pitch_unit: "semitones".into(),
             device: String::new(),
             output_device: String::new(),
             input_channel: 1,
@@ -434,6 +436,9 @@ impl Options {
             return Err(crate::pitch::InvalidFormant.into());
         }
         self.eq.validate()?;
+        if !["semitones", "percent"].contains(&self.pitch_unit.as_str()) {
+            return Err("Pitch display unit requires semitones or percent".into());
+        }
         if !["simple", "pro"].contains(&self.eq_mode.as_str()) {
             return Err("EQ mode requires simple or pro".into());
         }

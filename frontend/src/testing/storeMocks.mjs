@@ -14,6 +14,7 @@ export const settings = {
     sampleRate: 48000,
   },
   voice: {
+    pitchUnit: "semitones",
     pitchAlgorithm: "phase-locked",
     psolaPitchEstimator: "yin",
     psolaAnalysisWindow: 2048,
