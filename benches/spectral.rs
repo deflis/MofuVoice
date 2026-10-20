@@ -57,12 +57,20 @@ fn main() {
         })
         .collect();
     for algorithm in PitchAlgorithm::ALL {
+        if std::env::var("DSP_BENCH_ALGORITHM")
+            .is_ok_and(|filter| !algorithm.name().contains(&filter))
+        {
+            continue;
+        }
         for pitch in [-12.0, -3.0, 0.0, 3.0, 7.0, 12.0] {
             for (preserve, shift) in [(false, 0.0), (true, 0.0), (true, 2.53)] {
                 if algorithm.uses_td_psola() && !preserve {
                     continue;
                 }
                 for auto_level in [false, true] {
+                    if std::env::var_os("DSP_BENCH_PITCH_ONLY").is_some() && auto_level {
+                        continue;
+                    }
                     let mut times = Vec::new();
                     let mut worst_block = 0.0_f64;
                     for _ in 0..7 {
