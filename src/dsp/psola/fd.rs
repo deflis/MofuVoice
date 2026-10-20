@@ -61,13 +61,13 @@ impl FdSynthesis {
         let center = self.transform.center;
         assert!(source + (size as f64 - 1.0 - center) + 2.0 < clock as f64);
         assert!(
-            source - center - 1.0 >= clock.saturating_sub(crate::psola_common::RING) as f64
-                || clock < crate::psola_common::RING
+            source - center - 1.0 >= clock.saturating_sub(crate::dsp::psola::common::RING) as f64
+                || clock < crate::dsp::psola::common::RING
         );
         for i in 0..size {
             let offset = i as f64 - center;
-            self.input[i] =
-                crate::psola_common::interpolate(input, source + offset) * self.analysis_window[i];
+            self.input[i] = crate::dsp::psola::common::interpolate(input, source + offset)
+                * self.analysis_window[i];
         }
         self.transform
             .process_grain(&self.input, &mut self.output, ratio, preserve_formants);
@@ -78,13 +78,13 @@ impl FdSynthesis {
         );
         let first = (destination - radius).ceil().max(clock as f64) as usize;
         let last = (destination + radius).ceil() as usize;
-        assert!(last < clock + crate::psola_common::RING);
+        assert!(last < clock + crate::dsp::psola::common::RING);
         for target in first..last {
             let frame = (target as f64 - destination + center)
                 .round()
                 .clamp(0.0, (size - 1) as f64) as usize;
             let window = self.synthesis_window[frame];
-            let index = target % crate::psola_common::RING;
+            let index = target % crate::dsp::psola::common::RING;
             output[index] += self.output[frame] * window;
             weights[index] += window * self.analysis_window[frame];
             coverage[index] = true;
@@ -92,7 +92,7 @@ impl FdSynthesis {
     }
 }
 
-impl crate::psola_synthesis::PsolaSynthesis for FdSynthesis {
+impl crate::dsp::psola::synthesis::PsolaSynthesis for FdSynthesis {
     fn grain_timing(
         &self,
         left_source_span: f64,
@@ -100,7 +100,7 @@ impl crate::psola_synthesis::PsolaSynthesis for FdSynthesis {
         right_source_span: f64,
         pitch_ratio: f64,
         previous_synthesis_period: f64,
-    ) -> crate::psola_synthesis::GrainTiming {
+    ) -> crate::dsp::psola::synthesis::GrainTiming {
         // Output epochs must follow the requested pitch, or overlap-add
         // locks the reconstructed spectrum back to the input fundamental.
         let period = source_period / pitch_ratio;
@@ -110,7 +110,7 @@ impl crate::psola_synthesis::PsolaSynthesis for FdSynthesis {
             period
         });
         let right = right_source_span.min(period);
-        crate::psola_synthesis::GrainTiming {
+        crate::dsp::psola::synthesis::GrainTiming {
             period,
             left,
             right,

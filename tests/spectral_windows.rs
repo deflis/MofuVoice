@@ -140,6 +140,7 @@ fn configured_windows_keep_pitch_and_phase_continuous() {
                 let settings = PitchSettings {
                     windows,
                     psola_windows: windows,
+                    psola_pitch_estimator: Default::default(),
                     algorithm,
                     semitones,
                     preserve_formants: false,

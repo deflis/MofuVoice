@@ -50,9 +50,9 @@ impl PitchAlgorithm {
 
     pub fn latency(self) -> usize {
         match self {
-            Self::Pvsola => crate::pvsola::LATENCY,
+            Self::Pvsola => crate::dsp::psola::PVSOLA_LATENCY,
             Self::TdPsola | Self::TdPsolaResampled | Self::FdPsola => {
-                crate::psola_stream::latency(SpectralWindows::default())
+                crate::dsp::psola::latency(SpectralWindows::default())
             }
             _ => LATENCY,
         }
@@ -192,14 +192,14 @@ impl PitchSettings {
         match (self.algorithm, self.formant_shift != 0.0) {
             (PitchAlgorithm::PhaseLocked | PitchAlgorithm::PvsolaSync, _) => self.windows.synthesis,
             (PitchAlgorithm::TdPsola | PitchAlgorithm::FdPsola, true) => {
-                crate::psola_stream::latency(self.psola_windows) + self.windows.synthesis
+                crate::dsp::psola::latency(self.psola_windows) + self.windows.synthesis
             }
             (
                 PitchAlgorithm::TdPsola
                 | PitchAlgorithm::TdPsolaResampled
                 | PitchAlgorithm::FdPsola,
                 _,
-            ) => crate::psola_stream::latency(self.psola_windows),
+            ) => crate::dsp::psola::latency(self.psola_windows),
             _ => self.algorithm.latency(),
         }
     }
@@ -682,8 +682,8 @@ struct Lobe {
 pub struct PitchShifter {
     windows: SpectralWindows,
     custom_fft: Option<crate::dsp::fft::Fft>,
-    psola: Option<crate::psola_stream::PsolaStream>,
-    pvsola: Option<crate::pvsola::PvsOla>,
+    psola: Option<crate::dsp::psola::PsolaStream>,
+    pvsola: Option<crate::dsp::psola::PvsOla>,
     algorithm: PitchAlgorithm,
     synchronizer: sync::Synchronizer,
     fft: Fft,
@@ -778,27 +778,27 @@ impl PitchShifter {
             custom_fft: (windows != SpectralWindows::default())
                 .then(|| crate::dsp::fft::Fft::new(window)),
             psola: match algorithm {
-                PitchAlgorithm::TdPsola => Some(crate::psola_stream::PsolaStream::with_synthesis(
-                    Box::new(crate::td_synthesis::TdSynthesis::new(1.0, psola_windows)),
+                PitchAlgorithm::TdPsola => Some(crate::dsp::psola::PsolaStream::with_synthesis(
+                    Box::new(crate::dsp::psola::TdSynthesis::new(1.0, psola_windows)),
                     psola_windows,
                 )),
                 PitchAlgorithm::TdPsolaResampled => {
-                    Some(crate::psola_stream::PsolaStream::with_synthesis(
-                        Box::new(crate::td_synthesis::TdSynthesis::new(
+                    Some(crate::dsp::psola::PsolaStream::with_synthesis(
+                        Box::new(crate::dsp::psola::TdSynthesis::new(
                             formant_ratio,
                             psola_windows,
                         )),
                         psola_windows,
                     ))
                 }
-                PitchAlgorithm::FdPsola => Some(crate::psola_stream::PsolaStream::with_synthesis(
-                    Box::new(crate::fd_psola::FdSynthesis::new(psola_windows)),
+                PitchAlgorithm::FdPsola => Some(crate::dsp::psola::PsolaStream::with_synthesis(
+                    Box::new(crate::dsp::psola::FdSynthesis::new(psola_windows)),
                     psola_windows,
                 )),
                 _ => None,
             },
             pvsola: (algorithm == PitchAlgorithm::Pvsola)
-                .then(|| crate::pvsola::PvsOla::new(ratio, preserve_formants, formant_ratio)),
+                .then(|| crate::dsp::psola::PvsOla::new(ratio, preserve_formants, formant_ratio)),
             algorithm,
             synchronizer: sync::Synchronizer::new(window),
             fft: Fft::new(),

@@ -10,28 +10,25 @@
 //! Pitch marks track a consistent waveform polarity near predicted epochs.
 //! Reference: https://praat.org/manual/overlap-add.html
 //! Pitch estimator: de Cheveigne & Kawahara, JASA 2002, doi:10.1121/1.1458024.
+use super::{correlation, fft as fft_correlation};
 use std::f64::consts::TAU;
-#[path = "psola_correlation.rs"]
-mod correlation;
-#[path = "psola_fft.rs"]
-mod fft_correlation;
 
 #[cfg(test)]
 const LATENCY: usize = 5376;
-const RING: usize = crate::psola_common::RING;
-const HOP: usize = crate::psola_common::HOP;
-const DECIMATION: usize = crate::psola_common::DECIMATION;
-const TAPS: usize = crate::psola_common::TAPS;
-const MIN_PERIOD: usize = crate::psola_common::MIN_PERIOD;
-pub(crate) const MAX_PERIOD: usize = crate::psola_common::MAX_PERIOD;
+const RING: usize = crate::dsp::psola::common::RING;
+const HOP: usize = crate::dsp::psola::common::HOP;
+const DECIMATION: usize = crate::dsp::psola::common::DECIMATION;
+const TAPS: usize = crate::dsp::psola::common::TAPS;
+const MIN_PERIOD: usize = crate::dsp::psola::common::MIN_PERIOD;
+pub(crate) const MAX_PERIOD: usize = crate::dsp::psola::common::MAX_PERIOD;
 const MAX_LAG: usize = MAX_PERIOD / DECIMATION;
 const MIN_LAG: usize = MIN_PERIOD / DECIMATION;
 const MARKS: usize = 128;
 // Worst-case output-period support (minimum pitch ratio 0.5), plus tracking,
 // frame scheduling, and fractional resampling. Round up to an analysis hop.
 pub(crate) fn latency(windows: crate::pitch::SpectralWindows) -> usize {
-    let left =
-        (2.0 * MAX_PERIOD as f64 * crate::psola_common::flank_scales(windows).0).ceil() as usize;
+    let left = (2.0 * MAX_PERIOD as f64 * crate::dsp::psola::common::flank_scales(windows).0).ceil()
+        as usize;
     (windows.analysis / 2
         + MAX_PERIOD / 2
         + TAPS / 2
@@ -60,7 +57,7 @@ pub(crate) struct PsolaStream {
     input: Box<[f64; RING]>,
     output: Box<[f64; RING]>,
     weights: Box<[f64; RING]>,
-    synthesis: Box<dyn crate::psola_synthesis::PsolaSynthesis>,
+    synthesis: Box<dyn crate::dsp::psola::synthesis::PsolaSynthesis>,
     preserve_formants: bool,
     coverage: Box<[bool; RING]>,
     voicing: Box<[f64; RING]>,
@@ -87,16 +84,13 @@ impl PsolaStream {
     fn new(formant_ratio: f64) -> Self {
         let windows = crate::pitch::SpectralWindows::default();
         Self::with_synthesis(
-            Box::new(crate::td_synthesis::TdSynthesis::new(
-                formant_ratio,
-                windows,
-            )),
+            Box::new(crate::dsp::psola::TdSynthesis::new(formant_ratio, windows)),
             windows,
         )
     }
 
     pub(crate) fn with_synthesis(
-        synthesis: Box<dyn crate::psola_synthesis::PsolaSynthesis>,
+        synthesis: Box<dyn crate::dsp::psola::synthesis::PsolaSynthesis>,
         windows: crate::pitch::SpectralWindows,
     ) -> Self {
         windows.validate().expect("invalid PSOLA windows");
@@ -120,13 +114,13 @@ impl PsolaStream {
             estimator: crate::pitch::PitchEstimator::default(),
             latency: latency(windows),
             lookahead: windows.analysis / 2 + MAX_PERIOD / 2 + TAPS / 2,
-            input: crate::psola_common::ring(0.0),
-            output: crate::psola_common::ring(0.0),
-            weights: crate::psola_common::ring(0.0),
+            input: crate::dsp::psola::common::ring(0.0),
+            output: crate::dsp::psola::common::ring(0.0),
+            weights: crate::dsp::psola::common::ring(0.0),
             synthesis,
             preserve_formants: true,
-            coverage: crate::psola_common::ring(false),
-            voicing: crate::psola_common::ring(0.0),
+            coverage: crate::dsp::psola::common::ring(false),
+            voicing: crate::dsp::psola::common::ring(0.0),
             filtered: vec![0.0; windows.analysis / DECIMATION + MAX_LAG + 1],
             analysis: vec![0.0; windows.analysis / DECIMATION + MAX_LAG + 1],
             difference: [0.0; MAX_LAG + 2],
@@ -552,7 +546,7 @@ mod tests {
                 };
                 let make = || {
                     TdPsola::with_synthesis(
-                        Box::new(crate::td_synthesis::TdSynthesis::new(1.0, windows)),
+                        Box::new(crate::dsp::psola::TdSynthesis::new(1.0, windows)),
                         windows,
                     )
                 };
@@ -593,7 +587,7 @@ mod tests {
                 };
                 let make = || {
                     TdPsola::with_synthesis(
-                        Box::new(crate::td_synthesis::TdSynthesis::new(1.0, windows)),
+                        Box::new(crate::dsp::psola::TdSynthesis::new(1.0, windows)),
                         windows,
                     )
                 };
@@ -655,7 +649,7 @@ mod tests {
             };
             let make = || {
                 TdPsola::with_synthesis(
-                    Box::new(crate::td_synthesis::TdSynthesis::new(1.0, windows)),
+                    Box::new(crate::dsp::psola::TdSynthesis::new(1.0, windows)),
                     windows,
                 )
             };
@@ -716,7 +710,7 @@ mod tests {
                 synthesis: 512,
             };
             let mut dsp = TdPsola::with_synthesis(
-                Box::new(crate::td_synthesis::TdSynthesis::new(1.0, windows)),
+                Box::new(crate::dsp::psola::TdSynthesis::new(1.0, windows)),
                 windows,
             );
             dsp.set_pitch_estimator(crate::pitch::PitchEstimator::Nccf);
@@ -832,7 +826,7 @@ mod tests {
                     synthesis: 512,
                 };
                 let mut dsp = TdPsola::with_synthesis(
-                    Box::new(crate::td_synthesis::TdSynthesis::new(1.0, windows)),
+                    Box::new(crate::dsp::psola::TdSynthesis::new(1.0, windows)),
                     windows,
                 );
                 dsp.set_pitch_estimator(estimator);

@@ -47,7 +47,7 @@ mod tests {
     #[test]
     fn stable_and_changing_pitch_marks_keep_nonzero_grain_support() {
         for formant in [0.5, 1.0, 2.0] {
-            let td = crate::td_synthesis::TdSynthesis::new(
+            let td = crate::dsp::psola::TdSynthesis::new(
                 formant,
                 crate::pitch::SpectralWindows::default(),
             );
@@ -67,7 +67,7 @@ mod tests {
                 );
             }
         }
-        let fd = crate::fd_psola::FdSynthesis::new(crate::pitch::SpectralWindows::default());
+        let fd = crate::dsp::psola::FdSynthesis::new(crate::pitch::SpectralWindows::default());
         let timing = fd.grain_timing(400.0, 400.0, 400.0, 1.5, 0.0);
         assert_eq!(timing.period, 400.0 / 1.5);
         assert_eq!(timing.left, timing.period);
