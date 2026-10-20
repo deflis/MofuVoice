@@ -4,6 +4,7 @@ import type { VoiceValues } from "./schema";
 
 type VoiceState = VoiceValues & {
   setPitchUnit: (value: VoiceValues["pitchUnit"]) => void;
+  setPsolaPitchEstimator: (value: VoiceValues["psolaPitchEstimator"]) => void;
   setPsolaAnalysisWindow: (value: VoiceValues["psolaAnalysisWindow"]) => void;
   setPsolaSynthesisWindow: (value: VoiceValues["psolaSynthesisWindow"]) => void;
   setAnalysisWindow: (value: VoiceValues["analysisWindow"]) => void;
@@ -29,6 +30,9 @@ export const createVoiceSlice: StateCreator<SettingsStore, [], [], VoiceSlice> =
             : {}),
         },
       })),
+    psolaPitchEstimator: "yin",
+    setPsolaPitchEstimator: (value) =>
+      set((state) => ({ voice: { ...state.voice, psolaPitchEstimator: value } })),
     psolaAnalysisWindow: 2048,
     psolaSynthesisWindow: 512,
     setPsolaAnalysisWindow: (value) =>

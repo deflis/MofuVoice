@@ -39,6 +39,8 @@ fn arguments(options: &Options) -> Vec<String> {
         options.pitch.windows.analysis.to_string(),
         "--synthesis-window".into(),
         options.pitch.windows.synthesis.to_string(),
+        "--psola-pitch-estimator".into(),
+        options.pitch.psola_pitch_estimator.name().into(),
         "--psola-analysis-window".into(),
         options.pitch.psola_windows.analysis.to_string(),
         "--psola-synthesis-window".into(),
@@ -138,6 +140,7 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
             "pitch",
             "pitch_algorithm",
             "pitch_unit",
+            "psola_pitch_estimator",
             "psola_analysis_window",
             "psola_synthesis_window",
             "analysis_window",
@@ -212,6 +215,11 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
         values.get("analysis_window").copied().unwrap_or("2048"),
         "--synthesis-window",
         values.get("synthesis_window").copied().unwrap_or("512"),
+        "--psola-pitch-estimator",
+        values
+            .get("psola_pitch_estimator")
+            .copied()
+            .unwrap_or("yin"),
         "--psola-analysis-window",
         values
             .get("psola_analysis_window")
@@ -330,6 +338,7 @@ pub(crate) fn merge(saved: &Options, args: Vec<String>) -> Result<Options, Box<d
             "--sample-rate",
             "--pitch",
             "--pitch-algorithm",
+            "--psola-pitch-estimator",
             "--psola-analysis-window",
             "--psola-synthesis-window",
             "--analysis-window",
@@ -425,6 +434,10 @@ pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>>
         options.pitch.windows.analysis, options.pitch.windows.synthesis
     ));
     text.push_str(&format!(
+        "psola_pitch_estimator={}\n",
+        options.pitch.psola_pitch_estimator.name()
+    ));
+    text.push_str(&format!(
         "psola_analysis_window={}\npsola_synthesis_window={}\n",
         options.pitch.psola_windows.analysis, options.pitch.psola_windows.synthesis
     ));
@@ -491,6 +504,65 @@ mod tests {
             )
             .is_err());
         }
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn all_pitch_estimators_persist_and_merge() {
+        let path =
+            std::env::temp_dir().join(format!("all-pitch-estimators-{}.ini", std::process::id()));
+        for estimator in crate::pitch::PitchEstimator::ALL {
+            let options =
+                Options::parse(["--psola-pitch-estimator", estimator.name()].map(String::from))
+                    .unwrap();
+            save(&path, &options).unwrap();
+            assert_eq!(load(&path).unwrap().pitch.psola_pitch_estimator, estimator);
+            let merged = merge(
+                &Options::default(),
+                vec!["--psola-pitch-estimator".into(), estimator.name().into()],
+            )
+            .unwrap();
+            assert_eq!(merged.pitch.psola_pitch_estimator, estimator);
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn pitch_estimator_persists_merges_and_validates() {
+        let path = std::env::temp_dir().join(format!("pitch-estimator-{}.ini", std::process::id()));
+        let options = Options::parse(["--psola-pitch-estimator", "mpm"].map(String::from)).unwrap();
+        save(&path, &options).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let loaded = decode(&text).unwrap();
+        assert_eq!(
+            loaded.pitch.psola_pitch_estimator,
+            crate::pitch::PitchEstimator::Mpm
+        );
+        let merged = merge(
+            &loaded,
+            vec!["--psola-pitch-estimator".into(), "yin".into()],
+        )
+        .unwrap();
+        assert_eq!(
+            merged.pitch.psola_pitch_estimator,
+            crate::pitch::PitchEstimator::Yin
+        );
+        assert!(Options::parse(["--psola-pitch-estimator", "invalid"].map(String::from)).is_err());
+        assert!(Options::parse(
+            [
+                "--psola-pitch-estimator",
+                "yin",
+                "--psola-pitch-estimator",
+                "mpm"
+            ]
+            .map(String::from)
+        )
+        .is_err());
+        let legacy = decode(&text.replace("psola_pitch_estimator=mpm\n", "")).unwrap();
+        assert_eq!(
+            legacy.pitch.psola_pitch_estimator,
+            crate::pitch::PitchEstimator::Yin
+        );
         std::fs::remove_file(path).unwrap();
     }
 

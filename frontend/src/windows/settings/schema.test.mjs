@@ -202,3 +202,30 @@ test("pitch display unit is saved and restored without changing pitch", async ()
     );
   }
 });
+
+test("PSOLA estimator choice is saved and invalid estimators rejected", async () => {
+  for (const estimator of ["yin", "mpm", "mpm-fft", "nccf"]) {
+    settingsStore.getState().voice.setPsolaPitchEstimator(estimator);
+    await settingsStore.getState().save();
+    assert.equal(
+      calls("save_settings").at(-1).arguments[1].settings.voice.psolaPitchEstimator,
+      estimator,
+    );
+  }
+  for (const psolaPitchEstimator of ["yin", "mpm", "mpm-fft", "nccf"]) {
+    assert.equal(
+      v.safeParse(settingsSchema, {
+        ...settings,
+        voice: { ...settings.voice, psolaPitchEstimator },
+      }).success,
+      true,
+    );
+  }
+  assert.equal(
+    v.safeParse(settingsSchema, {
+      ...settings,
+      voice: { ...settings.voice, psolaPitchEstimator: "unknown" },
+    }).success,
+    false,
+  );
+});

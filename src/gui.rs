@@ -171,6 +171,7 @@ struct DeviceSettings {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct VoiceSettings {
     pitch_unit: String,
+    psola_pitch_estimator: String,
     psola_analysis_window: usize,
     psola_synthesis_window: usize,
     analysis_window: usize,
@@ -204,6 +205,7 @@ impl Settings {
             },
             voice: VoiceSettings {
                 pitch_unit: options.pitch_unit.clone(),
+                psola_pitch_estimator: options.pitch.psola_pitch_estimator.name().into(),
                 psola_analysis_window: options.pitch.psola_windows.analysis,
                 psola_synthesis_window: options.pitch.psola_windows.synthesis,
                 analysis_window: options.pitch.windows.analysis,
@@ -247,6 +249,10 @@ impl Settings {
             frames: self.devices.frames,
             sample_rate: self.devices.sample_rate,
             pitch: crate::pitch::PitchSettings {
+                psola_pitch_estimator: crate::pitch::PitchEstimator::parse(
+                    &self.voice.psola_pitch_estimator,
+                )
+                .map_err(str::to_string)?,
                 psola_windows: crate::pitch::SpectralWindows {
                     analysis: self.voice.psola_analysis_window,
                     synthesis: self.voice.psola_synthesis_window,
@@ -1049,6 +1055,20 @@ mod tests {
             assert_eq!(settings.voice.pitch_unit, unit);
             assert_eq!(settings.options().unwrap(), options);
             settings.voice.pitch_unit = "invalid".into();
+            assert!(settings.options().is_err());
+        }
+    }
+
+    #[test]
+    fn pitch_estimator_controls_round_trip_and_reject_unknown_values() {
+        for estimator in crate::pitch::PitchEstimator::ALL {
+            let options =
+                Options::parse_gui(["--psola-pitch-estimator", estimator.name()].map(String::from))
+                    .unwrap();
+            let mut settings = Settings::from_options(&options);
+            assert_eq!(settings.voice.psola_pitch_estimator, estimator.name());
+            assert_eq!(settings.options().unwrap(), options);
+            settings.voice.psola_pitch_estimator = "unknown".into();
             assert!(settings.options().is_err());
         }
     }

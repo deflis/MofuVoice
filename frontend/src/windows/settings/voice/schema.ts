@@ -11,6 +11,7 @@ export const voiceSchema = v.object({
     "td-psola-resampled",
     "fd-psola",
   ]),
+  psolaPitchEstimator: v.optional(v.picklist(["yin", "mpm", "mpm-fft", "nccf"]), "yin"),
   psolaAnalysisWindow: v.picklist([1024, 2048, 4096, 8192]),
   psolaSynthesisWindow: v.picklist([256, 512, 1024, 2048]),
   analysisWindow: v.picklist([1024, 2048, 4096, 8192]),
