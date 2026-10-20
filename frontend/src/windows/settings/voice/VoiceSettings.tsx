@@ -60,7 +60,7 @@ export function VoiceSettings() {
               <option value="pvsola-sync">スペクトル位相同期</option>
             </optgroup>
             <optgroup label="PVSOLA">
-              <option value="pvsola">PVSOLA（論文）</option>
+              <option value="pvsola">PVSOLA</option>
             </optgroup>
             <optgroup label="PSOLA">
               <option value="td-psola">TD-PSOLA</option>
@@ -126,7 +126,7 @@ export function VoiceSettings() {
           ms。高さとフォルマントがともに0の場合は0
           msです。入出力バッファーと機器の遅延は含みません。
         </p>
-        <p>変更は保存後、次の音声開始時に反映します。PVSOLA（論文）は固定長です。</p>
+        <p>変更は保存後、次の音声開始時に反映します。PVSOLAは固定長です。</p>
       </DetailsPopup>
       <label>
         ピッチの表示単位
@@ -195,7 +195,7 @@ function algorithmDescription(algorithm: string): string {
     case "td-psola-resampled":
       return "TD-PSOLA＋リサンプリングは、時間伸縮と帯域制限リサンプリングで高さとフォルマントを独立して変えます。DSP遅延はウィンドウ設定で変わります。";
     case "pvsola":
-      return "PVSOLA（論文）は位相ボコーダーで時間伸縮し、相互相関で整列した入力フレームを周期的に挿入してから再生速度を変えます。DSP遅延は48 kHzで約96 msです。フォルマントの保持と独立調整に対応します。";
+      return "PVSOLAは位相ボコーダーで時間伸縮し、相互相関で整列した入力フレームを周期的に挿入してから再生速度を変えます。DSP遅延は48 kHzで約96 msです。フォルマントの保持と独立調整に対応します。";
     case "pvsola-sync":
       return "スペクトル位相同期は、直接スペクトル変換で主要な周波数成分の相関を使って位相を補正します。DSP遅延は詳細設定の合成ウィンドウ長で変わります。";
     case "fd-psola":
