@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { percentToSemitones, semitonesToPercent } from "./pitchUnits";
 import { pitchLatency } from "./latency";
 import { DetailsPopup } from "../DetailsPopup";
@@ -11,8 +10,9 @@ import { voiceSchema, type VoiceValues } from "./schema";
 const pitchPresets = [50, 75, 100, 110, 120, 125, 130, 140, 150, 175, 200];
 
 export function VoiceSettings() {
-  const [pitchUnit, setPitchUnit] = useState("semitones");
   const {
+    pitchUnit,
+    setPitchUnit,
     psolaAnalysisWindow,
     psolaSynthesisWindow,
     setPsolaAnalysisWindow,
@@ -98,7 +98,12 @@ export function VoiceSettings() {
       </DetailsPopup>
       <label>
         ピッチの表示単位
-        <select value={pitchUnit} onChange={(event) => setPitchUnit(event.target.value)}>
+        <select
+          value={pitchUnit}
+          onChange={(event) =>
+            setPitchUnit(v.parse(voiceSchema.entries.pitchUnit, event.target.value))
+          }
+        >
           <option value="semitones">半音</option>
           <option value="percent">パーセント（恋声風）</option>
         </select>

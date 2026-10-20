@@ -2,6 +2,7 @@ import * as v from "valibot";
 import { numberRange } from "../validation";
 
 export const voiceSchema = v.object({
+  pitchUnit: v.optional(v.picklist(["semitones", "percent"]), "semitones"),
   pitchAlgorithm: v.picklist([
     "phase-locked",
     "pvsola",

@@ -3,6 +3,7 @@ import type { SettingsStore } from "../store";
 import type { VoiceValues } from "./schema";
 
 type VoiceState = VoiceValues & {
+  setPitchUnit: (value: VoiceValues["pitchUnit"]) => void;
   setPsolaAnalysisWindow: (value: VoiceValues["psolaAnalysisWindow"]) => void;
   setPsolaSynthesisWindow: (value: VoiceValues["psolaSynthesisWindow"]) => void;
   setAnalysisWindow: (value: VoiceValues["analysisWindow"]) => void;
@@ -15,6 +16,8 @@ type VoiceState = VoiceValues & {
 export type VoiceSlice = { voice: VoiceState };
 export const createVoiceSlice: StateCreator<SettingsStore, [], [], VoiceSlice> = (set) => ({
   voice: {
+    pitchUnit: "semitones",
+    setPitchUnit: (value) => set((state) => ({ voice: { ...state.voice, pitchUnit: value } })),
     pitchAlgorithm: "phase-locked",
     setPitchAlgorithm: (value) =>
       set((state) => ({
