@@ -8,6 +8,8 @@ import { voiceSchema, type VoiceValues } from "./schema";
 
 export function VoiceSettings() {
   const {
+    psolaPitchEstimator,
+    setPsolaPitchEstimator,
     psolaAnalysisWindow,
     psolaSynthesisWindow,
     setPsolaAnalysisWindow,
@@ -73,6 +75,24 @@ export function VoiceSettings() {
         />
         <p>
           フェーズロック・スペクトル位相同期と、TD-PSOLA／FD-PSOLAに組み合わせる響きの補正に使います。
+        </p>
+        <label>
+          PSOLAのピッチ推定
+          <select
+            value={psolaPitchEstimator}
+            disabled={!psola}
+            onChange={(event) =>
+              setPsolaPitchEstimator(
+                v.parse(voiceSchema.entries.psolaPitchEstimator, event.target.value),
+              )
+            }
+          >
+            <option value="yin">YIN（従来・標準）</option>
+            <option value="mpm">MPM（正規化相関）</option>
+          </select>
+        </label>
+        <p>
+          声によって推定精度が変わります。低音や息の多い声で聞き比べてください。追加の解析待ちはありません。
         </p>
         <WindowControls
           title="PSOLAのウィンドウ"

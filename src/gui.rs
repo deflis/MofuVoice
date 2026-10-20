@@ -170,6 +170,7 @@ struct DeviceSettings {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct VoiceSettings {
+    psola_pitch_estimator: String,
     psola_analysis_window: usize,
     psola_synthesis_window: usize,
     analysis_window: usize,
@@ -202,6 +203,7 @@ impl Settings {
                 sample_rate: options.sample_rate,
             },
             voice: VoiceSettings {
+                psola_pitch_estimator: options.pitch.psola_pitch_estimator.name().into(),
                 psola_analysis_window: options.pitch.psola_windows.analysis,
                 psola_synthesis_window: options.pitch.psola_windows.synthesis,
                 analysis_window: options.pitch.windows.analysis,
@@ -244,6 +246,10 @@ impl Settings {
             frames: self.devices.frames,
             sample_rate: self.devices.sample_rate,
             pitch: crate::pitch::PitchSettings {
+                psola_pitch_estimator: crate::pitch::PitchEstimator::parse(
+                    &self.voice.psola_pitch_estimator,
+                )
+                .map_err(str::to_string)?,
                 psola_windows: crate::pitch::SpectralWindows {
                     analysis: self.voice.psola_analysis_window,
                     synthesis: self.voice.psola_synthesis_window,

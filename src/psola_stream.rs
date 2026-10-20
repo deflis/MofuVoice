@@ -5,7 +5,7 @@
 //! specific grain timing, windowing, resampling, and overlap-add are delegated
 //! to the selected synthesis backend.
 //!
-//! Pitch analysis uses an in-repository FIR decimator and YIN difference function.
+//! Pitch analysis uses an in-repository FIR decimator and YIN or McLeod normalized square difference.
 //! Pitch marks track a consistent waveform polarity near predicted epochs.
 //! Reference: https://praat.org/manual/overlap-add.html
 //! Pitch estimator: de Cheveigne & Kawahara, JASA 2002, doi:10.1121/1.1458024.
@@ -46,6 +46,7 @@ struct Mark {
 }
 
 pub(crate) struct PsolaStream {
+    estimator: crate::pitch::PitchEstimator,
     latency: usize,
     lookahead: usize,
     input: Box<[f64; RING]>,
@@ -105,6 +106,7 @@ impl PsolaStream {
             *tap /= sum;
         }
         Self {
+            estimator: crate::pitch::PitchEstimator::default(),
             latency: latency(windows),
             lookahead: windows.analysis / 2 + MAX_PERIOD / 2 + TAPS / 2,
             input: crate::psola_common::ring(0.0),
@@ -181,6 +183,10 @@ impl PsolaStream {
         wet
     }
 
+    pub(crate) fn set_pitch_estimator(&mut self, estimator: crate::pitch::PitchEstimator) {
+        self.estimator = estimator;
+    }
+
     fn detect_period(&mut self) -> Option<f64> {
         let start = (self.clock / DECIMATION) % self.filtered.len();
         for i in 0..self.filtered.len() {
@@ -190,6 +196,9 @@ impl PsolaStream {
         let energy: f64 = self.analysis.iter().map(|x| x * x).sum();
         if energy / (self.filtered.len() as f64) < 1e-10 {
             return None;
+        }
+        if self.estimator == crate::pitch::PitchEstimator::Mpm {
+            return self.detect_mpm();
         }
         let mut cumulative = 0.0;
         for lag in 1..=MAX_LAG + 1 {
@@ -226,6 +235,76 @@ impl PsolaStream {
         let right = self.difference[best + 1];
         let curvature = left - 2.0 * middle + right;
         let fraction = if curvature > 1e-12 {
+            (0.5 * (left - right) / curvature).clamp(-0.5, 0.5)
+        } else {
+            0.0
+        };
+        Some(
+            ((best as f64 + fraction) * DECIMATION as f64)
+                .clamp(MIN_PERIOD as f64, MAX_PERIOD as f64),
+        )
+    }
+
+    // McLeod & Wyvill, "A smarter way to find pitch", ICMC 2005.
+    // Use shrinking overlap so both sides of NSDF have identical support.
+    // No allocations or additional lookahead in the streaming callback.
+    fn detect_mpm(&mut self) -> Option<f64> {
+        for lag in 0..=MAX_LAG + 1 {
+            let (mut correlation, mut energy) = (0.0, 0.0);
+            for i in 0..self.analysis.len() - lag {
+                let a = self.analysis[i];
+                let b = self.analysis[i + lag];
+                correlation += a * b;
+                energy += a * a + b * b;
+            }
+            self.difference[lag] = if energy > 1e-20 {
+                2.0 * correlation / energy
+            } else {
+                0.0
+            };
+        }
+        // Skip the zero-lag lobe, then retain one maximum per positive lobe.
+        let mut peaks = [0usize; MAX_LAG + 2];
+        let mut count = 0;
+        let mut lag = 1;
+        while lag <= MAX_LAG && self.difference[lag] > 0.0 {
+            lag += 1;
+        }
+        while lag <= MAX_LAG {
+            while lag <= MAX_LAG && self.difference[lag] <= 0.0 {
+                lag += 1;
+            }
+            let mut best = lag;
+            while lag <= MAX_LAG && self.difference[lag] > 0.0 {
+                if self.difference[lag] > self.difference[best] {
+                    best = lag;
+                }
+                lag += 1;
+            }
+            if best >= MIN_LAG
+                && best <= MAX_LAG
+                && self.difference[best] >= self.difference[best - 1]
+                && self.difference[best] > self.difference[best + 1]
+            {
+                peaks[count] = best;
+                count += 1;
+            }
+        }
+        let maximum = peaks[..count]
+            .iter()
+            .map(|&i| self.difference[i])
+            .fold(0.0, f64::max);
+        if maximum < 0.8 {
+            return None;
+        }
+        let best = *peaks[..count]
+            .iter()
+            .find(|&&i| self.difference[i] >= 0.93 * maximum)?;
+        let left = self.difference[best - 1];
+        let middle = self.difference[best];
+        let right = self.difference[best + 1];
+        let curvature = left - 2.0 * middle + right;
+        let fraction = if curvature < -1e-12 {
             (0.5 * (left - right) / curvature).clamp(-0.5, 0.5)
         } else {
             0.0
@@ -400,6 +479,70 @@ impl PsolaStream {
 mod tests {
     use super::PsolaStream as TdPsola;
     use super::*;
+
+    #[test]
+    fn estimators_cover_low_voice_missing_fundamental_and_noise() {
+        for estimator in [
+            crate::pitch::PitchEstimator::Yin,
+            crate::pitch::PitchEstimator::Mpm,
+        ] {
+            for frequency in [60.0, 80.0, 113.0, 203.0, 350.0] {
+                for fundamental in [0.1, 0.0] {
+                    let mut dsp = TdPsola::new(1.0);
+                    dsp.set_pitch_estimator(estimator);
+                    // Directly exercise the same filtered analysis history used by streaming.
+                    for i in 0..dsp.filtered.len() {
+                        let phase = TAU * frequency * (i * DECIMATION) as f64 / 48000.0;
+                        dsp.filtered[i] = fundamental * phase.cos()
+                            + 0.08 * (2.0 * phase).cos()
+                            + 0.06 * (3.0 * phase).cos();
+                    }
+                    let period = dsp.detect_period().unwrap();
+                    let cents = 1200.0 * (period * frequency / 48000.0).log2();
+                    assert!(
+                        cents.abs() < 10.0,
+                        "{estimator:?} {frequency}Hz fundamental={fundamental}: {cents} cents"
+                    );
+                }
+            }
+            let mut dsp = TdPsola::new(1.0);
+            dsp.set_pitch_estimator(estimator);
+            assert!(dsp.detect_period().is_none());
+            let mut seed = 17u32;
+            for sample in &mut dsp.filtered {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                *sample = 0.1 * (seed as f64 / u32::MAX as f64 - 0.5);
+            }
+            assert!(dsp.detect_period().is_none(), "{estimator:?}");
+        }
+    }
+
+    #[test]
+    fn estimator_streaming_quality_and_cost() {
+        for estimator in [
+            crate::pitch::PitchEstimator::Yin,
+            crate::pitch::PitchEstimator::Mpm,
+        ] {
+            for semitones in [-12.0, 3.0, 12.0] {
+                let mut dsp = TdPsola::new(1.0);
+                dsp.set_pitch_estimator(estimator);
+                let start = std::time::Instant::now();
+                for i in 0..24000 {
+                    let phase = TAU * 113.0 * i as f64 / 48000.0;
+                    let output = dsp.push(
+                        0.1 * phase.cos() + 0.04 * (3.0 * phase).cos(),
+                        2.0f64.powf(semitones / 12.0),
+                    );
+                    assert!(output.is_finite());
+                }
+                assert!((dsp.detect_period().unwrap() - 48000.0 / 113.0).abs() < 1.0);
+                eprintln!(
+                    "{estimator:?} {semitones:+}st: {:?} / 0.5s audio",
+                    start.elapsed()
+                );
+            }
+        }
+    }
 
     #[test]
     fn low_voice_f32_period_does_not_drift() {

@@ -91,6 +91,30 @@ impl PitchAlgorithm {
     }
 }
 
+/// Fundamental-frequency estimator shared by all PSOLA synthesis backends.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PitchEstimator {
+    #[default]
+    Yin,
+    /// McLeod Pitch Method: normalized square difference and relative peak selection.
+    Mpm,
+}
+impl PitchEstimator {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Yin => "yin",
+            Self::Mpm => "mpm",
+        }
+    }
+    pub fn parse(value: &str) -> Result<Self, &'static str> {
+        match value {
+            "yin" => Ok(Self::Yin),
+            "mpm" => Ok(Self::Mpm),
+            _ => Err("PSOLA pitch estimator must be yin or mpm"),
+        }
+    }
+}
+
 pub const SMOOTH_SAMPLES: usize = 960;
 pub const FADE_SAMPLES: usize = 480;
 
@@ -132,6 +156,7 @@ pub struct PitchSettings {
     /// Windows for vocoder pitch conversion and the optional formant stage.
     pub windows: SpectralWindows,
     pub psola_windows: SpectralWindows,
+    pub psola_pitch_estimator: PitchEstimator,
     pub algorithm: PitchAlgorithm,
     pub semitones: f64,
     pub preserve_formants: bool,
@@ -144,6 +169,7 @@ impl Default for PitchSettings {
             algorithm: PitchAlgorithm::PhaseLocked,
             windows: SpectralWindows::default(),
             psola_windows: SpectralWindows::default(),
+            psola_pitch_estimator: PitchEstimator::default(),
             semitones: 0.0,
             preserve_formants: true,
             formant_shift: 0.0,
@@ -170,14 +196,18 @@ impl PitchSettings {
     }
 
     pub fn build(self) -> Result<PitchShifter, Box<dyn Error>> {
-        PitchShifter::new(
+        let mut shifter = PitchShifter::new(
             self.semitones,
             self.preserve_formants,
             self.formant_shift,
             self.algorithm,
             self.windows,
             self.psola_windows,
-        )
+        )?;
+        if let Some(psola) = &mut shifter.psola {
+            psola.set_pitch_estimator(self.psola_pitch_estimator);
+        }
+        Ok(shifter)
     }
 }
 
