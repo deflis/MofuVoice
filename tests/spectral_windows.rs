@@ -142,9 +142,7 @@ fn configured_windows_keep_pitch_and_phase_continuous(windows: SpectralWindows) 
             };
             let mut output = vec![0.0; input.len()];
             let mut dsp = settings.build().unwrap();
-            let start = std::time::Instant::now();
             dsp.process_block(&input, &mut output);
-            let elapsed = start.elapsed();
             let signal = &output[16384..];
             let frequency = 203.0 * 2.0_f64.powf(semitones / 12.0);
             let (mut re, mut im) = (0.0, 0.0);
@@ -157,7 +155,6 @@ fn configured_windows_keep_pitch_and_phase_continuous(windows: SpectralWindows) 
             let residual = signal.iter().map(|x| (*x as f64).powi(2)).sum::<f64>()
                 / signal.len() as f64
                 - amplitude.powi(2) / 2.0;
-            eprintln!("{windows:?} {algorithm:?} pitch={semitones}: {elapsed:?}/audio second, amplitude={amplitude}, residual={residual}");
             assert!(
                 (0.08..0.25).contains(&amplitude),
                 "{windows:?} {algorithm:?} pitch={semitones}: {amplitude}"

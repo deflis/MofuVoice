@@ -205,6 +205,8 @@ jobs:
           shared-key: dsp-release
       - name: Validate DSP in release mode
         run: cargo test --no-default-features --release --locked
+      - name: Measure processing time per window and pitch
+        run: cargo bench --no-default-features --locked --bench window_settings
       - name: Measure DSP performance
         run: cargo bench --no-default-features --locked --bench spectral
 

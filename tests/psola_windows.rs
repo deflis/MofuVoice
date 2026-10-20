@@ -18,9 +18,7 @@ fn power(signal: &[f32], frequency: f64) -> f64 {
     re * re + im * im
 }
 
-fn configured_psola_windows_keep_pitch_and_measure_processing_per_setting(
-    windows: SpectralWindows,
-) {
+fn configured_psola_windows_keep_pitch(windows: SpectralWindows) {
     for algorithm in ALGORITHMS {
         for semitones in [-12.0, -3.0, 3.0, 7.0, 12.0] {
             let settings = PitchSettings {
@@ -39,12 +37,7 @@ fn configured_psola_windows_keep_pitch_and_measure_processing_per_setting(
                 .collect();
             let mut output = vec![0.0; input.len()];
             let mut dsp = settings.build().unwrap();
-            let start = std::time::Instant::now();
             dsp.process_block(&input, &mut output);
-            eprintln!(
-                "{windows:?} {algorithm:?} pitch={semitones}: {:?}/audio second",
-                start.elapsed()
-            );
             let signal = &output[24000..];
             let expected = 113.0 * 2.0_f64.powf(semitones / 12.0);
             let peak = (-8..=8)
@@ -155,7 +148,7 @@ fn configured_psola_unvoiced_delay_matches_settings_after_ring_wrap(windows: Spe
 mod window_cases;
 
 window_cases!(
-    configured_psola_windows_keep_pitch_and_measure_processing_per_setting,
+    configured_psola_windows_keep_pitch,
     configured_psola_windows_preserve_and_shift_vowel_resonance,
     configured_psola_unvoiced_delay_matches_settings_after_ring_wrap,
 );
