@@ -8,7 +8,7 @@ export const devicesSchema = v.object({
   inputChannel: integerRange(1, 512, "入力チャンネル"),
   outputChannels: v.pipe(
     v.array(integerRange(1, 512, "出力チャンネル")),
-    v.minLength(1, "出力を選択してください。"),
+    v.minLength(1, "出力チャンネルを1つ以上選択してください。"),
     v.check(
       (channels) => new Set(channels).size === channels.length,
       "出力チャンネルが重複しています。",

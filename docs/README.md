@@ -14,7 +14,7 @@
 共通の前提:
 
 - サンプルレート **48 kHz**（Voicemeeter / Matrix / 本アプリで一致させる）
-- GUI の **バッファサイズ（サンプル）** はまず **512**（設定の **音声デバイス → プロ向け設定** で変更し、保存後の音声開始時にエラーが出ないことを確認）
+- GUI の **バッファサイズ（サンプル）** はまず **512**（設定の **音声デバイス → 詳細設定** で変更し、保存後の音声開始時にエラーが出ないことを確認）
 - Insert / VASIO ドライバは **同時に1つの ASIO アプリだけ** が開けることが多い（本アプリ実行中は他の DAW などを同じドライバで開かない）
 
 公式の Insert 解説: [Connect audio apps to the VoiceMeeter Insert Driver](https://voicemeeter.com/user-guide-connect-audio-apps-to-the-voicemeeter-insert-driver/)
