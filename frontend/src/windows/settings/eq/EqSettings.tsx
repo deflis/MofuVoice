@@ -1,4 +1,5 @@
 import styles from "../settings.module.css";
+import eqStyles from "./EqSettings.module.css";
 import type { EqKey } from "./slice";
 import { NumberInput } from "../NumberInput";
 import { EqSimpleBand, EqBandDetails } from "./BandSettings";
@@ -36,7 +37,7 @@ export function EqSettings({
         />
         有効
       </label>
-      <fieldset className={styles["eq-controls"]} disabled={!eq.enabled} hidden={!eq.enabled}>
+      <fieldset className={eqStyles["eq-controls"]} disabled={!eq.enabled} hidden={!eq.enabled}>
         <>
           {eq.bands.map((band, index) => (
             <EqSimpleBand

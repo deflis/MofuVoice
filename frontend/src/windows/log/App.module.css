@@ -1,0 +1,16 @@
+/* Log App styles. */
+
+main:has(.log-window) {
+  max-width: 720px;
+}
+
+.settings-window header,
+.log-window header {
+  border-bottom: 1px solid #373c46;
+  padding-bottom: 12px;
+}
+
+.settings-window h1,
+.log-window h1 {
+  margin: 0;
+}

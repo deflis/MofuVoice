@@ -1,4 +1,5 @@
-import styles from "./settings.module.css";
+import styles from "./SettingsWindow.module.css";
+import commonStyles from "./settings.module.css";
 import { SettingsPanel } from "./SettingsPanel";
 import { SaveSettingsButton } from "./SaveSettingsButton";
 import { useSettingsConnection } from "./listener";
@@ -15,7 +16,7 @@ export function SettingsWindow() {
     <div className={styles["settings-window"]}>
       <header>
         <h1>設定</h1>
-        <span className={styles.muted}>もふボイス</span>
+        <span className={commonStyles.muted}>もふボイス</span>
       </header>
       {busy && <output>音声を停止すると設定を変更できます。</output>}
       <SettingsPanel />

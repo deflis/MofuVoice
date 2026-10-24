@@ -1,4 +1,5 @@
-import styles from "./log.module.css";
+import styles from "./App.module.css";
+import commonStyles from "./log.module.css";
 import { Notifications } from "./Notifications";
 import { StatusDetails } from "./StatusDetails";
 
@@ -9,7 +10,7 @@ export function LogApp() {
       <div className={styles["log-window"]}>
         <header>
           <h1>ログ</h1>
-          <span className={styles.muted}>もふボイス</span>
+          <span className={commonStyles.muted}>もふボイス</span>
         </header>
         <StatusDetails />
       </div>

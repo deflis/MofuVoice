@@ -1,4 +1,5 @@
 import styles from "../settings.module.css";
+import deviceStyles from "./devices.module.css";
 import { NumberInput } from "../NumberInput";
 import { DetailsPopup } from "../DetailsPopup";
 import { ChannelRoutingDetails } from "./ChannelRoutingSettings";
@@ -9,7 +10,7 @@ function BackendSettings() {
   return (
     <fieldset className={styles.settings}>
       <legend>音声バックエンド</legend>
-      <div className={styles["routing-choices"]}>
+      <div className={deviceStyles["routing-choices"]}>
         {backends.map((available) => (
           <button
             key={available}

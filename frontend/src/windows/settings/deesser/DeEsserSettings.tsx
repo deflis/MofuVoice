@@ -1,4 +1,5 @@
 import styles from "../settings.module.css";
+import deesserStyles from "./DeEsserSettings.module.css";
 import { NumberField } from "../NumberField";
 import { DetailsPopup } from "../DetailsPopup";
 import { useId } from "react";
@@ -34,12 +35,12 @@ export function DeEsserSettings() {
         有効
       </label>
       <fieldset
-        className={styles["deesser-controls"]}
+        className={deesserStyles["deesser-controls"]}
         disabled={!parameters.enabled}
         hidden={!parameters.enabled}
       >
         <>
-          <div className={styles["deesser-simple"]}>
+          <div className={deesserStyles["deesser-simple"]}>
             <label htmlFor={`${id}-amount`}>抑える強さ </label>
             <input
               id={`${id}-amount`}
@@ -51,7 +52,7 @@ export function DeEsserSettings() {
               disabled={!valid}
               onChange={(event) => parameters.setRangeDb(event.currentTarget.valueAsNumber)}
             />
-            <div className={styles["deesser-scale"]}>
+            <div className={deesserStyles["deesser-scale"]}>
               <span>弱く</span>
               <span>標準</span>
               <span>強く</span>
@@ -81,7 +82,7 @@ export function DeEsserSettings() {
             <p>
               高域の音量と、音全体に対する高域の割合を検出し、高域だけを動的に減衰します。圧縮比は4:1、先読みはありません。
             </p>
-            <div className={styles["deesser-fields"]}>
+            <div className={deesserStyles["deesser-fields"]}>
               <NumberField
                 label="分割周波数（Hz）"
                 value={parameters.frequencyHz}

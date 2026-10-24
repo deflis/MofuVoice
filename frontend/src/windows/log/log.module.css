@@ -1,30 +1,8 @@
-/* Log window styles. */
-
-/* Styles colocated with StatusDetails.tsx. */
+/* Log styles. */
 
 .error {
   color: light-dark(#a80000, #ff9090);
   overflow-wrap: anywhere;
-}
-
-/* Log window styles. */
-
-.status-panel {
-  background: #20242a;
-  border: 1px solid #373c46;
-  border-radius: 8px;
-  padding: 16px;
-}
-
-.device-name {
-  font-weight: 600;
-}
-
-.status-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
-  margin: 16px 0;
 }
 
 .check {
@@ -43,147 +21,20 @@ dt,
   margin: 8px 0;
 }
 
-/* Styles colocated with AudioLogPanel.tsx. */
+.status-panel {
+  background: #20242a;
+  border: 1px solid #373c46;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.device-name {
+  font-weight: 600;
+}
 
 .status-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
   margin: 16px 0;
-}
-
-.log-panel {
-  border-top: 1px solid #373c46;
-}
-
-/* Styles colocated with App.tsx. */
-
-dt,
-.muted {
-  color: #8c94a0;
-  font-size: 12px;
-}
-
-main:has(.log-window) {
-  max-width: 720px;
-}
-
-.settings-window header,
-.log-window header {
-  border-bottom: 1px solid #373c46;
-  padding-bottom: 12px;
-}
-
-.settings-window h1,
-.log-window h1 {
-  margin: 0;
-}
-
-/* Styles colocated with Notifications.tsx. */
-
-.error {
-  color: light-dark(#a80000, #ff9090);
-  overflow-wrap: anywhere;
-}
-
-/* Styles colocated with SettingsWindow.tsx. */
-
-dt,
-.muted {
-  color: #8c94a0;
-  font-size: 12px;
-}
-
-/* Styles colocated with DeEsserSettings.tsx. */
-
-.error {
-  color: light-dark(#a80000, #ff9090);
-  overflow-wrap: anywhere;
-}
-
-/* Styles colocated with ChannelRoutingSettings.tsx. */
-
-.check {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-/* Styles colocated with SampleRateSettings.tsx. */
-
-dt,
-.muted {
-  color: #8c94a0;
-  font-size: 12px;
-}
-
-/* Styles colocated with EqSettings.tsx. */
-
-.error {
-  color: light-dark(#a80000, #ff9090);
-  overflow-wrap: anywhere;
-}
-
-/* Styles colocated with AutoLevelSettings.tsx. */
-
-.check {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-/* Styles colocated with NoiseGateSettings.tsx. */
-
-.check {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-/* Styles colocated with RumbleSettings.tsx. */
-
-.check {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-/* Styles colocated with VoiceSettings.tsx. */
-
-.check {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-/* Styles colocated with ReverbSettings.tsx. */
-
-.check {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-/* Styles colocated with LimiterSettings.tsx. */
-
-.check {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-/* Styles colocated with DereverbSettings.tsx. */
-
-.check {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-/* Styles colocated with CompressorSettings.tsx. */
-
-.check {
-  display: flex;
-  align-items: center;
-  gap: 6px;
 }

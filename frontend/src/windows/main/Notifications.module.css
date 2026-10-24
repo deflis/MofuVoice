@@ -1,0 +1,6 @@
+/* Main Notifications styles. */
+
+.error {
+  color: light-dark(#a80000, #ff9090);
+  overflow-wrap: anywhere;
+}

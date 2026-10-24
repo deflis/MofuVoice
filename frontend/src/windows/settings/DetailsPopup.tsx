@@ -1,4 +1,5 @@
-import styles from "./settings.module.css";
+import styles from "./DetailsPopup.module.css";
+import commonStyles from "./settings.module.css";
 import { Notifications } from "./Notifications";
 import { createPortal } from "react-dom";
 import { useSettingsLocked } from "./hooks";
@@ -38,7 +39,7 @@ export function DetailsPopup({
             </h2>
           </header>
           <Notifications />
-          <fieldset className={styles.settings} disabled={locked}>
+          <fieldset className={commonStyles.settings} disabled={locked}>
             {children}
           </fieldset>
           <footer>

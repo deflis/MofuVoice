@@ -1,4 +1,5 @@
 import styles from "../settings.module.css";
+import deviceStyles from "./devices.module.css";
 import { NumberInput } from "../NumberInput";
 import { useState } from "react";
 import { useChannelRouting } from "./hooks";
@@ -12,9 +13,9 @@ export function ChannelRoutingPresets() {
     outputChannels.includes(1) &&
     outputChannels.includes(2);
   return (
-    <fieldset className={styles["routing-presets"]}>
+    <fieldset className={deviceStyles["routing-presets"]}>
       <legend>チャンネル</legend>
-      <div className={styles["routing-choices"]}>
+      <div className={deviceStyles["routing-choices"]}>
         <button type="button" aria-pressed={singleOutput} onClick={() => setRouting(1, [1])}>
           モノラル（1 → 1）
         </button>
@@ -60,7 +61,7 @@ export function ChannelRoutingDetails() {
       </label>
       <fieldset>
         <legend>出力チャンネル（複数選択可）</legend>
-        <div className={styles["channel-choices"]}>
+        <div className={deviceStyles["channel-choices"]}>
           {channelChoices.map((channel) => (
             <label className={styles.check} key={channel}>
               <input
