@@ -368,7 +368,14 @@ impl Fft {
         } else {
             FftKernel::stages(roots, data);
         }
-        #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+        #[cfg(target_arch = "aarch64")]
+        if self.neon {
+            // SAFETY: NEON detected at construction; each stage checks its bounds.
+            unsafe { FftKernel::stages_neon(roots, data) };
+        } else {
+            FftKernel::stages(roots, data);
+        }
+        #[cfg(not(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64")))]
         FftKernel::stages(roots, data);
         if let Some(scale) = scale {
             for value in data {
@@ -877,6 +884,18 @@ impl PitchShifter {
             unsafe { self.frame_avx2() };
             return;
         }
+        #[cfg(target_arch = "aarch64")]
+        if self.fft.neon {
+            // SAFETY: the processor detects NEON once during construction.
+            unsafe { self.frame_neon() };
+            return;
+        }
+        self.frame_inner();
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[target_feature(enable = "neon")]
+    unsafe fn frame_neon(&mut self) {
         self.frame_inner();
     }
 
@@ -1505,15 +1524,22 @@ mod tests {
         }
     }
 
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"))]
     #[test]
-    fn avx2_fft_matches_portable_butterfly_bits() {
+    fn simd_fft_matches_portable_butterfly_bits() {
         let vector = Fft::new();
-        if !vector.avx2 {
+        if !vector.vector() {
             return;
         }
         let mut scalar = Fft::new();
-        scalar.avx2 = false;
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            scalar.avx2 = false;
+        }
+        #[cfg(target_arch = "aarch64")]
+        {
+            scalar.neon = false;
+        }
         let input = std::array::from_fn(|i| Complex {
             re: (i as f64 * 0.31).sin(),
             im: (i as f64 * 0.17).cos(),

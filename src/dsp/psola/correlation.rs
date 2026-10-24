@@ -278,12 +278,16 @@ unsafe fn neon<const MPM: bool, const REUSE: bool>(input: &[f64], output: &mut [
 }
 
 // Retain the previous arithmetic only in test builds for quality and timing
-// comparisons against the same scalar/AVX2 implementation without energy reuse.
+// comparisons against the same scalar/SIMD implementation without energy reuse.
 #[cfg(test)]
 pub(super) fn select_reference() -> Kernel {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     if std::is_x86_feature_detected!("avx2") {
         return vector_reference;
+    }
+    #[cfg(target_arch = "aarch64")]
+    if std::arch::is_aarch64_feature_detected!("neon") {
+        return vector_reference_neon;
     }
     scalar_reference
 }
@@ -307,6 +311,19 @@ fn vector_reference(input: &[f64], output: &mut [f64], mpm: bool) {
             avx2::<true, false>(input, output);
         } else {
             avx2::<false, false>(input, output);
+        }
+    }
+}
+
+#[cfg(all(test, target_arch = "aarch64"))]
+fn vector_reference_neon(input: &[f64], output: &mut [f64], mpm: bool) {
+    assert!(input.len() >= output.len());
+    // SAFETY: selected after NEON detection; same checked bounds as vector_neon.
+    unsafe {
+        if mpm {
+            neon::<true, false>(input, output);
+        } else {
+            neon::<false, false>(input, output);
         }
     }
 }
