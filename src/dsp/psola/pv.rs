@@ -724,7 +724,7 @@ mod tests {
                 let actual = dsp.resample(position);
                 let center = position.floor() as isize;
                 let fraction = position - center as f64;
-                let cutoff = 0.45 / ratio.max(1.0);
+                let cutoff = quantized_cutoff(ratio);
                 let mut expected = 0.0;
                 let mut weight = 0.0;
                 for offset in -(RESAMPLE_RADIUS as isize)..=RESAMPLE_RADIUS as isize {
