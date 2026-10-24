@@ -148,6 +148,16 @@ impl DeEsser {
         if !self.enabled {
             return;
         }
+        if self.parameters.range_db == 0.0 {
+            // At zero range, finite samples pass unchanged. Keep the active
+            // filter's nonfinite-input policy without running its detectors.
+            for sample in samples {
+                if !sample.normalized().is_finite() {
+                    *sample = T::default();
+                }
+            }
+            return;
+        }
         for sample in samples {
             let input = sample.normalized();
             if !input.is_finite() {
@@ -343,6 +353,43 @@ mod tests {
             previous = current;
         }
     }
+
+    #[test]
+    fn zero_range_fast_path_preserves_finite_bits_and_silences_invalid_samples() {
+        let parameters = DeEsserParameters {
+            range_db: 0.0,
+            ..DeEsserParameters::default()
+        };
+        let input = [
+            f32::from_bits(0x7fc01234),
+            -0.0,
+            f32::INFINITY,
+            f32::MAX,
+            f32::from_bits(1),
+        ];
+        let mut output = input;
+        DeEsser::with_parameters(true, parameters)
+            .unwrap()
+            .process_in_place(&mut output);
+        assert_eq!(
+            output.map(f32::to_bits),
+            [0.0_f32, -0.0, 0.0, f32::MAX, f32::from_bits(1)].map(f32::to_bits)
+        );
+
+        let mut shorts = [i16::MIN, -1, 0, 1, i16::MAX];
+        let original = shorts;
+        DeEsser::with_parameters(true, parameters)
+            .unwrap()
+            .process_in_place(&mut shorts);
+        assert_eq!(shorts, original);
+        let mut ints = [i32::MIN, -1, 0, 1, i32::MAX];
+        let original = ints;
+        DeEsser::with_parameters(true, parameters)
+            .unwrap()
+            .process_in_place(&mut ints);
+        assert_eq!(ints, original);
+    }
+
     #[test]
     fn custom_parameters_validate_even_when_disabled_and_remain_block_continuous() {
         for value in [f64::NAN, f64::INFINITY, -1e6, 1e6] {

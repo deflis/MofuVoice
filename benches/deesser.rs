@@ -1,11 +1,15 @@
-use mofu_voice::{deesser::DeEsser, RATE};
+use mofu_voice::{
+    deesser::{DeEsser, DeEsserParameters},
+    RATE,
+};
 use std::{hint::black_box, time::Instant};
 fn main() {
-    for (name, hz, amplitude) in [
-        ("vowel", 250.0, 0.4),
-        ("quiet highs", 8000.0, 0.01),
-        ("sibilant", 8000.0, 0.4),
-        ("transition", 8000.0, 0.08),
+    for (name, hz, amplitude, range_db) in [
+        ("vowel", 250.0, 0.4, 6.0),
+        ("quiet highs", 8000.0, 0.01, 6.0),
+        ("sibilant", 8000.0, 0.4, 6.0),
+        ("transition", 8000.0, 0.08, 6.0),
+        ("zero range", 8000.0, 0.4, 0.0),
     ] {
         let input: Vec<f32> = (0..RATE as usize * 4)
             .map(|i| {
@@ -20,7 +24,11 @@ fn main() {
             .collect();
         let mut times = Vec::new();
         for _ in 0..31 {
-            let mut dsp = DeEsser::new(true);
+            let parameters = DeEsserParameters {
+                range_db,
+                ..DeEsserParameters::default()
+            };
+            let mut dsp = DeEsser::with_parameters(true, parameters).unwrap();
             let mut output = [0.0_f32; 64];
             let start = Instant::now();
             for chunk in input.chunks(64) {
