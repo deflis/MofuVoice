@@ -1982,6 +1982,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "mofu-voice"
+version = "0.1.0"
+dependencies = [
+ "asio-sys",
+ "cpal",
+ "serde",
+ "tauri",
+ "tauri-build",
+ "windows 0.61.3",
+]
+
+[[package]]
 name = "muda"
 version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2767,18 +2779,6 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-streams",
  "web-sys",
-]
-
-[[package]]
-name = "mofu-voice"
-version = "0.1.0"
-dependencies = [
- "asio-sys",
- "cpal",
- "serde",
- "tauri",
- "tauri-build",
- "windows 0.61.3",
 ]
 
 [[package]]
