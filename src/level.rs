@@ -10,6 +10,10 @@ use crate::{
 };
 use std::{error::Error, fmt};
 
+// Detector state remains sample-rate, while the expensive dB targets update
+// at 1/8 sample rate. Gain envelopes still smooth every sample.
+const TARGET_INTERVAL: usize = 8;
+
 pub const FLAGS: [&str; 8] = [
     "--level-target",
     "--level-max-gain",
@@ -126,6 +130,9 @@ impl LevelSettings {
             level_gain_db: 0.0,
             compression_db: 0.0,
             guard_gain: 1.0,
+            control_phase: 0,
+            cached_level_target_db: 0.0,
+            cached_compression_target_db: 0.0,
             rms_rate: update_rate(30.0, sample_rate as f64),
             level_rate: update_rate(self.response_ms, sample_rate as f64),
             attack_rate: update_rate(self.attack_ms, sample_rate as f64),
@@ -162,6 +169,9 @@ pub struct AutoLevel {
     level_gain_db: f64,
     compression_db: f64,
     guard_gain: f64,
+    control_phase: usize,
+    cached_level_target_db: f64,
+    cached_compression_target_db: f64,
     rms_rate: f64,
     level_rate: f64,
     attack_rate: f64,
@@ -187,6 +197,7 @@ impl AutoLevel {
             return;
         } // Preserve every bypass bit, including NaNs.
         for sample in samples {
+            let update_target = self.control_phase == 0;
             let input = sample.normalized();
             // Invalid wet samples are silenced without poisoning detector state.
             let input = if input.is_finite() {
@@ -197,17 +208,23 @@ impl AutoLevel {
             if self.settings.enabled {
                 self.power += (input * input - self.power) * self.rms_rate;
                 if self.power > self.floor_power && input.abs() > self.floor_amplitude {
-                    let rms_db = amplitude_db(self.power.sqrt(), 1e-12);
-                    let target =
-                        (self.settings.target_db - rms_db).clamp(-18.0, self.settings.max_gain_db);
-                    self.level_gain_db += (target - self.level_gain_db) * self.level_rate;
+                    if update_target {
+                        let rms_db = amplitude_db(self.power.sqrt(), 1e-12);
+                        self.cached_level_target_db = (self.settings.target_db - rms_db)
+                            .clamp(-18.0, self.settings.max_gain_db);
+                    }
+                    self.level_gain_db +=
+                        (self.cached_level_target_db - self.level_gain_db) * self.level_rate;
                 }
             }
             let leveled = input * amplitude(self.level_gain_db);
             let compressed = if self.settings.compressor_enabled {
                 self.peak += (0.0 - self.peak) * self.rms_rate;
                 self.peak = self.peak.max(leveled.abs());
-                let target = self.compression_target();
+                if update_target {
+                    self.cached_compression_target_db = self.compression_target();
+                }
+                let target = self.cached_compression_target_db;
                 let rate = if target > self.compression_db {
                     self.attack_rate
                 } else {
@@ -229,6 +246,11 @@ impl AutoLevel {
             self.guard_gain += (1.0 - self.guard_gain) * self.guard_release_rate;
             self.guard_gain = self.guard_gain.min(ceiling_gain);
             *sample = T::from_normalized(compressed * self.guard_gain);
+
+            self.control_phase += 1;
+            if self.control_phase == TARGET_INTERVAL {
+                self.control_phase = 0;
+            }
         }
     }
 }
@@ -347,6 +369,9 @@ mod tests {
 
     #[test]
     fn compressor_stream_matches_reference_through_attack_release_and_invalid_input() {
+        // Target updates are intentionally decimated; detector and gain state
+        // remain sample-rate, so compare against the former loop with a small
+        // normalized-output tolerance instead of requiring bit identity.
         fn check<T: Sample>(input: &[T], settings: LevelSettings, tolerance: f64) {
             let mut expected = input.to_vec();
             let mut actual = input.to_vec();
@@ -364,7 +389,7 @@ mod tests {
                     b.normalized()
                 );
             }
-            assert!((optimized.compression_db - reference.compression_db).abs() < 1e-12);
+            assert!((optimized.compression_db - reference.compression_db).abs() < 1e-4);
             if settings.ratio != 1.0 {
                 assert!(reference.compression_db > 0.0, "must exercise release tail");
             }
@@ -390,11 +415,11 @@ mod tests {
                 float[12001] = f32::NAN;
                 float[12002] = f32::INFINITY;
                 float[12003] = -32.0;
-                check(&float, settings, 0.0);
+                check(&float, settings, 0.0025);
                 check(
                     &input.iter().map(|x| *x as f32).collect::<Vec<_>>(),
                     settings,
-                    0.0,
+                    0.0025,
                 );
                 check(
                     &input
@@ -402,7 +427,7 @@ mod tests {
                         .map(|x| i16::from_normalized(*x))
                         .collect::<Vec<_>>(),
                     settings,
-                    0.0,
+                    0.0025,
                 );
                 check(
                     &input
@@ -410,7 +435,7 @@ mod tests {
                         .map(|x| i32::from_normalized(*x))
                         .collect::<Vec<_>>(),
                     settings,
-                    0.0,
+                    0.0025,
                 );
             }
         }
@@ -601,13 +626,95 @@ mod tests {
         dsp.process_in_place(&mut speech);
         assert!(rms(&speech[48000..]) > 0.04);
     }
+
+    #[test]
+    fn decimated_targets_keep_loud_and_attack_release_error_bounded() {
+        let settings = active();
+        let window = (RATE as usize) / 100;
+        for name in ["loud", "attack-release"] {
+            let input: Vec<f32> = (0..RATE as usize * 4)
+                .map(|i| {
+                    let envelope = if name == "attack-release" && i / 12000 % 2 == 1 {
+                        0.01
+                    } else {
+                        1.0
+                    };
+                    (0.9 * envelope
+                        * (std::f64::consts::TAU * 173.0 * i as f64 / RATE as f64).sin())
+                        as f32
+                })
+                .collect();
+            let mut expected = input.clone();
+            settings.build().unwrap().process_reference(&mut expected);
+            let mut actual = input;
+            settings.build().unwrap().process_in_place(&mut actual);
+
+            let max_error = actual
+                .iter()
+                .zip(&expected)
+                .map(|(a, b)| (a - b).abs() as f64)
+                .fold(0.0_f64, f64::max);
+            assert!(max_error <= 0.01, "{name} max sample error {max_error}");
+
+            for (index, (a, b)) in actual
+                .chunks_exact(window)
+                .zip(expected.chunks_exact(window))
+                .enumerate()
+            {
+                let a_rms = rms(a);
+                let b_rms = rms(b);
+                let level_error_db =
+                    (amplitude_db(a_rms, 1e-12) - amplitude_db(b_rms, 1e-12)).abs();
+                assert!(
+                    level_error_db <= 0.1,
+                    "{name} 10 ms window {index} level error {level_error_db} dB"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn control_targets_update_every_eight_samples() {
+        let settings = LevelSettings {
+            floor_db: -80.0,
+            ..active()
+        };
+        let mut dsp = settings.build().unwrap();
+
+        let mut first = [0.1_f32];
+        dsp.process_in_place(&mut first);
+        assert_eq!(dsp.control_phase, 1);
+        let level_target = dsp.cached_level_target_db;
+        let compression_target = dsp.cached_compression_target_db;
+        let first_power = dsp.power;
+        let first_peak = dsp.peak;
+
+        let mut middle = [0.9_f32; TARGET_INTERVAL - 1];
+        dsp.process_in_place(&mut middle);
+        assert_eq!(dsp.control_phase, 0);
+        assert_eq!(dsp.cached_level_target_db, level_target);
+        assert_eq!(dsp.cached_compression_target_db, compression_target);
+        assert_ne!(
+            dsp.power, first_power,
+            "RMS detector must update per sample"
+        );
+        assert_ne!(dsp.peak, first_peak, "peak detector must update per sample");
+
+        let mut next = [0.9_f32];
+        dsp.process_in_place(&mut next);
+        assert_eq!(dsp.control_phase, 1);
+        assert_ne!(dsp.cached_level_target_db, level_target);
+        assert_ne!(dsp.cached_compression_target_db, compression_target);
+    }
+
     #[test]
     fn chunks_are_identical_and_impulse_has_no_delay() {
         let mut whole = tone(0.15, 2);
         whole[20000] = 8.0;
         whole[20001] = f32::NAN;
         let mut chunks = whole.clone();
-        active().build().unwrap().process_in_place(&mut whole);
+        let mut whole_dsp = active().build().unwrap();
+        whole_dsp.process_in_place(&mut whole);
         let mut dsp = active().build().unwrap();
         let mut position = 0;
         for length in [1, 63, 128, 511, 3, 8192].into_iter().cycle() {
@@ -619,6 +726,17 @@ mod tests {
             position = end;
         }
         assert_eq!(whole, chunks);
+        assert_eq!(dsp.control_phase, whole_dsp.control_phase);
+        assert_eq!(dsp.cached_level_target_db, whole_dsp.cached_level_target_db);
+        assert_eq!(
+            dsp.cached_compression_target_db,
+            whole_dsp.cached_compression_target_db
+        );
+        assert_eq!(dsp.power, whole_dsp.power);
+        assert_eq!(dsp.peak, whole_dsp.peak);
+        assert_eq!(dsp.level_gain_db, whole_dsp.level_gain_db);
+        assert_eq!(dsp.compression_db, whole_dsp.compression_db);
+        assert_eq!(dsp.guard_gain, whole_dsp.guard_gain);
         assert!(whole.iter().all(|x| x.is_finite() && x.abs() <= 0.892));
         let mut impulse = [0.0, 4.0_f32, 0.0];
         active().build().unwrap().process_in_place(&mut impulse);
