@@ -1,34 +1,28 @@
-//! Direct ASIO buffer callbacks. asio-sys is used only to load/unload the driver.
+//! Direct ASIO duplex processing via asio-sys public Driver APIs.
 use crate::{audio::DspChain, dsp::Sample, RATE};
-use asio_sys::{bindings::asio_import as ffi, Driver};
+use asio_sys::{
+    AsioBufferInfo, AsioDriverEvent, AsioMessageSelectors, AsioSampleType, AsioStreams,
+    BufferCallbackId, BufferPreference, BufferSizeRange, CallbackInfo, Driver,
+    DriverEventCallbackId,
+};
 use std::{
     cell::UnsafeCell,
     error::Error,
-    ffi::c_void,
     ptr,
-    sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering},
-    thread,
-    time::{Duration, Instant},
+    sync::{
+        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
+        Arc, Mutex,
+    },
+    time::Instant,
 };
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
-const OK: i32 = 0;
-const SUCCESS: i32 = 0x3f4847a0;
 const RESET: u32 = 1;
 const RESYNC: u32 = 2;
 const RATE_CHANGE: u32 = 4;
 const INVALID_BUFFER: u32 = 8;
 const OVERLOAD: u32 = 16;
 const REENTRY: u32 = 32;
-const CLOCK_CHANGE: u32 = 64;
-
-fn check(code: i32, operation: &str) -> Result<()> {
-    if code == OK || code == SUCCESS {
-        Ok(())
-    } else {
-        Err(format!("{operation} failed: ASIO error {code}").into())
-    }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Format {
@@ -37,13 +31,13 @@ enum Format {
     I16,
 }
 impl Format {
-    fn from_asio(value: i32) -> Result<Self> {
+    fn from_asio(value: AsioSampleType) -> Result<Self> {
         match value {
-            19 => Ok(Self::F32),
-            18 => Ok(Self::I32),
-            16 => Ok(Self::I16),
-            _ => Err(format!(
-                "Unsupported ASIO format {value}; expected little-endian f32/i32/i16"
+            AsioSampleType::ASIOSTFloat32LSB => Ok(Self::F32),
+            AsioSampleType::ASIOSTInt32LSB => Ok(Self::I32),
+            AsioSampleType::ASIOSTInt16LSB => Ok(Self::I16),
+            other => Err(format!(
+                "Unsupported ASIO format {other:?}; expected little-endian f32/i32/i16"
             )
             .into()),
         }
@@ -64,8 +58,7 @@ pub struct Configuration {
     rate: f64,
     min: i32,
     max: i32,
-    preferred: i32,
-    granularity: i32,
+    preferred: BufferPreference,
 }
 impl Configuration {
     pub fn query(driver: &Driver) -> Result<Self> {
@@ -73,43 +66,24 @@ impl Configuration {
         if channels.ins < 1 || channels.outs < 1 || channels.ins > 512 || channels.outs > 512 {
             return Err("ASIO requires 1..512 input and output channels".into());
         }
-        let mut format = None;
-        for input in [true, false] {
-            let count = if input { channels.ins } else { channels.outs };
-            for channel in 0..count {
-                // Zero is a valid initial representation for the SDK channel-info POD.
-                let mut info: ffi::ASIOChannelInfo = unsafe { std::mem::zeroed() };
-                info.channel = channel;
-                info.isInput = i32::from(input);
-                // SAFETY: driver is initialized; info is writable and lives through the call.
-                check(
-                    unsafe { ffi::ASIOGetChannelInfo(&mut info) },
-                    "ASIOGetChannelInfo",
-                )?;
-                let current = Format::from_asio(info.type_)?;
-                if format.is_some_and(|previous| previous != current) {
-                    return Err(
-                        "All selected input/output channels must have the same format".into(),
-                    );
-                }
-                format = Some(current);
-            }
+        let input = Format::from_asio(driver.input_data_type()?)?;
+        let output = Format::from_asio(driver.output_data_type()?)?;
+        if input != output {
+            return Err("All selected input/output channels must have the same format".into());
         }
-        let (mut min, mut max, mut preferred, mut granularity) = (0, 0, 0, 0);
-        // SAFETY: initialized driver and four valid output pointers.
-        check(
-            unsafe { ffi::ASIOGetBufferSize(&mut min, &mut max, &mut preferred, &mut granularity) },
-            "ASIOGetBufferSize",
-        )?;
+        let BufferSizeRange {
+            min,
+            max,
+            preferred,
+        } = driver.buffersize_range()?;
         Ok(Self {
             inputs: channels.ins as usize,
             outputs: channels.outs as usize,
-            format: format.expect("channels validated"),
+            format: input,
             rate: driver.sample_rate()?,
             min,
             max,
             preferred,
-            granularity,
         })
     }
     pub fn audio_configuration(&self) -> crate::backend::AudioConfiguration {
@@ -125,7 +99,18 @@ impl Configuration {
         println!("{}", self.summary());
     }
     pub fn summary(&self) -> String {
-        format!("Input/output: {}/{} channels, {:?}, {} Hz; buffer min/max/preferred={}/{}/{}, granularity={}", self.inputs, self.outputs, self.format, self.rate, self.min, self.max, self.preferred, self.granularity)
+        let preferred = match self.preferred {
+            BufferPreference::Only(size) | BufferPreference::Preferred(size) => size,
+            BufferPreference::Stepped { preferred, .. } => preferred,
+        };
+        let granularity = match self.preferred {
+            // asio-sys maps ASIO granularity -1 (power-of-two) to Only.
+            BufferPreference::Only(_) => -1,
+            // asio-sys maps ASIO granularity 0 (preferred-only) to Preferred.
+            BufferPreference::Preferred(_) => 0,
+            BufferPreference::Stepped { step, .. } => step as i32,
+        };
+        format!("Input/output: {}/{} channels, {:?}, {} Hz; buffer min/max/preferred={}/{}/{}, granularity={}", self.inputs, self.outputs, self.format, self.rate, self.min, self.max, preferred, granularity)
     }
     pub fn validate(&self, frames: u32) -> Result<()> {
         self.validate_rate(frames, RATE)
@@ -139,21 +124,34 @@ impl Configuration {
             )
             .into());
         }
-        if !buffer_supported(frames, self.min, self.max, self.preferred, self.granularity) {
-            return Err(format!("Requested {frames} frames not supported by ASIO min/max/preferred={}/{}/{}, granularity={}; specify the current size explicitly", self.min, self.max, self.preferred, self.granularity).into());
+        if !buffer_supported(frames, self.min, self.max, self.preferred) {
+            let preferred = match self.preferred {
+                BufferPreference::Only(size) | BufferPreference::Preferred(size) => size,
+                BufferPreference::Stepped { preferred, .. } => preferred,
+            };
+            let granularity = match self.preferred {
+                BufferPreference::Only(_) => -1,
+                BufferPreference::Preferred(_) => 0,
+                BufferPreference::Stepped { step, .. } => step as i32,
+            };
+            return Err(format!("Requested {frames} frames not supported by ASIO min/max/preferred={}/{}/{}, granularity={}; specify the current size explicitly", self.min, self.max, preferred, granularity).into());
         }
         Ok(())
     }
 }
-fn buffer_supported(frames: u32, min: i32, max: i32, preferred: i32, granularity: i32) -> bool {
+
+fn buffer_supported(frames: u32, min: i32, max: i32, preferred: BufferPreference) -> bool {
     if min < 1 || max < min || frames < min as u32 || frames > max as u32 {
         return false;
     }
-    match granularity {
-        -1 => frames.is_power_of_two(),
-        0 => frames == preferred as u32,
-        step if step > 0 => (frames - min as u32).is_multiple_of(step as u32),
-        _ => false,
+    match preferred {
+        // asio-sys maps ASIO granularity -1 (power-of-two) to Only.
+        BufferPreference::Only(_) => frames.is_power_of_two(),
+        // asio-sys maps ASIO granularity 0 (preferred-only) to Preferred.
+        BufferPreference::Preferred(size) => frames == size,
+        BufferPreference::Stepped { step, .. } => {
+            step > 0 && (frames - min as u32).is_multiple_of(step)
+        }
     }
 }
 
@@ -172,30 +170,35 @@ struct CallbackState {
     sample_rate: u32,
     input_channel: usize,
     output_channels: Vec<usize>,
-    buffers: Vec<ffi::ASIOBufferInfo>,
-    inputs: usize,
     frames: usize,
     format: Format,
     active: AtomicBool,
     processing: AtomicBool,
-    output_ready: AtomicBool,
-    last_position: AtomicU64,
     metrics: Metrics,
     dsp: UnsafeCell<DspChain>,
     scratch: UnsafeCell<Vec<f32>>,
 }
+// SAFETY: ASIO delivers callbacks on one thread; the control thread only touches DSP after stop.
+unsafe impl Send for CallbackState {}
+unsafe impl Sync for CallbackState {}
+
 impl CallbackState {
-    unsafe fn process<T: Sample>(&self, index: usize) -> u64 {
+    unsafe fn process<T: Sample>(
+        &self,
+        input_infos: &[AsioBufferInfo],
+        output_infos: &[AsioBufferInfo],
+        index: usize,
+    ) -> u64 {
         // SAFETY: open validates distinct, aligned buffers of frames*T bytes. ASIO owns them
         // until dispose; the callback's processing guard excludes simultaneous buffer writers.
         let input = unsafe {
             std::slice::from_raw_parts(
-                self.buffers[self.input_channel - 1].buffers[index].cast::<T>(),
+                input_infos[self.input_channel - 1].buffers[index].cast::<T>(),
                 self.frames,
             )
         };
         let mut nonzero = 0;
-        for (channel, info) in self.buffers[self.inputs..].iter().enumerate() {
+        for (channel, info) in output_infos.iter().enumerate() {
             let output = unsafe {
                 std::slice::from_raw_parts_mut(info.buffers[index].cast::<T>(), self.frames)
             };
@@ -217,8 +220,7 @@ impl CallbackState {
             } else if self.output_channels.contains(&(channel + 1)) {
                 let source = unsafe {
                     std::slice::from_raw_parts(
-                        self.buffers[self.inputs + self.output_channels[0] - 1].buffers[index]
-                            .cast::<T>(),
+                        output_infos[self.output_channels[0] - 1].buffers[index].cast::<T>(),
                         self.frames,
                     )
                 };
@@ -229,13 +231,17 @@ impl CallbackState {
         }
         nonzero
     }
-    fn validate_pointers(&self) -> Result<()> {
+    fn validate_pointers(
+        &self,
+        input: &asio_sys::AsioStream,
+        output: &asio_sys::AsioStream,
+    ) -> Result<()> {
         let bytes = self
             .frames
             .checked_mul(self.format.bytes())
             .ok_or("ASIO buffer size overflow")?;
         let mut ranges = Vec::new();
-        for info in &self.buffers {
+        for info in input.buffer_infos.iter().chain(output.buffer_infos.iter()) {
             for buffer in info.buffers {
                 let start = buffer as usize;
                 if start == 0 || !start.is_multiple_of(self.format.bytes()) {
@@ -254,35 +260,11 @@ impl CallbackState {
     }
 }
 
-// ASIO has one process-global driver. State is installed before buffer creation and removed
-// before disposal. Every FFI callback holds a lease; teardown waits for all leases to finish.
-static STATE: AtomicPtr<CallbackState> = AtomicPtr::new(ptr::null_mut());
-static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
-struct Lease(*mut CallbackState);
-impl Lease {
-    fn acquire() -> Self {
-        IN_FLIGHT.fetch_add(1, Ordering::SeqCst);
-        Self(STATE.load(Ordering::SeqCst))
-    }
-    fn state(&self) -> Option<&CallbackState> {
-        // SAFETY: the teardown wait prevents freeing the Box while this lease exists.
-        unsafe { self.0.as_ref() }
-    }
-}
-impl Drop for Lease {
-    fn drop(&mut self) {
-        IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
-    }
-}
-
-fn process_callback(index: i32, position: Option<u64>) {
-    let lease = Lease::acquire();
-    let Some(state) = lease.state() else {
-        return;
-    };
+fn process_callback(state: &CallbackState, streams: &AsioStreams, info: &CallbackInfo) {
     if !state.active.load(Ordering::Acquire) {
         return;
     }
+    let index = info.buffer_index;
     if !(0..=1).contains(&index) {
         state
             .metrics
@@ -295,41 +277,40 @@ fn process_callback(index: i32, position: Option<u64>) {
         return;
     }
     let start = Instant::now();
-    if let Some(position) = position {
-        state
-            .metrics
-            .timestamp_blocks
-            .fetch_add(1, Ordering::Relaxed);
-        let previous = state.last_position.swap(position, Ordering::Relaxed);
-        if previous != u64::MAX && previous.checked_add(state.frames as u64) != Some(position) {
-            state.metrics.gaps.fetch_add(1, Ordering::Relaxed);
-        }
-    }
+    state
+        .metrics
+        .timestamp_blocks
+        .fetch_add(1, Ordering::Relaxed);
+    let (Some(input), Some(output)) = (&streams.input, &streams.output) else {
+        state.processing.store(false, Ordering::Release);
+        return;
+    };
     if state.metrics.faults.load(Ordering::Relaxed) == 0 {
         // SAFETY: index checked, buffers immutable since preparation, exclusive callback writer.
         let nonzero = unsafe {
             match state.format {
-                Format::F32 => state.process::<f32>(index as usize),
-                Format::I32 => state.process::<i32>(index as usize),
-                Format::I16 => state.process::<i16>(index as usize),
+                Format::F32 => {
+                    state.process::<f32>(&input.buffer_infos, &output.buffer_infos, index as usize)
+                }
+                Format::I32 => {
+                    state.process::<i32>(&input.buffer_infos, &output.buffer_infos, index as usize)
+                }
+                Format::I16 => {
+                    state.process::<i16>(&input.buffer_infos, &output.buffer_infos, index as usize)
+                }
             }
         };
         state.metrics.nonzero.fetch_add(nonzero, Ordering::Relaxed);
     } else {
         // A reset/resync request invalidates normal processing. Silence until control-thread stop.
-        for output in &state.buffers[state.inputs..] {
+        for info in &output.buffer_infos {
             unsafe {
                 ptr::write_bytes(
-                    output.buffers[index as usize],
+                    info.buffers[index as usize],
                     0,
                     state.frames * state.format.bytes(),
                 );
             }
-        }
-    }
-    if state.output_ready.load(Ordering::Relaxed) {
-        unsafe {
-            ffi::ASIOOutputReady();
         }
     }
     let ns = start.elapsed().as_nanos().min(u64::MAX as u128) as u64;
@@ -340,128 +321,14 @@ fn process_callback(index: i32, position: Option<u64>) {
     state.metrics.blocks.fetch_add(1, Ordering::Relaxed);
     state.processing.store(false, Ordering::Release);
 }
-extern "C" fn buffer_switch(index: i32, _: i32) {
-    process_callback(index, None);
-}
-extern "C" fn rate_changed(rate: f64) {
-    let lease = Lease::acquire();
-    if let Some(state) = lease.state() {
-        if rate != state.sample_rate as f64 {
-            state
-                .metrics
-                .faults
-                .fetch_or(RATE_CHANGE, Ordering::Relaxed);
-        }
-    }
-}
-extern "C" fn message(selector: i32, value: i32, _: *mut c_void, _: *mut f64) -> i32 {
-    if selector == 1 {
-        return i32::from(matches!(value, 2..=7 | 15));
-    }
-    if selector == 2 {
-        return 2;
-    }
-    let lease = Lease::acquire();
-    let Some(state) = lease.state() else {
-        return 0;
-    };
-    match selector {
-        3 | 4 => {
-            state.metrics.faults.fetch_or(RESET, Ordering::Relaxed);
-            1
-        }
-        5 => {
-            state.metrics.faults.fetch_or(RESYNC, Ordering::Relaxed);
-            1
-        }
-        6 => {
-            state
-                .metrics
-                .latencies_changed
-                .store(true, Ordering::Relaxed);
-            1
-        }
-        7 => 1,
-        15 => {
-            state.metrics.faults.fetch_or(OVERLOAD, Ordering::Relaxed);
-            1
-        }
-        _ => 0,
-    }
-}
-extern "C" fn buffer_switch_time(
-    time: *mut ffi::ASIOTime,
-    index: i32,
-    _: i32,
-) -> *mut ffi::ASIOTime {
-    let mut position = None;
-    if !time.is_null() {
-        // SAFETY: SDK-owned ASIOTime follows the packed(4) layout in asio-sys::AsioTime.
-        // Use unaligned reads: bindgen's opaque ASIOSampleRate is deliberately not interpreted.
-        let timing = unsafe {
-            ptr::read_unaligned(ptr::addr_of!(
-                (*(time.cast::<asio_sys::AsioTime>())).time_info
-            ))
-        };
-        if timing.flags & 2 != 0 {
-            position =
-                Some((timing.sample_position.hi as u64) << 32 | timing.sample_position.lo as u64);
-        }
-        let lease = Lease::acquire();
-        if let Some(state) = lease.state() {
-            if timing.flags & 4 != 0 && timing.sample_rate != state.sample_rate as f64 {
-                state
-                    .metrics
-                    .faults
-                    .fetch_or(RATE_CHANGE, Ordering::Relaxed);
-            }
-            if timing.flags & 32 != 0 {
-                state
-                    .metrics
-                    .faults
-                    .fetch_or(CLOCK_CHANGE, Ordering::Relaxed);
-            }
-        }
-    }
-    process_callback(index, position);
-    time
-}
-
-// SDK Windows native ASIOSampleRate is f64. Bindgen's callback parameter uses an opaque
-// byte array, so define the native callback ABI explicitly, as CPAL's backend does.
-#[repr(C, packed(4))]
-struct RawCallbacks {
-    buffer_switch: extern "C" fn(i32, i32),
-    rate_changed: extern "C" fn(f64),
-    message: extern "C" fn(i32, i32, *mut c_void, *mut f64) -> i32,
-    time: extern "C" fn(*mut ffi::ASIOTime, i32, i32) -> *mut ffi::ASIOTime,
-}
-static CALLBACKS: RawCallbacks = RawCallbacks {
-    buffer_switch,
-    rate_changed,
-    message,
-    time: buffer_switch_time,
-};
-// asio-sys does not allowlist ASIOGetLatencies; bind the MSVC C++ mangled export directly.
-unsafe extern "C" {
-    #[link_name = "\x01?ASIOGetLatencies@@YAJPEAJ0@Z"]
-    fn asio_get_latencies(input: *mut i32, output: *mut i32) -> i32;
-    // Native ASIOSampleRate is double; bindgen represents it as opaque bytes.
-    #[link_name = "\x01?ASIOCanSampleRate@@YAJN@Z"]
-    fn asio_can_sample_rate(rate: f64) -> i32;
-}
 
 /// Query only; never change the driver's clock or allocate audio buffers.
 /// The caller keeps the initialized driver alive and excludes an active stream.
-pub(crate) fn supported_sample_rates() -> Result<Vec<u32>> {
+pub(crate) fn supported_sample_rates(driver: &Driver) -> Result<Vec<u32>> {
     let mut rates = Vec::new();
     for rate in crate::SAMPLE_RATES {
-        // SAFETY: the control thread owns an initialized driver for the entire query.
-        let code = unsafe { asio_can_sample_rate(rate as f64) };
-        match code {
-            OK | SUCCESS => rates.push(rate),
-            -995 => {} // ASE_NoClock: this clock frequency is unsupported.
-            _ => check(code, "ASIOCanSampleRate")?,
+        if driver.can_sample_rate(rate as f64)? {
+            rates.push(rate);
         }
     }
     Ok(rates)
@@ -473,7 +340,10 @@ pub struct Engine {
     configuration: crate::backend::AudioConfiguration,
     details: String,
     driver: Driver,
-    state: Box<CallbackState>,
+    state: Arc<CallbackState>,
+    streams: Arc<Mutex<AsioStreams>>,
+    callback_id: Option<BufferCallbackId>,
+    event_id: Option<DriverEventCallbackId>,
     prepared: bool,
     running: bool,
 }
@@ -510,86 +380,133 @@ impl Engine {
             0
         };
         let dsp = DspChain::with_sample_rate(dsp, rate)?;
-        let mut buffers = Vec::with_capacity(config.inputs + config.outputs);
-        for (input, channels) in [(true, config.inputs), (false, config.outputs)] {
-            for channel in 0..channels {
-                buffers.push(ffi::ASIOBufferInfo {
-                    isInput: i32::from(input),
-                    channelNum: channel as i32,
-                    buffers: [ptr::null_mut(); 2],
-                });
-            }
-        }
-        let state = Box::new(CallbackState {
+        let state = Arc::new(CallbackState {
             sample_rate: rate,
             input_channel,
             output_channels,
-            buffers,
-            inputs: config.inputs,
             frames: frames as usize,
             format: config.format,
             active: AtomicBool::new(false),
             processing: AtomicBool::new(false),
-            output_ready: AtomicBool::new(false),
-            last_position: AtomicU64::new(u64::MAX),
             metrics: Metrics::default(),
             dsp: UnsafeCell::new(dsp),
             scratch: UnsafeCell::new(vec![0.0; frames as usize]),
         });
-        let mut engine = Self {
+        let streams_slot = driver.streams();
+        let prepared = (|| -> Result<()> {
+            let mut held = streams_slot
+                .lock()
+                .map_err(|_| "ASIO stream lock poisoned")?;
+            let prepared = driver.prepare_input_stream(
+                held.output.take(),
+                config.inputs,
+                Some(frames as i32),
+            )?;
+            let prepared = driver.prepare_output_stream(
+                prepared.input,
+                config.outputs,
+                Some(frames as i32),
+            )?;
+            *held = prepared;
+            let (Some(input), Some(output)) = (&held.input, &held.output) else {
+                return Err("ASIO failed to prepare duplex buffers".into());
+            };
+            state.validate_pointers(input, output)?;
+            for info in &output.buffer_infos {
+                for buffer in info.buffers {
+                    unsafe {
+                        ptr::write_bytes(buffer, 0, frames as usize * config.format.bytes());
+                    }
+                }
+            }
+            if driver.sample_rate()? != rate as f64 {
+                return Err("Driver rate changed during buffer preparation".into());
+            }
+            Ok(())
+        })();
+        if let Err(error) = prepared {
+            let _ = driver.dispose_buffers();
+            if let Ok(mut streams) = streams_slot.lock() {
+                *streams = AsioStreams {
+                    input: None,
+                    output: None,
+                };
+            }
+            return Err(error);
+        }
+        let callback_state = Arc::clone(&state);
+        let callback_streams = Arc::clone(&streams_slot);
+        let callback_id = driver.add_callback(move |info| {
+            let Ok(streams) = callback_streams.lock() else {
+                return;
+            };
+            process_callback(&callback_state, &streams, info);
+        });
+        let event_state = Arc::clone(&state);
+        let expected_rate = rate as f64;
+        let event_id = driver.add_event_callback(move |event| match event {
+            AsioDriverEvent::Message { selector, value } => match selector {
+                AsioMessageSelectors::kAsioSelectorSupported => {
+                    value == AsioMessageSelectors::kAsioOverload as i32
+                }
+                AsioMessageSelectors::kAsioResetRequest => {
+                    event_state
+                        .metrics
+                        .faults
+                        .fetch_or(RESET, Ordering::Relaxed);
+                    true
+                }
+                AsioMessageSelectors::kAsioResyncRequest => {
+                    event_state
+                        .metrics
+                        .faults
+                        .fetch_or(RESYNC, Ordering::Relaxed);
+                    true
+                }
+                AsioMessageSelectors::kAsioLatenciesChanged => {
+                    event_state
+                        .metrics
+                        .latencies_changed
+                        .store(true, Ordering::Relaxed);
+                    true
+                }
+                AsioMessageSelectors::kAsioOverload => {
+                    event_state
+                        .metrics
+                        .faults
+                        .fetch_or(OVERLOAD, Ordering::Relaxed);
+                    true
+                }
+                _ => false,
+            },
+            AsioDriverEvent::SampleRateChanged(new_rate) => {
+                if (new_rate - expected_rate).abs() >= 1.0 {
+                    event_state
+                        .metrics
+                        .faults
+                        .fetch_or(RATE_CHANGE, Ordering::Relaxed);
+                }
+                false
+            }
+        });
+        Ok(Self {
             pitch_latency,
             configuration: config.audio_configuration(),
             details: config.summary(),
             driver,
             state,
-            prepared: false,
+            streams: streams_slot,
+            callback_id: Some(callback_id),
+            event_id: Some(event_id),
+            prepared: true,
             running: false,
-        };
-        let pointer = ptr::from_ref(engine.state.as_ref()).cast_mut();
-        if STATE
-            .compare_exchange(ptr::null_mut(), pointer, Ordering::SeqCst, Ordering::SeqCst)
-            .is_err()
-        {
-            return Err("Another ASIO engine is already active".into());
-        }
-        // SAFETY: stable descriptor Vec and static callback table live until stop/dispose.
-        check(
-            unsafe {
-                ffi::ASIOCreateBuffers(
-                    engine.state.buffers.as_mut_ptr(),
-                    engine.state.buffers.len() as i32,
-                    frames as i32,
-                    ptr::from_ref(&CALLBACKS)
-                        .cast_mut()
-                        .cast::<ffi::ASIOCallbacks>(),
-                )
-            },
-            "ASIOCreateBuffers",
-        )?;
-        engine.prepared = true;
-        engine.state.validate_pointers()?;
-        for info in &engine.state.buffers[config.inputs..] {
-            for buffer in info.buffers {
-                unsafe {
-                    ptr::write_bytes(buffer, 0, frames as usize * config.format.bytes());
-                }
-            }
-        }
-        engine.state.output_ready.store(
-            matches!(unsafe { ffi::ASIOOutputReady() }, OK | SUCCESS),
-            Ordering::Relaxed,
-        );
-        if engine.driver.sample_rate()? != rate as f64 {
-            return Err("Driver rate changed during buffer preparation".into());
-        }
-        Ok(engine)
+        })
     }
     pub fn start(&mut self) -> Result<()> {
         self.state.active.store(true, Ordering::Release);
-        let code = unsafe { ffi::ASIOStart() };
-        if code != OK && code != SUCCESS {
+        if let Err(error) = self.driver.start() {
             self.state.active.store(false, Ordering::Release);
-            check(code, "ASIOStart")?;
+            return Err(error.into());
         }
         self.running = true;
         Ok(())
@@ -597,7 +514,7 @@ impl Engine {
     pub fn stop(&mut self) -> Result<()> {
         self.state.active.store(false, Ordering::Release);
         if self.running {
-            check(unsafe { ffi::ASIOStop() }, "ASIOStop")?;
+            self.driver.stop()?;
             self.running = false;
         }
         Ok(())
@@ -618,12 +535,8 @@ impl Engine {
         Ok(())
     }
     pub fn latency_summary(&self) -> Result<String> {
-        let (mut input, mut output) = (0, 0);
-        check(
-            unsafe { asio_get_latencies(&mut input, &mut output) },
-            "ASIOGetLatencies",
-        )?;
-        Ok(format!("Driver-reported ASIO latency: input={input} samples ({:.3} ms), output={output} samples ({:.3} ms). Not a microphone round-trip measurement.", input as f64 * 1000.0 / self.configuration.sample_rate, output as f64 * 1000.0 / self.configuration.sample_rate))
+        let latencies = self.driver.latencies()?;
+        Ok(format!("Driver-reported ASIO latency: input={} samples ({:.3} ms), output={} samples ({:.3} ms). Not a microphone round-trip measurement.", latencies.input, latencies.input as f64 * 1000.0 / self.configuration.sample_rate, latencies.output, latencies.output as f64 * 1000.0 / self.configuration.sample_rate))
     }
     pub fn check_events(&self) -> Result<()> {
         let faults = self.state.metrics.faults.load(Ordering::Relaxed);
@@ -650,6 +563,14 @@ impl Engine {
             return Err("ASIO test had deadline misses or sample-position gaps".into());
         }
         Ok(())
+    }
+    fn detach_callbacks(&mut self) {
+        if let Some(id) = self.callback_id.take() {
+            self.driver.remove_callback(id);
+        }
+        if let Some(id) = self.event_id.take() {
+            self.driver.remove_event_callback(id);
+        }
     }
 }
 impl crate::backend::AudioStream for Engine {
@@ -682,14 +603,10 @@ impl crate::backend::AudioStream for Engine {
         }
     }
     fn latency_ms(&self) -> Result<(Option<f64>, Option<f64>)> {
-        let (mut input, mut output) = (0, 0);
-        check(
-            unsafe { asio_get_latencies(&mut input, &mut output) },
-            "ASIOGetLatencies",
-        )?;
+        let latencies = self.driver.latencies()?;
         Ok((
-            Some(input as f64 * 1000.0 / self.configuration.sample_rate),
-            Some(output as f64 * 1000.0 / self.configuration.sample_rate),
+            Some(latencies.input as f64 * 1000.0 / self.configuration.sample_rate),
+            Some(latencies.output as f64 * 1000.0 / self.configuration.sample_rate),
         ))
     }
     fn summary(&self) -> String {
@@ -708,25 +625,21 @@ impl crate::backend::AudioStream for Engine {
 
 impl Drop for Engine {
     fn drop(&mut self) {
-        let own_pointer = ptr::from_ref(self.state.as_ref()).cast_mut();
-        // A failed second open must never detach another engine's state.
-        if STATE.load(Ordering::SeqCst) != own_pointer {
-            return;
-        }
         if let Err(error) = self.stop() {
             eprintln!("ASIO stop during cleanup: {error}");
         }
-        STATE.store(ptr::null_mut(), Ordering::SeqCst);
-        while IN_FLIGHT.load(Ordering::SeqCst) != 0 {
-            thread::sleep(Duration::from_millis(1));
-        }
-        // No callback can now read state or buffers. The static callback table stays valid.
+        self.detach_callbacks();
         if self.prepared {
-            if let Err(error) = check(unsafe { ffi::ASIODisposeBuffers() }, "ASIODisposeBuffers") {
+            if let Err(error) = self.driver.dispose_buffers() {
                 eprintln!("ASIO cleanup: {error}");
             }
+            if let Ok(mut streams) = self.streams.lock() {
+                *streams = AsioStreams {
+                    input: None,
+                    output: None,
+                };
+            }
         }
-        // Driver's own state remains Initialized: it only handles ASIOExit/unloading afterward.
     }
 }
 
@@ -744,8 +657,7 @@ mod tests {
                 rate: rate as f64,
                 min: 64,
                 max: 512,
-                preferred: 512,
-                granularity: -1,
+                preferred: BufferPreference::Only(512),
             };
             assert!(config.validate_rate(128, rate).is_ok());
             let other = if rate == RATE { 44100 } else { RATE };
@@ -754,12 +666,38 @@ mod tests {
     }
     #[test]
     fn validates_fixed_power_of_two_and_stepped_buffers() {
-        assert!(buffer_supported(512, 512, 512, 512, 0));
-        assert!(!buffer_supported(64, 512, 512, 512, 0));
-        assert!(buffer_supported(64, 32, 1024, 512, -1));
-        assert!(!buffer_supported(96, 32, 1024, 512, -1));
-        assert!(buffer_supported(96, 32, 1024, 512, 32));
-        assert!(!buffer_supported(100, 32, 1024, 512, 32));
+        assert!(buffer_supported(
+            512,
+            512,
+            512,
+            BufferPreference::Preferred(512)
+        ));
+        assert!(!buffer_supported(
+            64,
+            512,
+            512,
+            BufferPreference::Preferred(512)
+        ));
+        assert!(buffer_supported(64, 32, 1024, BufferPreference::Only(512)));
+        assert!(!buffer_supported(96, 32, 1024, BufferPreference::Only(512)));
+        assert!(buffer_supported(
+            96,
+            32,
+            1024,
+            BufferPreference::Stepped {
+                preferred: 512,
+                step: 32
+            }
+        ));
+        assert!(!buffer_supported(
+            100,
+            32,
+            1024,
+            BufferPreference::Stepped {
+                preferred: 512,
+                step: 32
+            }
+        ));
     }
     #[test]
     fn direct_buffer_copy_has_no_fifo_and_silences_other_outputs() {
@@ -769,27 +707,24 @@ mod tests {
         let mut output_b = [99.0_f32; 4];
         let mut other_a = [99.0_f32; 4];
         let mut other_b = [99.0_f32; 4];
-        let info = |a: *mut f32, b: *mut f32| ffi::ASIOBufferInfo {
-            isInput: 0,
-            channelNum: 0,
+        let info = |a: *mut f32, b: *mut f32| AsioBufferInfo {
+            is_input: 0,
+            channel_num: 0,
             buffers: [a.cast(), b.cast()],
         };
-        let mut state = CallbackState {
+        let input_infos = [info(input_a.as_mut_ptr(), input_b.as_mut_ptr())];
+        let mut output_infos = [
+            info(output_a.as_mut_ptr(), output_b.as_mut_ptr()),
+            info(other_a.as_mut_ptr(), other_b.as_mut_ptr()),
+        ];
+        let state = CallbackState {
             sample_rate: RATE,
             input_channel: 1,
             output_channels: vec![1],
-            buffers: vec![
-                info(input_a.as_mut_ptr(), input_b.as_mut_ptr()),
-                info(output_a.as_mut_ptr(), output_b.as_mut_ptr()),
-                info(other_a.as_mut_ptr(), other_b.as_mut_ptr()),
-            ],
-            inputs: 1,
             frames: 4,
             format: Format::F32,
             active: AtomicBool::new(false),
             processing: AtomicBool::new(false),
-            output_ready: AtomicBool::new(false),
-            last_position: AtomicU64::new(u64::MAX),
             metrics: Metrics::default(),
             dsp: UnsafeCell::new(
                 DspChain::new(DspSettings::from(
@@ -799,25 +734,58 @@ mod tests {
             ),
             scratch: UnsafeCell::new(vec![0.0; 4]),
         };
-        state.validate_pointers().unwrap();
-        assert_eq!(unsafe { state.process::<f32>(0) }, 3);
+        let input_stream = asio_sys::AsioStream {
+            buffer_infos: input_infos.to_vec(),
+            buffer_size: 4,
+        };
+        let output_stream = asio_sys::AsioStream {
+            buffer_infos: output_infos.to_vec(),
+            buffer_size: 4,
+        };
+        state
+            .validate_pointers(&input_stream, &output_stream)
+            .unwrap();
+        assert_eq!(
+            unsafe { state.process::<f32>(&input_infos, &output_infos, 0) },
+            3
+        );
         assert_eq!(input_a.map(f32::to_bits), output_a.map(f32::to_bits));
         assert_eq!(other_a, [0.0; 4]);
         assert_eq!(output_b, [99.0; 4]);
-        assert_eq!(unsafe { state.process::<f32>(1) }, 4);
+        assert_eq!(
+            unsafe { state.process::<f32>(&input_infos, &output_infos, 1) },
+            4
+        );
         assert_eq!(input_b, output_b);
         assert_eq!(other_b, [0.0; 4]);
         // Select input 2, fan out once-processed samples, and silence deselected outputs.
         let mut selected_input_a = [-0.0_f32, f32::from_bits(1), -0.25, 0.5];
         let mut selected_input_b = [0.1_f32, 0.2, -0.3, 0.4];
-        state.buffers.insert(
-            1,
+        let input_infos = [
+            info(input_a.as_mut_ptr(), input_b.as_mut_ptr()),
             info(selected_input_a.as_mut_ptr(), selected_input_b.as_mut_ptr()),
+        ];
+        let mut state = CallbackState {
+            sample_rate: RATE,
+            input_channel: 2,
+            output_channels: vec![1, 2],
+            frames: 4,
+            format: Format::F32,
+            active: AtomicBool::new(false),
+            processing: AtomicBool::new(false),
+            metrics: Metrics::default(),
+            dsp: UnsafeCell::new(
+                DspChain::new(DspSettings::from(
+                    &crate::cli::Options::parse(Vec::<String>::new()).unwrap(),
+                ))
+                .unwrap(),
+            ),
+            scratch: UnsafeCell::new(vec![0.0; 4]),
+        };
+        assert_eq!(
+            unsafe { state.process::<f32>(&input_infos, &output_infos, 0) },
+            3
         );
-        state.inputs = 2;
-        state.input_channel = 2;
-        state.output_channels = vec![1, 2];
-        assert_eq!(unsafe { state.process::<f32>(0) }, 3);
         assert_eq!(
             output_a.map(f32::to_bits),
             selected_input_a.map(f32::to_bits)
@@ -827,11 +795,12 @@ mod tests {
             selected_input_a.map(f32::to_bits)
         );
         state.output_channels = vec![2];
-        assert_eq!(unsafe { state.process::<f32>(1) }, 4);
+        assert_eq!(
+            unsafe { state.process::<f32>(&input_infos, &output_infos, 1) },
+            4
+        );
         assert_eq!(output_b, [0.0; 4]);
         assert_eq!(other_b, selected_input_b);
-        state.buffers.remove(1);
-        state.inputs = 1;
         state.input_channel = 1;
         state.output_channels = vec![1];
         state.dsp.get_mut().pitch = PitchShifter::new(
@@ -858,15 +827,24 @@ mod tests {
         }
         .build()
         .unwrap();
-        unsafe { state.process::<f32>(0) };
+        let input_infos = [info(input_a.as_mut_ptr(), input_b.as_mut_ptr())];
+        unsafe { state.process::<f32>(&input_infos, &output_infos, 0) };
         assert!(output_a[0] > 0.0 && output_a[0] <= 0.892);
         assert_eq!(output_a[1], 0.0);
         assert_eq!(other_a, [0.0; 4]);
-        state.buffers[1].buffers[0] = state.buffers[0].buffers[0];
-        assert!(state.validate_pointers().is_err());
+        output_infos[0].buffers[0] = input_infos[0].buffers[0];
+        let bad_output = asio_sys::AsioStream {
+            buffer_infos: output_infos.to_vec(),
+            buffer_size: 4,
+        };
+        let good_input = asio_sys::AsioStream {
+            buffer_infos: input_infos.to_vec(),
+            buffer_size: 4,
+        };
+        assert!(state.validate_pointers(&good_input, &bad_output).is_err());
 
         // Exercise the wet route through the raw ASIO descriptors, including ring wraps.
-        state.buffers[1].buffers[0] = output_a.as_mut_ptr().cast();
+        output_infos[0].buffers[0] = output_a.as_mut_ptr().cast();
         state.dsp.get_mut().gate = GateSettings {
             enabled: false,
             threshold: crate::gate::GateThreshold::Auto,
@@ -886,14 +864,20 @@ mod tests {
         )
         .unwrap();
         for _ in 0..1024 {
-            assert_eq!(unsafe { state.process::<f32>(0) }, 3);
+            assert_eq!(
+                unsafe { state.process::<f32>(&input_infos, &output_infos, 0) },
+                3
+            );
         }
         assert_ne!(input_a.map(f32::to_bits), output_a.map(f32::to_bits));
         assert!(output_a.iter().all(|s| s.is_finite() && s.abs() <= 1.0));
         assert_eq!(other_a, [0.0; 4]);
         assert_eq!(output_b, [0.0; 4]); // Last index 1 routing muted this output; index 0 leaves it untouched.
         for _ in 0..4096 {
-            assert_eq!(unsafe { state.process::<f32>(1) }, 4);
+            assert_eq!(
+                unsafe { state.process::<f32>(&input_infos, &output_infos, 1) },
+                4
+            );
         }
         assert!(output_b.iter().all(|s| (*s - 0.1).abs() < 0.001));
         assert_eq!(other_b, [0.0; 4]);
