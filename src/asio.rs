@@ -10,7 +10,7 @@ use std::{
     ptr,
     sync::{
         atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
     },
     time::Instant,
 };
@@ -245,6 +245,10 @@ struct CallbackState {
     metrics: Metrics,
     dsp: UnsafeCell<DspChain>,
     scratch: UnsafeCell<Vec<f32>>,
+    /// Buffer descriptors copied after prepare; valid until dispose. Callback reads these
+    /// without locking the shared `AsioStreams` mutex.
+    input_buffers: OnceLock<Vec<AsioBufferInfo>>,
+    output_buffers: OnceLock<Vec<AsioBufferInfo>>,
 }
 // SAFETY: ASIO delivers callbacks on one thread; the control thread only touches DSP after stop.
 unsafe impl Send for CallbackState {}
@@ -328,7 +332,7 @@ impl CallbackState {
     }
 }
 
-fn process_callback(state: &CallbackState, streams: &AsioStreams, info: &CallbackInfo) {
+fn process_callback(state: &CallbackState, info: &CallbackInfo) {
     if !state.active.load(Ordering::Acquire) {
         return;
     }
@@ -345,7 +349,9 @@ fn process_callback(state: &CallbackState, streams: &AsioStreams, info: &Callbac
         return;
     }
     let start = Instant::now();
-    let (Some(input), Some(output)) = (&streams.input, &streams.output) else {
+    let (Some(input_infos), Some(output_infos)) =
+        (state.input_buffers.get(), state.output_buffers.get())
+    else {
         state.processing.store(false, Ordering::Release);
         return;
     };
@@ -353,21 +359,15 @@ fn process_callback(state: &CallbackState, streams: &AsioStreams, info: &Callbac
         // SAFETY: index checked, buffers immutable since preparation, exclusive callback writer.
         let nonzero = unsafe {
             match state.format {
-                Format::F32 => {
-                    state.process::<f32>(&input.buffer_infos, &output.buffer_infos, index as usize)
-                }
-                Format::I32 => {
-                    state.process::<i32>(&input.buffer_infos, &output.buffer_infos, index as usize)
-                }
-                Format::I16 => {
-                    state.process::<i16>(&input.buffer_infos, &output.buffer_infos, index as usize)
-                }
+                Format::F32 => state.process::<f32>(input_infos, output_infos, index as usize),
+                Format::I32 => state.process::<i32>(input_infos, output_infos, index as usize),
+                Format::I16 => state.process::<i16>(input_infos, output_infos, index as usize),
             }
         };
         state.metrics.nonzero.fetch_add(nonzero, Ordering::Relaxed);
     } else {
         // A reset/resync request invalidates normal processing. Silence until control-thread stop.
-        for info in &output.buffer_infos {
+        for info in output_infos {
             unsafe {
                 ptr::write_bytes(
                     info.buffers[index as usize],
@@ -459,6 +459,8 @@ impl Engine {
             metrics: Metrics::default(),
             dsp: UnsafeCell::new(dsp),
             scratch: UnsafeCell::new(vec![0.0; frames as usize]),
+            input_buffers: OnceLock::new(),
+            output_buffers: OnceLock::new(),
         });
         let streams_slot = driver.streams();
         let prepared = (|| -> Result<()> {
@@ -480,6 +482,14 @@ impl Engine {
                 return Err("ASIO failed to prepare duplex buffers".into());
             };
             state.validate_pointers(input, output)?;
+            state
+                .input_buffers
+                .set(input.buffer_infos.clone())
+                .map_err(|_| "ASIO input buffers already installed")?;
+            state
+                .output_buffers
+                .set(output.buffer_infos.clone())
+                .map_err(|_| "ASIO output buffers already installed")?;
             for info in &output.buffer_infos {
                 for buffer in info.buffers {
                     unsafe {
@@ -504,21 +514,23 @@ impl Engine {
             return Err(error);
         }
         let callback_state = Arc::clone(&state);
-        let callback_streams = Arc::clone(&streams_slot);
         let callback_id = driver.add_callback(move |info| {
-            let Ok(streams) = callback_streams.lock() else {
-                return;
-            };
-            process_callback(&callback_state, &streams, info);
+            process_callback(&callback_state, info);
         });
         let event_state = Arc::clone(&state);
         let expected_rate = rate as f64;
         let event_id = driver.add_event_callback(move |event| match event {
             AsioDriverEvent::Message { selector, value } => match selector {
                 AsioMessageSelectors::kAsioSelectorSupported => {
-                    value == AsioMessageSelectors::kAsioOverload as i32
+                    matches!(
+                        value,
+                        v if v == AsioMessageSelectors::kAsioOverload as i32
+                            || v == AsioMessageSelectors::kAsioBufferSizeChange as i32
+                    )
                 }
-                AsioMessageSelectors::kAsioResetRequest => {
+                // Master treated BufferSizeChange like ResetRequest: restart is required.
+                AsioMessageSelectors::kAsioResetRequest
+                | AsioMessageSelectors::kAsioBufferSizeChange => {
                     event_state
                         .metrics
                         .faults
@@ -613,7 +625,7 @@ impl Engine {
     pub fn check_events(&self) -> Result<()> {
         let faults = self.state.metrics.faults.load(Ordering::Relaxed);
         if faults != 0 {
-            return Err(format!("ASIO requests restart or reports invalid processing (flags 0x{faults:x}: reset=1,resync=2,rate=4,buffer=8,overload=16,reentry=32,clock=64)").into());
+            return Err(format!("ASIO requests restart or reports invalid processing (flags 0x{faults:x}: reset=1,resync=2,rate=4,buffer=8,overload=16,reentry=32)").into());
         }
         if self
             .state
@@ -811,6 +823,8 @@ mod tests {
                 .unwrap(),
             ),
             scratch: UnsafeCell::new(vec![0.0; 4]),
+            input_buffers: OnceLock::new(),
+            output_buffers: OnceLock::new(),
         };
         let input_stream = asio_sys::AsioStream {
             buffer_infos: input_infos.to_vec(),
@@ -859,6 +873,8 @@ mod tests {
                 .unwrap(),
             ),
             scratch: UnsafeCell::new(vec![0.0; 4]),
+            input_buffers: OnceLock::new(),
+            output_buffers: OnceLock::new(),
         };
         assert_eq!(
             unsafe { state.process::<f32>(&input_infos, &output_infos, 0) },
