@@ -1,3 +1,4 @@
+import styles from "../settings.module.css";
 import { useSettingsStore } from "../store";
 import { NumberField } from "../NumberField";
 export function ReverbSettings() {
@@ -6,7 +7,7 @@ export function ReverbSettings() {
     <section>
       <h2>リバーブ</h2>
       <p>残響を加えます。停止すると残響はリセットされます。</p>
-      <label className="check">
+      <label className={styles.check}>
         <input
           type="checkbox"
           checked={values.enabled}

@@ -1,3 +1,4 @@
+import styles from "./overview.module.css";
 import * as v from "valibot";
 import { useSettingsStore } from "../store";
 import { noiseSchema } from "../noise/schema";
@@ -23,7 +24,7 @@ export function NoiseGateCard({ onSelect }: CardProps) {
             yLabel="開閉"
           >
             <path
-              className="filter-curve"
+              className={styles["filter-curve"]}
               d={`M36 86H68L${attackX} 24H${attackX + 50}L268 86H308`}
             />
             <text x="80" y="70">
@@ -63,13 +64,13 @@ export function DeesserCard({ onSelect }: CardProps) {
             yLabel="検出帯域"
           >
             <rect
-              className="filter-area"
+              className={styles["filter-area"]}
               x={frequencyX}
               y="22"
               width={308 - frequencyX}
               height="64"
             />
-            <path className="filter-curve" d={`M${frequencyX} 22V86`} />
+            <path className={styles["filter-curve"]} d={`M${frequencyX} 22V86`} />
             <text x="45" y="40">
               最大 {num(settings.rangeDb)} dB 抑制
             </text>
@@ -108,13 +109,18 @@ export function VoiceCard({ onSelect }: CardProps) {
             xLabel="−12 → +12 半音（相対設定）"
             yLabel="移動量"
           >
-            <path className="filter-reference" d="M172 16V86" />
+            <path className={styles["filter-reference"]} d="M172 16V86" />
             <path
-              className="filter-curve"
+              className={styles["filter-curve"]}
               d={`M172 38H${x(settings.pitch)}M172 68H${x(settings.formantShift)}`}
             />
-            <circle className="filter-point" cx={x(settings.pitch)} cy="38" r="4" />
-            <circle className="filter-point" cx={x(settings.formantShift)} cy="68" r="4" />
+            <circle className={styles["filter-point"]} cx={x(settings.pitch)} cy="38" r="4" />
+            <circle
+              className={styles["filter-point"]}
+              cx={x(settings.formantShift)}
+              cy="68"
+              r="4"
+            />
             <text x="40" y="29">
               ピッチ
             </text>
@@ -168,8 +174,8 @@ export function LevelCard({ onSelect }: CardProps) {
             xLabel="入力 −60 → 0 dBFS"
             yLabel="出力 dBFS"
           >
-            <path className="filter-reference" d="M36 86L308 22" />
-            <path className="filter-curve" d={curvePath(points)} />
+            <path className={styles["filter-reference"]} d="M36 86L308 22" />
+            <path className={styles["filter-curve"]} d={curvePath(points)} />
           </Plot>
           <Value>
             目標 {num(settings.targetDb)} dBFS · 増幅上限 {num(settings.maxGainDb)} dB · 応答{" "}

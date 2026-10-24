@@ -1,3 +1,4 @@
+import styles from "./overview.module.css";
 import * as v from "valibot";
 import { useSettingsStore } from "../store";
 import { eqSchema } from "../eq/schema";
@@ -55,21 +56,21 @@ export function EqCard({
             xLabel="20 Hz → 20 kHz（対数）"
             yLabel={`${minimum}〜${maximum} dB`}
           >
-            <path className="filter-reference" d={`M36 ${y(0)}H308`} />
+            <path className={styles["filter-reference"]} d={`M36 ${y(0)}H308`} />
             {isInput && (
               <path
-                className="filter-retained"
+                className={styles["filter-retained"]}
                 d={curvePath(frequencies.map((frequency, i) => [x(frequency), y(retained[i])]))}
               />
             )}
             <path
-              className="filter-curve"
+              className={styles["filter-curve"]}
               d={curvePath(frequencies.map((frequency, i) => [x(frequency), y(values[i])]))}
             />
             {settings.bands.map((band, i) => (
               <circle
                 key={i}
-                className="filter-point"
+                className={styles["filter-point"]}
                 cx={x(band.frequency)}
                 cy={y(response(band.frequency))}
                 r="3"

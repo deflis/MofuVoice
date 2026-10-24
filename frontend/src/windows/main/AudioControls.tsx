@@ -1,3 +1,4 @@
+import styles from "./AudioControls.module.css";
 import { useMainStore } from "./store";
 import { startAudio, stopAudio } from "./listener";
 import { canStart, canStop, togglePending } from "./selectors";
@@ -10,10 +11,10 @@ export function AudioControls() {
   const actionLabel = busy ? "音声を停止" : "音声を開始";
   return (
     <section>
-      <div className="actions">
+      <div className={styles.actions}>
         <button
           type="button"
-          className="audio-toggle"
+          className={styles["audio-toggle"]}
           disabled={busy ? !stopAllowed : !startAllowed}
           onClick={() => void (busy ? stopAudio() : startAudio(false))}
         >

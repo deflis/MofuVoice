@@ -1,3 +1,4 @@
+import styles from "../settings.module.css";
 import type { RateResult } from "./deviceSampleRates";
 import { useSampleRateSettings } from "./hooks";
 import { useSettingsLocked } from "../hooks";
@@ -38,7 +39,7 @@ function SupportedRates({
             は対応していません。対応レートを選び直してください。
           </p>
         )}
-        <p className="muted">
+        <p className={styles.muted}>
           アプリで選択できるレートの対応状況です。チャンネルとバッファサイズは開始時に確認します。
         </p>
       </>
@@ -55,7 +56,7 @@ function SupportedRates({
   } else if (!backend) {
     message = "音声デバイスを確認中…";
   }
-  return <p className="muted">{message}</p>;
+  return <p className={styles.muted}>{message}</p>;
 }
 
 export function SampleRateSettings() {
@@ -84,7 +85,7 @@ export function SampleRateSettings() {
           device={device}
         />
       </div>
-      <p className="muted">
+      <p className={styles.muted}>
         入出力デバイスが対応するレートを選んでください。変更は次の開始時に反映されます。ASIOではドライバー側の設定も同じレートに揃えてください。
       </p>
     </>

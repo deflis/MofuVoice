@@ -1,3 +1,4 @@
+import styles from "../settings.module.css";
 import { useSettingsStore } from "../store";
 import { NumberField } from "../NumberField";
 export function DereverbSettings() {
@@ -8,7 +9,7 @@ export function DereverbSettings() {
       <p>
         音量の減衰部分を抑える簡易方式です。直接音と残響を分離する処理ではなく、語尾も弱まることがあります。
       </p>
-      <label className="check">
+      <label className={styles.check}>
         <input
           type="checkbox"
           checked={values.enabled}

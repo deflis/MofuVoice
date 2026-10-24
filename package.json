@@ -5,11 +5,16 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "dev": "vite --config frontend/vite.config.ts",
+    "dev": "pnpm generate:css && pnpm run \"/^dev:/\"",
     "test:web": "node --experimental-test-module-mocks --test frontend/src/**/*.test.mjs",
     "build": "vite build --config frontend/vite.config.ts",
     "desktop:dev": "tauri dev --features desktop",
-    "desktop:build": "tauri build --features desktop -- --locked"
+    "desktop:build": "tauri build --features desktop -- --locked",
+    "dev:vite": "vite --config frontend/vite.config.ts",
+    "dev:css": "pnpm generate:css --watch",
+    "generate:css": "node frontend/tooling/css-modules-kit/clean-generated.mjs && pnpm --dir frontend/tooling/css-modules-kit exec cmk -p ../../tsconfig.json",
+    "check:css": "pnpm generate:css && git diff --exit-code -- ':(glob)frontend/src/**/*.module.css.d.ts'",
+    "typecheck": "tsc -p frontend/tsconfig.json"
   },
   "dependencies": {
     "@tauri-apps/api": "2.12.3",

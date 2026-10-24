@@ -1,0 +1,168 @@
+/* Settings styles. */
+
+.error {
+  color: light-dark(#a80000, #ff9090);
+  overflow-wrap: anywhere;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+dt,
+.muted {
+  color: #8c94a0;
+  font-size: 12px;
+}
+
+.settings-content section > .check {
+  margin: 8px 0;
+}
+
+.settings {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.settings-content .settings button + button {
+  margin-left: 8px;
+}
+
+.settings-layout {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 24px;
+}
+
+.settings-layout nav {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-self: start;
+  position: sticky;
+  top: 16px;
+}
+
+.settings-layout nav button {
+  text-align: left;
+  padding: 10px 12px;
+}
+
+.settings-layout nav button[aria-current="page"] {
+  background: #00c4b4;
+  color: #0a1416;
+}
+
+.settings-content {
+  min-width: 0;
+}
+
+.settings-content section {
+  border: 1px solid #373c46;
+  border-radius: 8px;
+  padding: 16px;
+  background: #1b1e23;
+}
+
+.settings-content small,
+.settings-content p {
+  color: #abb3c0;
+  line-height: 1.6;
+}
+
+.settings-content h2 {
+  font-size: 15px;
+}
+
+@media (max-width: 620px) {
+  .settings-layout {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  .settings-layout nav {
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+}
+
+.settings-content section {
+  margin: 12px 0;
+}
+
+.settings-content section > p {
+  margin: 8px 0 14px;
+}
+
+.settings-content .eq-scale,
+.settings-content .deesser-scale {
+  margin-bottom: 8px;
+}
+
+.notice {
+  display: block;
+}
+
+.slider-row .eq-scale {
+  grid-column: 1;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.slider-row .eq-scale span:nth-child(2) {
+  text-align: center;
+}
+
+.slider-row .eq-scale span:last-child {
+  text-align: right;
+}
+
+.eq-simple-band > label,
+.eq-scale {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.eq-scale {
+  color: #abb3c0;
+  font-size: 12px;
+}
+
+.level-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 12px;
+}
+
+@media (max-width: 500px) {
+  .eq-fields,
+  .level-fields {
+    grid-template-columns: 1fr;
+  }
+}
+
+.semitones {
+  margin: 10px 0;
+}
+
+.semitones > label {
+  display: flex;
+  margin: 0 0 4px;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.slider-row {
+  display: grid;
+  grid-template-columns: 1fr 80px;
+  column-gap: 12px;
+}
+
+.slider-row input[type="range"] {
+  width: 100%;
+}

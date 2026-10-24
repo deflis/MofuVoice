@@ -1,0 +1,37 @@
+/* Home styles. */
+
+main:has(.home-layout) {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.home-layout {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+
+.home-settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.home-primary-action {
+  flex: 1;
+  min-width: 8rem;
+  padding: 12px;
+}
+
+.home-secondary-action {
+  color: #abb3c0;
+}
+
+.setup-guidance {
+  border-top: 1px solid #373c46;
+  padding-top: 8px;
+}

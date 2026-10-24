@@ -1,3 +1,4 @@
+import styles from "./overview.module.css";
 import { useId, type ReactNode } from "react";
 
 export function Plot({
@@ -15,9 +16,9 @@ export function Plot({
   return (
     // SVG is an inline graphic, not an external img resource.
     // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role
-    <svg className="filter-plot" viewBox="0 0 320 112" role="img" aria-labelledby={id}>
+    <svg className={styles["filter-plot"]} viewBox="0 0 320 112" role="img" aria-labelledby={id}>
       <title id={id}>{description}</title>
-      <path className="filter-axis" d="M36 12V86H308" />
+      <path className={styles["filter-axis"]} d="M36 12V86H308" />
       <text x="36" y="10">
         {yLabel}
       </text>
@@ -45,16 +46,16 @@ export function TransferPlot({
   const output = ratio === Infinity ? threshold : threshold + (0 - threshold) / ratio;
   return (
     <Plot description={description} xLabel="入力 −60 → 0 dBFS" yLabel="出力 dBFS">
-      <path className="filter-reference" d="M36 86L308 22" />
+      <path className={styles["filter-reference"]} d="M36 86L308 22" />
       <path
-        className="filter-curve"
+        className={styles["filter-curve"]}
         d={curvePath([
           [36, 86],
           [x(threshold), y(threshold)],
           [308, y(output)],
         ])}
       />
-      <circle className="filter-point" cx={x(threshold)} cy={y(threshold)} r="3" />
+      <circle className={styles["filter-point"]} cx={x(threshold)} cy={y(threshold)} r="3" />
     </Plot>
   );
 }

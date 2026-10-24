@@ -1,3 +1,4 @@
+import styles from "../settings.module.css";
 import { NumberInput } from "../NumberInput";
 import { useId } from "react";
 import { percentToSemitones, semitonesToPercent } from "./pitchUnits";
@@ -23,12 +24,12 @@ export function SemitonesInput({
   const neutral = percent ? 100 : 0;
   const sliderId = useId();
   return (
-    <div className="semitones">
+    <div className={styles.semitones}>
       <label htmlFor={sliderId}>
         {label}
         <small>{percent ? "%" : "半音"}</small>
       </label>
-      <div className="slider-row">
+      <div className={styles["slider-row"]}>
         <input
           id={sliderId}
           type="range"
@@ -47,7 +48,7 @@ export function SemitonesInput({
           value={number}
           onChange={(event) => change(event.currentTarget.valueAsNumber)}
         />
-        <div className="eq-scale">
+        <div className={styles["eq-scale"]}>
           <span>{lowerLabel}</span>
           <span>元の声{percent ? "（100%）" : ""}</span>
           <span>{upperLabel}</span>

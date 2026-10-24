@@ -1,3 +1,5 @@
+import styles from "../settings.module.css";
+import deesserStyles from "./DeEsserSettings.module.css";
 import { NumberField } from "../NumberField";
 import { DetailsPopup } from "../DetailsPopup";
 import { useId } from "react";
@@ -24,7 +26,7 @@ export function DeEsserSettings() {
   return (
     <section aria-labelledby={`${id}-title`}>
       <h2 id={`${id}-title`}>サ行をやわらかくする（ディエッサー）</h2>
-      <label className="check">
+      <label className={styles.check}>
         <input
           type="checkbox"
           checked={parameters.enabled}
@@ -33,12 +35,12 @@ export function DeEsserSettings() {
         有効
       </label>
       <fieldset
-        className="deesser-controls"
+        className={deesserStyles["deesser-controls"]}
         disabled={!parameters.enabled}
         hidden={!parameters.enabled}
       >
         <>
-          <div className="deesser-simple">
+          <div className={deesserStyles["deesser-simple"]}>
             <label htmlFor={`${id}-amount`}>抑える強さ </label>
             <input
               id={`${id}-amount`}
@@ -50,14 +52,14 @@ export function DeEsserSettings() {
               disabled={!valid}
               onChange={(event) => parameters.setRangeDb(event.currentTarget.valueAsNumber)}
             />
-            <div className="deesser-scale">
+            <div className={deesserStyles["deesser-scale"]}>
               <span>弱く</span>
               <span>標準</span>
               <span>強く</span>
             </div>
           </div>
           {!valid && (
-            <p className="error">
+            <p className={styles.error}>
               詳細設定で最大減衰量を0〜12 dBに直すか、ディエッサーをリセットしてください。
             </p>
           )}
@@ -70,7 +72,7 @@ export function DeEsserSettings() {
         >
           <>
             {custom && (
-              <p className="notice">
+              <p className={styles.notice}>
                 詳細設定で調整した設定を使っています。ここでは抑える強さだけを変えます。
               </p>
             )}
@@ -80,7 +82,7 @@ export function DeEsserSettings() {
             <p>
               高域の音量と、音全体に対する高域の割合を検出し、高域だけを動的に減衰します。圧縮比は4:1、先読みはありません。
             </p>
-            <div className="deesser-fields">
+            <div className={deesserStyles["deesser-fields"]}>
               <NumberField
                 label="分割周波数（Hz）"
                 value={parameters.frequencyHz}

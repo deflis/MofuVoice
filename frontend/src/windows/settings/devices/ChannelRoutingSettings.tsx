@@ -1,3 +1,5 @@
+import styles from "../settings.module.css";
+import deviceStyles from "./devices.module.css";
 import { NumberInput } from "../NumberInput";
 import { useState } from "react";
 import { useChannelRouting } from "./hooks";
@@ -11,9 +13,9 @@ export function ChannelRoutingPresets() {
     outputChannels.includes(1) &&
     outputChannels.includes(2);
   return (
-    <fieldset className="routing-presets">
+    <fieldset className={deviceStyles["routing-presets"]}>
       <legend>チャンネル</legend>
-      <div className="routing-choices">
+      <div className={deviceStyles["routing-choices"]}>
         <button type="button" aria-pressed={singleOutput} onClick={() => setRouting(1, [1])}>
           モノラル（1 → 1）
         </button>
@@ -22,7 +24,7 @@ export function ChannelRoutingPresets() {
         </button>
       </div>
       {!singleOutput && !dualOutput && (
-        <p className="muted">詳細設定で指定したチャンネル割り当てを使用中です。</p>
+        <p className={styles.muted}>詳細設定で指定したチャンネル割り当てを使用中です。</p>
       )}
     </fieldset>
   );
@@ -59,9 +61,9 @@ export function ChannelRoutingDetails() {
       </label>
       <fieldset>
         <legend>出力チャンネル（複数選択可）</legend>
-        <div className="channel-choices">
+        <div className={deviceStyles["channel-choices"]}>
           {channelChoices.map((channel) => (
-            <label className="check" key={channel}>
+            <label className={styles.check} key={channel}>
               <input
                 type="checkbox"
                 checked={outputChannels.includes(channel)}

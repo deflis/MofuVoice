@@ -1,10 +1,10 @@
+import styles from "./overview.module.css";
 import type { ComponentType } from "react";
 import { useSettingsConnection } from "../listener";
 import type { CardProps } from "./Card";
 import { EqCard } from "./EqCard";
 import { NoiseGateCard, DeesserCard, VoiceCard, LevelCard } from "./ExistingCards";
 import { LimiterCard, DereverbCard, ReverbCard, CompressorCard } from "./NewCards";
-import "./overview.css";
 
 const cards: Record<string, ComponentType<CardProps>> = {
   inputEq: (props) => (
@@ -42,26 +42,28 @@ export function FilterOverview({ onSelect }: CardProps) {
     lifecycle = "音声処理中 · 設定表示（実測ではありません）";
   }
   return (
-    <div className="filter-overview">
+    <div className={styles["filter-overview"]}>
       <h2>フィルタ構成</h2>
-      <output className="filter-lifecycle">{lifecycle}</output>
+      <output className={styles["filter-lifecycle"]}>{lifecycle}</output>
       <p>上から下が音声の処理順です。図と値は個別設定と共通で、実測メーターではありません。</p>
       {!stages.length ? (
         <p>処理順の情報を取得できていません。</p>
       ) : (
         <>
-          <p className="filter-endpoint">音声入力</p>
-          <ol className="filter-chain" aria-label="固定の音声処理順">
+          <p className={styles["filter-endpoint"]}>音声入力</p>
+          <ol className={styles["filter-chain"]} aria-label="固定の音声処理順">
             {stages.map((id) => {
               const StageCard = cards[id];
               return (
                 <li key={id}>
-                  <span className="filter-arrow" aria-hidden="true">
+                  <span className={styles["filter-arrow"]} aria-hidden="true">
                     ↓
                   </span>
-                  {id === "inputEq" && <p className="filter-divider">変換前の処理</p>}
-                  {id === "voice" && <p className="filter-divider">声変換</p>}
-                  {id === "postConversionEq" && <p className="filter-divider">変換後の処理</p>}
+                  {id === "inputEq" && <p className={styles["filter-divider"]}>変換前の処理</p>}
+                  {id === "voice" && <p className={styles["filter-divider"]}>声変換</p>}
+                  {id === "postConversionEq" && (
+                    <p className={styles["filter-divider"]}>変換後の処理</p>
+                  )}
                   {StageCard ? (
                     <StageCard onSelect={onSelect} />
                   ) : (
@@ -71,10 +73,10 @@ export function FilterOverview({ onSelect }: CardProps) {
               );
             })}
           </ol>
-          <span className="filter-arrow" aria-hidden="true">
+          <span className={styles["filter-arrow"]} aria-hidden="true">
             ↓
           </span>
-          <p className="filter-endpoint">音声出力</p>
+          <p className={styles["filter-endpoint"]}>音声出力</p>
         </>
       )}
     </div>

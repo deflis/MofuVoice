@@ -1,0 +1,43 @@
+/* Eq styles. */
+
+.eq-simple-band > label,
+.eq-scale {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.eq-simple-band {
+  margin: 18px 0;
+}
+
+.eq-simple-band input[type="range"] {
+  width: 100%;
+}
+
+.eq-pro-band {
+  border: 1px solid #373c46;
+  border-radius: 6px;
+  margin: 12px 0;
+  min-width: 0;
+}
+
+.eq-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+@media (max-width: 500px) {
+  .eq-fields,
+  .level-fields {
+    grid-template-columns: 1fr;
+  }
+}
+
+.eq-controls {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}

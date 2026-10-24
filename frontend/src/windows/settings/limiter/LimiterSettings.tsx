@@ -1,3 +1,4 @@
+import styles from "../settings.module.css";
 import { useSettingsStore } from "../store";
 import { NumberField } from "../NumberField";
 export function LimiterSettings() {
@@ -6,7 +7,7 @@ export function LimiterSettings() {
     <section>
       <h2>リミッター</h2>
       <p>瞬間的なピークを抑えます。後段の処理によるピークは制限しません。</p>
-      <label className="check">
+      <label className={styles.check}>
         <input
           type="checkbox"
           checked={values.enabled}

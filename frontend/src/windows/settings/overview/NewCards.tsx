@@ -1,3 +1,4 @@
+import styles from "./overview.module.css";
 import * as v from "valibot";
 import { useSettingsStore } from "../store";
 import { limiterSchema } from "../limiter/schema";
@@ -74,9 +75,14 @@ export function DereverbCard({ onSelect }: CardProps) {
             xLabel="抑制強度 0 → 100%（模式図）"
             yLabel="設定量"
           >
-            <rect className="filter-area" x="36" y="35" width="272" height="30" />
-            <path className="filter-curve" d={`M36 50H${36 + settings.amount * 272}`} />
-            <circle className="filter-point" cx={36 + settings.amount * 272} cy="50" r="4" />
+            <rect className={styles["filter-area"]} x="36" y="35" width="272" height="30" />
+            <path className={styles["filter-curve"]} d={`M36 50H${36 + settings.amount * 272}`} />
+            <circle
+              className={styles["filter-point"]}
+              cx={36 + settings.amount * 272}
+              cy="50"
+              r="4"
+            />
           </Plot>
           <Value>
             抑制強度 {num(settings.amount * 100)}% · 減衰時間 {num(settings.decayMs)} ms
@@ -112,8 +118,8 @@ export function ReverbCard({ onSelect }: CardProps) {
             xLabel={`0 → ${num(duration)} ms（模式図）`}
             yLabel="残響の目安"
           >
-            <path className="filter-reference" d={`M${x(settings.preDelayMs)} 22V86`} />
-            <path className="filter-curve" d={curvePath(points)} />
+            <path className={styles["filter-reference"]} d={`M${x(settings.preDelayMs)} 22V86`} />
+            <path className={styles["filter-curve"]} d={curvePath(points)} />
           </Plot>
           <Value>
             ウェット {num(settings.mix * 100)}% · プリディレイ {num(settings.preDelayMs)} ms · 減衰{" "}

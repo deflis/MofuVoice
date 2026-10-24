@@ -1,3 +1,4 @@
+import styles from "../settings.module.css";
 import { useSettingsStore } from "../store";
 import { NumberField } from "../NumberField";
 export function CompressorSettings() {
@@ -6,7 +7,7 @@ export function CompressorSettings() {
     <section>
       <h2>前処理コンプレッサー</h2>
       <p>声変換前の大きな声を抑えます。後処理の音量調整とは独立しています。</p>
-      <label className="check">
+      <label className={styles.check}>
         <input
           type="checkbox"
           checked={values.enabled}

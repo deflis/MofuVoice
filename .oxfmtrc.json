@@ -3,5 +3,5 @@
   "printWidth": 100,
   "tabWidth": 2,
   "endOfLine": "lf",
-  "ignorePatterns": ["frontend/dist/**", "pnpm-lock.yaml"]
+  "ignorePatterns": ["frontend/dist/**", "frontend/src/**/*.module.css.d.ts", "pnpm-lock.yaml"]
 }

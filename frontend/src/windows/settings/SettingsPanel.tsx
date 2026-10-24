@@ -1,3 +1,4 @@
+import styles from "./settings.module.css";
 import { CompressorSettings } from "./compressor/CompressorSettings";
 import { FilterOverview } from "./overview/FilterOverview";
 import { LimiterSettings } from "./limiter/LimiterSettings";
@@ -32,7 +33,7 @@ export function SettingsPanel() {
   const [group, setGroup] = useState<SettingsSection>(readSettingsSection);
   useEffect(() => connectSettingsNavigation(setGroup), []);
   return (
-    <div className="settings-layout">
+    <div className={styles["settings-layout"]}>
       <nav aria-label="設定カテゴリ">
         {groups.map((item) => (
           <button
@@ -45,7 +46,7 @@ export function SettingsPanel() {
           </button>
         ))}
       </nav>
-      <div className="settings-content">
+      <div className={styles["settings-content"]}>
         {group === "overview" ? (
           <FilterOverview
             onSelect={(stageId) => {
@@ -60,7 +61,7 @@ export function SettingsPanel() {
             <button type="button" onClick={() => setGroup("overview")}>
               フィルタ構成へ戻る
             </button>
-            <fieldset className="settings" disabled={locked}>
+            <fieldset className={styles.settings} disabled={locked}>
               {group === "inputEq" && (
                 <>
                   <EqSettings filter="inputEq" title="入力EQ" />
