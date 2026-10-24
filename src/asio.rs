@@ -158,11 +158,9 @@ fn buffer_supported(frames: u32, min: i32, max: i32, preferred: BufferPreference
 #[derive(Default)]
 struct Metrics {
     blocks: AtomicU64,
-    timestamp_blocks: AtomicU64,
     nonzero: AtomicU64,
     max_ns: AtomicU64,
     late: AtomicU64,
-    gaps: AtomicU64,
     faults: AtomicU32,
     latencies_changed: AtomicBool,
 }
@@ -277,10 +275,6 @@ fn process_callback(state: &CallbackState, streams: &AsioStreams, info: &Callbac
         return;
     }
     let start = Instant::now();
-    state
-        .metrics
-        .timestamp_blocks
-        .fetch_add(1, Ordering::Relaxed);
     let (Some(input), Some(output)) = (&streams.input, &streams.output) else {
         state.processing.store(false, Ordering::Release);
         return;
@@ -528,7 +522,9 @@ impl Engine {
     pub fn summary(&self) -> String {
         let metrics = &self.state.metrics;
         let latency = self.pitch_latency;
-        format!("duplex blocks={}; frames={}; wet DSP={latency} samples ({:.2} ms), neutral bypass=0; nonzero input samples={}; max callback={:.3} us; deadline misses={}; timestamp blocks={}; sample-position gaps={}; fault flags=0x{:x}", self.blocks(), self.state.frames, latency as f64 * 1000.0 / self.configuration.sample_rate, metrics.nonzero.load(Ordering::Relaxed), metrics.max_ns.load(Ordering::Relaxed) as f64 / 1000.0, metrics.late.load(Ordering::Relaxed), metrics.timestamp_blocks.load(Ordering::Relaxed), metrics.gaps.load(Ordering::Relaxed), metrics.faults.load(Ordering::Relaxed))
+        // asio-sys CallbackInfo does not expose ASIO sample positions, so timestamp and gap
+        // counters are unavailable rather than reported as a false zero.
+        format!("duplex blocks={}; frames={}; wet DSP={latency} samples ({:.2} ms), neutral bypass=0; nonzero input samples={}; max callback={:.3} us; deadline misses={}; timestamp blocks=unavailable; sample-position gaps=unavailable; fault flags=0x{:x}", self.blocks(), self.state.frames, latency as f64 * 1000.0 / self.configuration.sample_rate, metrics.nonzero.load(Ordering::Relaxed), metrics.max_ns.load(Ordering::Relaxed) as f64 / 1000.0, metrics.late.load(Ordering::Relaxed), metrics.faults.load(Ordering::Relaxed))
     }
     pub fn print_latencies(&self) -> Result<()> {
         println!("{}", self.latency_summary()?);
@@ -557,10 +553,8 @@ impl Engine {
         if self.blocks() == 0 {
             return Err("No full-duplex ASIO callbacks observed".into());
         }
-        if self.state.metrics.late.load(Ordering::Relaxed) != 0
-            || self.state.metrics.gaps.load(Ordering::Relaxed) != 0
-        {
-            return Err("ASIO test had deadline misses or sample-position gaps".into());
+        if self.state.metrics.late.load(Ordering::Relaxed) != 0 {
+            return Err("ASIO test had deadline misses".into());
         }
         Ok(())
     }
@@ -596,8 +590,9 @@ impl crate::backend::AudioStream for Engine {
             nonzero_samples: metrics.nonzero.load(Ordering::Relaxed),
             max_callback_us: metrics.max_ns.load(Ordering::Relaxed) as f64 / 1000.0,
             deadline_misses: metrics.late.load(Ordering::Relaxed),
-            timestamp_blocks: Some(metrics.timestamp_blocks.load(Ordering::Relaxed)),
-            sample_position_gaps: Some(metrics.gaps.load(Ordering::Relaxed)),
+            // Unavailable: asio-sys CallbackInfo omits ASIO sample-position fields.
+            timestamp_blocks: None,
+            sample_position_gaps: None,
             fault_flags: metrics.faults.load(Ordering::Relaxed),
             ..crate::backend::AudioTelemetry::default()
         }
