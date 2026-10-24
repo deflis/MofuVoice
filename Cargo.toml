@@ -72,3 +72,6 @@ harness = false
 [[bench]]
 name = "pipeline"
 harness = false
+
+[[bench]]
+name = "limiter"

@@ -1,4 +1,4 @@
-use rust_low_latency_voice_changer::{limiter::LimiterSettings, RATE};
+use mofu_voice::{limiter::LimiterSettings, RATE};
 use std::{hint::black_box, time::Instant};
 
 fn ceiling(db: f64) -> f64 {
