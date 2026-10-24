@@ -50,9 +50,20 @@ export function syncThemeFromStorage(value = localStorage.getItem(themeStorageKe
   applyTheme(resolveTheme(readThemePreference(value)));
 }
 
+/** Resolve and apply the current preference (used by the theme module entry path). */
+export function bootTheme() {
+  syncThemeFromStorage();
+}
+
+function onThemeStorage(event: StorageEvent) {
+  if (event.key === themeStorageKey) {
+    syncThemeFromStorage(event.newValue);
+  }
+}
+
 /** Apply the saved preference and keep it in sync across windows / OS changes. */
 export function connectTheme() {
-  syncThemeFromStorage();
+  bootTheme();
 
   const media = window.matchMedia("(prefers-color-scheme: dark)");
   const onMedia = () => {
@@ -61,16 +72,10 @@ export function connectTheme() {
     }
   };
   media.addEventListener("change", onMedia);
-
-  const onStorage = (event: StorageEvent) => {
-    if (event.key === themeStorageKey) {
-      syncThemeFromStorage(event.newValue);
-    }
-  };
-  window.addEventListener("storage", onStorage);
+  window.addEventListener("storage", onThemeStorage);
 
   return () => {
     media.removeEventListener("change", onMedia);
-    window.removeEventListener("storage", onStorage);
+    window.removeEventListener("storage", onThemeStorage);
   };
 }

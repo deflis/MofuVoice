@@ -16,8 +16,45 @@ registerHooks({
   },
 });
 
-const { isThemePreference, readThemePreference, resolveTheme, themePreferences } =
-  await import("./theme.ts");
+const storage = new Map();
+const documentElement = { dataset: {}, style: {} };
+
+globalThis.localStorage = {
+  getItem(key) {
+    return storage.has(key) ? storage.get(key) : null;
+  },
+  setItem(key, value) {
+    storage.set(key, value);
+  },
+  removeItem(key) {
+    storage.delete(key);
+  },
+};
+
+globalThis.window = {
+  matchMedia() {
+    return {
+      matches: false,
+      addEventListener() {},
+      removeEventListener() {},
+    };
+  },
+};
+
+globalThis.document = {
+  documentElement,
+};
+
+const {
+  applyTheme,
+  bootTheme,
+  isThemePreference,
+  readThemePreference,
+  resolveTheme,
+  setThemePreference,
+  themePreferences,
+  themeStorageKey,
+} = await import("./theme.ts");
 
 test("theme preferences are the supported appearance modes", () => {
   assert.deepEqual([...themePreferences], ["system", "light", "dark"]);
@@ -36,4 +73,18 @@ test("resolveTheme maps system to the OS preference", () => {
   assert.equal(resolveTheme("dark", false), "dark");
   assert.equal(resolveTheme("system", true), "dark");
   assert.equal(resolveTheme("system", false), "light");
+});
+
+test("bootTheme applies the resolved preference from the module", () => {
+  storage.set(themeStorageKey, "dark");
+  bootTheme();
+  assert.equal(documentElement.dataset.theme, "dark");
+  assert.equal(documentElement.style.colorScheme, "dark");
+
+  setThemePreference("light");
+  assert.equal(documentElement.dataset.theme, "light");
+  assert.equal(storage.get(themeStorageKey), "light");
+
+  applyTheme("dark");
+  assert.equal(documentElement.dataset.theme, "dark");
 });
