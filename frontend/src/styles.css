@@ -57,46 +57,46 @@
   /* Elevation */
   --shadow-popup: 0 16px 64px var(--color-shadow);
 
-  /* Surfaces */
-  --color-bg: #16181c;
-  --color-surface: #1b1e23;
-  --color-surface-raised: #20242a;
-  --color-control: #2a2e36;
-  --color-control-hover: #343a44;
+  /* Surfaces — 狐・柴犬の焦げ茶〜ダークファーをイメージした暖色ベース */
+  --color-bg: #1a1512;
+  --color-surface: #241e1a;
+  --color-surface-raised: #2c241e;
+  --color-control: #3a3028;
+  --color-control-hover: #4a3c32;
 
-  /* Text */
-  --color-text: #e6e8ec;
-  --color-text-secondary: #abb3c0;
-  --color-text-muted: #8c94a0;
-  --color-text-tertiary: #cbd1db;
+  /* Text — クリーム毛並み寄りのオフホワイト */
+  --color-text: #f3e8dc;
+  --color-text-secondary: #b8a898;
+  --color-text-muted: #9a8a78;
+  --color-text-tertiary: #d4c4b0;
 
   /* Borders */
-  --color-border: #373c46;
-  --color-border-strong: #4c5563;
-  --color-border-muted: #53626d;
+  --color-border: #43362c;
+  --color-border-strong: #5a4a3c;
+  --color-border-muted: #6a5848;
   --color-high-contrast: white;
 
-  /* Accent */
-  --color-accent: #00c4b4;
-  --color-on-accent: #0a1416;
-  --color-accent-soft: #6ee7da;
-  --color-accent-plot: #63ded1;
+  /* Accent — 狐オレンジ / 柴犬コート */
+  --color-accent: #e8783a;
+  --color-on-accent: #1a120c;
+  --color-accent-soft: #f0a070;
+  --color-accent-plot: #e8783a;
 
   /* Status */
   --color-danger: light-dark(#a80000, #ff9090);
   --color-warning: #ffd092;
-  --color-warning-muted: #e8c483;
+  --color-warning-muted: #e8c9a0;
 
   /* Overlay / shadow */
   --color-overlay: #0009;
   --color-shadow: #0008;
 
   /* Plot / chart */
-  --color-plot-label: #bbc5d0;
-  --color-plot-axis: #66727e;
-  --color-plot-reference: #84909d;
-  --color-plot-point: #eafbf7;
-  --color-plot-point-stroke: #273c3c;
+  --color-plot-label: #c4b4a0;
+  --color-plot-axis: #6a5848;
+  --color-plot-reference: #8a7868;
+  --color-plot-point: #fff5eb;
+  --color-plot-point-stroke: #3a2a1c;
 
   font-family: var(--font-family);
   font-size: var(--font-size-base);
