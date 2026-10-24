@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Voice Changer",
+  "productName": "もふボイス",
   "version": "0.1.0",
   "identifier": "local.voicechanger.desktop",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Voice Changer",
+        "title": "もふボイス",
         "width": 480,
         "height": 280,
         "minWidth": 420,

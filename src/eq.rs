@@ -151,6 +151,7 @@ impl EqSettings {
             filters: self
                 .bands
                 .iter()
+                .filter(|band| band.gain_db != 0.0)
                 .map(|band| PeakingFilter::new(*band, rate))
                 .collect(),
             gain: amplitude(self.output_db - self.headroom_db()),
@@ -159,7 +160,6 @@ impl EqSettings {
 }
 struct PeakingFilter {
     filter: Biquad,
-    active: bool,
 }
 impl PeakingFilter {
     fn new(band: Band, rate: u32) -> Self {
@@ -177,13 +177,9 @@ impl PeakingFilter {
                 ],
                 [-2.0 * omega.cos() * norm, (1.0 - alpha / a) * norm],
             ),
-            active: band.gain_db != 0.0,
         }
     }
     fn process(&mut self, input: f64) -> f64 {
-        if !self.active {
-            return input;
-        }
         self.filter.process(input)
     }
 }
@@ -266,6 +262,28 @@ mod tests {
         );
         assert_eq!(band_index(&format!("--eq-band{}", MAX_BANDS + 1)), None);
     }
+
+    #[test]
+    fn zero_gain_bands_are_omitted_from_the_processing_chain() {
+        let mut settings = EqSettings {
+            enabled: true,
+            bands: vec![
+                Band {
+                    frequency: 250.0,
+                    gain_db: 0.0,
+                    q: 0.7,
+                };
+                MAX_BANDS
+            ],
+            output_db: 0.0,
+        };
+        settings.bands[7].gain_db = 2.0;
+
+        let equalizer = settings.build().unwrap();
+
+        assert_eq!(equalizer.filters.len(), 1);
+    }
+
     #[test]
     fn neutral_and_disabled_preserve_bits() {
         let original = [

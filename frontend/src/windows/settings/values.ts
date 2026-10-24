@@ -13,5 +13,15 @@ export function loadSettings(state: SettingsStore, values: Settings) {
     deesser: { ...state.deesser, ...values.deesser },
     eq: { ...state.eq, ...values.eq, bands: copyEqBands(values.eq.bands) },
     level: { ...state.level, ...values.level },
+    inputEq: { ...state.inputEq, ...values.inputEq, bands: copyEqBands(values.inputEq.bands) },
+    preConversionEq: {
+      ...state.preConversionEq,
+      ...values.preConversionEq,
+      bands: copyEqBands(values.preConversionEq.bands),
+    },
+    compressor: { ...state.compressor, ...values.compressor },
+    limiter: { ...state.limiter, ...values.limiter },
+    dereverb: { ...state.dereverb, ...values.dereverb },
+    reverb: { ...state.reverb, ...values.reverb },
   };
 }

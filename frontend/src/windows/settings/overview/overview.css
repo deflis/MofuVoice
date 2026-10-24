@@ -1,0 +1,132 @@
+.filter-overview {
+  min-width: 0;
+}
+.filter-lifecycle {
+  border-left: 3px solid #00c4b4;
+  padding-left: 10px;
+}
+.filter-chain {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.filter-chain > li {
+  padding: 0;
+  margin: 0;
+}
+.filter-card {
+  border: 1px solid #53626d;
+  border-radius: 8px;
+  background: #1b1e23;
+  padding: 14px;
+}
+.filter-card[data-enabled="false"] {
+  border-style: dashed;
+}
+.filter-card-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+}
+.filter-card h3 {
+  font-size: 14px;
+  margin: 0;
+}
+.filter-state {
+  font-size: 12px;
+  color: #cbd1db;
+}
+.filter-card[data-enabled="true"] .filter-state {
+  color: #6ee7da;
+}
+.filter-card button {
+  display: block;
+  margin-top: 12px;
+}
+.filter-card button:focus-visible {
+  outline: 3px solid #6ee7da;
+  outline-offset: 3px;
+}
+.filter-card .filter-values {
+  margin: 8px 0;
+  overflow-wrap: anywhere;
+}
+.filter-overview .filter-invalid {
+  color: #ffd092;
+}
+.filter-arrow {
+  display: block;
+  text-align: center;
+  font-size: 21px;
+  color: #cbd1db;
+  line-height: 30px;
+}
+.filter-overview .filter-endpoint {
+  text-align: center;
+  color: #e6e8ec;
+  font-weight: 600;
+  margin: 6px 0;
+}
+.filter-overview .filter-divider {
+  color: #cbd1db;
+  margin: 0 0 6px;
+  font-size: 12px;
+}
+.filter-plot {
+  width: 100%;
+  max-height: 160px;
+  display: block;
+  margin: 10px 0;
+  overflow: visible;
+}
+.filter-plot text {
+  font-size: 9px;
+  fill: #bbc5d0;
+}
+.filter-axis {
+  fill: none;
+  stroke: #66727e;
+  stroke-width: 1;
+}
+.filter-reference {
+  fill: none;
+  stroke: #84909d;
+  stroke-width: 1;
+  stroke-dasharray: 3 4;
+}
+.filter-curve {
+  fill: none;
+  stroke: #63ded1;
+  stroke-width: 2;
+}
+.filter-retained {
+  fill: none;
+  stroke: #e8c483;
+  stroke-width: 1.5;
+  stroke-dasharray: 6 4;
+}
+.filter-point {
+  fill: #eafbf7;
+  stroke: #273c3c;
+  stroke-width: 1;
+}
+.filter-area {
+  fill: #63ded1;
+  fill-opacity: 0.18;
+}
+@media (prefers-contrast: more) {
+  .filter-card {
+    border-color: white;
+  }
+  .filter-curve {
+    stroke-width: 3;
+  }
+}
+
+.filter-lifecycle,
+.filter-invalid {
+  display: block;
+  margin: 12px 0;
+}

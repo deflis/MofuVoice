@@ -1,11 +1,31 @@
-export type SettingsSection = "devices" | "voice" | "noise" | "tone";
+export const settingsSections = [
+  "overview",
+  "devices",
+  "voice",
+  "noise",
+  "tone",
+  "inputEq",
+  "limiter",
+  "noiseGate",
+  "dereverb",
+  "preConversionEq",
+  "postConversionEq",
+  "level",
+  "compressor",
+  "postCompressor",
+  "autoLevel",
+  "deesser",
+  "reverb",
+] as const;
+export type SettingsSection = (typeof settingsSections)[number];
 const navigationKey = "voice-changer.settings-navigation";
 
 export function readSettingsSection(value = localStorage.getItem(navigationKey)): SettingsSection {
   try {
     const section: unknown = JSON.parse(value ?? "null")?.section;
-    if (section === "devices" || section === "voice" || section === "noise" || section === "tone") {
-      return section;
+    const matched = settingsSections.find((candidate) => candidate === section);
+    if (matched) {
+      return matched;
     }
   } catch {
     // A previous or invalid navigation value should not block opening settings.

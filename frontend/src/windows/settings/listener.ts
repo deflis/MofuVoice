@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { connectWindow, type Connection, type WindowMessage } from "../../api";
 import type { DeviceChoices, LevelSettings } from "../../types";
 import { settingsApi } from "./api";
-import { useSettingsStore } from "./store";
+import { useSettingsStore, settingsFingerprint } from "./store";
 import * as v from "valibot";
 import { devicesSchema } from "./devices/schema";
 import { loadSettings } from "./values";
@@ -12,6 +12,8 @@ type ConnectionState = DeviceChoices & {
   levelDefaults: LevelSettings | undefined;
   backends: string[];
   audioBusy: boolean;
+  chainStages: string[];
+  dirty: boolean;
   error: string;
   notice: string;
 };
@@ -25,11 +27,16 @@ const initial: ConnectionState = {
   resolvedBackend: "",
   audioAvailable: false,
   audioBusy: true,
+  chainStages: [],
+  dirty: false,
   error: "",
   notice: "",
 };
 // Connection metadata is separate from the editable, flat settings values.
 export const useSettingsConnection = create<ConnectionState>(() => ({ ...initial }));
+useSettingsStore.subscribe((state) => {
+  useSettingsConnection.setState({ dirty: state.savedValues !== settingsFingerprint(state) });
+});
 export function canEditSettings(state: Pick<ConnectionState, "status" | "audioBusy">) {
   return state.status === "ready" && !state.audioBusy;
 }
@@ -151,6 +158,7 @@ async function load(owner: Session) {
       return;
     }
     useSettingsStore.setState((state) => loadSettings(state, settings));
+    useSettingsStore.getState().markSaved();
     owner.loaded = true;
     useSettingsConnection.setState({ ...metadata, status: "ready", error: "" });
   } catch (error) {

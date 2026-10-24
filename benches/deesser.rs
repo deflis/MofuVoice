@@ -1,4 +1,4 @@
-use rust_low_latency_voice_changer::{deesser::DeEsser, RATE};
+use mofu_voice::{deesser::DeEsser, RATE};
 use std::{hint::black_box, time::Instant};
 fn main() {
     for (name, hz, amplitude) in [

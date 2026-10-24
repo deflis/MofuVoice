@@ -52,7 +52,7 @@ function BufferSettings() {
 
 export function DeviceAdvancedSettings() {
   return (
-    <DetailsPopup title="音声デバイス" buttonLabel="プロ向け設定">
+    <DetailsPopup title="音声デバイス" buttonLabel="詳細設定">
       <BackendSettings />
       <ChannelRoutingDetails />
       <BufferSettings />

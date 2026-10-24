@@ -1,6 +1,6 @@
 # Voicemeeter シリーズ 設定ガイド
 
-Voicemeeter **Banana** または **Potato** の **Insert Virtual ASIO** を使い、マイク入力に本アプリ（Rust Low-Latency Voice Changer）を差し込みます。
+Voicemeeter **Banana** または **Potato** の **Insert Virtual ASIO** を使い、マイク入力に本アプリ（もふボイス）を差し込みます。
 
 > **VoiceMeeter（無料版）** には Insert ドライバがありません。Banana または Potato が必要です。
 
@@ -26,7 +26,7 @@ Insert が有効なとき、そのストリップでは **生のマイクと処�
 2. マイクを Voicemeeter に入れる方法を決めます。
    - **USB マイクのみ**: Windows の録音デバイスとしてストリップに割り当てる、など。
    - **ASIO インターフェース**: 出力 **A1** にその ASIO を選び、**System settings / Options** の **PATCH ASIO Inputs to strips** でマイクの物理入力番号を **ストリップ1** に割り当てます（[マイクと ASIO の公式手順](https://voicemeeter.com/setup-a-mic-with-your-asio-audio-interface/)）。
-3. 本アプリの実行ファイル（`rust-low-latency-voice-changer-gui.exe`）を用意します。
+3. 本アプリの実行ファイル（`MofuVoice.exe`）を用意します。
 
 ## 1. Voicemeeter の基本設定
 
@@ -75,7 +75,7 @@ Potato では Banana 用の Insert 名ではなく、**Potato 用**を選びま�
 
 1. **Voicemeeter を起動した状態で** 本アプリ GUI を起動します（Insert ドライバは Voicemeeter が提供します）。
 2. **設定 → 音声デバイス** の **入出力デバイス** で、上表の **Insert Virtual ASIO** を選びます。
-3. **プロ向け設定** の **バッファサイズ（サンプル）** を **512** にします。初回はピッチとフォルマントを0にします。
+3. **詳細設定** の **バッファサイズ（サンプル）** を **512** にします。初回はピッチとフォルマントを0にします。
 4. **設定を保存** を押します。
 5. **音声を開始** を押してマイクに向かって話し、A1 または B1 経由で声が聞こえることを確認します。
 6. **音声を停止** を押してからピッチなどを変更し、**設定を保存** → **音声を開始** で聞き比べます。

@@ -63,7 +63,14 @@ export function EqBandDetails({ title, band, setFrequency, setGainDb, setQ }: De
           max={12}
           step={0.1}
         />
-        <NumberField label="Q" value={band.q} onChange={setQ} min={0.2} max={8} step={0.1} />
+        <NumberField
+          label="帯域幅（Q値）"
+          value={band.q}
+          onChange={setQ}
+          min={0.2}
+          max={8}
+          step={0.1}
+        />
       </div>
     </fieldset>
   );

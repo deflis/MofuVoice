@@ -1,4 +1,4 @@
-use rust_low_latency_voice_changer::{
+use mofu_voice::{
     level::LevelSettings,
     pitch::{PitchAlgorithm, PitchShifter},
     RATE,
@@ -79,7 +79,7 @@ fn main() {
                             preserve,
                             shift,
                             algorithm,
-                            rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+                            mofu_voice::pitch::SpectralWindows::default(),
                             Default::default(),
                         )
                         .unwrap();

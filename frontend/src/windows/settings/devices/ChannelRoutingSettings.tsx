@@ -23,7 +23,7 @@ export function ChannelRoutingPresets() {
         </button>
       </div>
       {!singleOutput && !dualOutput && (
-        <p className={styles.muted}>プロ向け設定の割り当てを使用中です。</p>
+        <p className={styles.muted}>詳細設定で指定したチャンネル割り当てを使用中です。</p>
       )}
     </fieldset>
   );
@@ -85,7 +85,7 @@ export function ChannelRoutingDetails() {
             min="1"
             max="512"
             step="1"
-            placeholder="9以上"
+            placeholder="例: 9"
             value={extraChannel}
             onChange={(event) => setExtraChannel(event.target.value)}
           />

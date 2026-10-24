@@ -1,4 +1,5 @@
 import styles from "../../../styles.module.css";
+import type { EqKey } from "./slice";
 import { NumberInput } from "../NumberInput";
 import { EqSimpleBand, EqBandDetails } from "./BandSettings";
 import { DetailsPopup } from "../DetailsPopup";
@@ -11,16 +12,22 @@ const simpleBands = [
   { title: "明るさ", left: "落ち着いた", right: "明るい" },
 ] as const;
 
-export function EqSettings() {
-  const eq = useEqSettings();
+export function EqSettings({
+  filter = "eq",
+  title = "変換後EQ",
+}: {
+  filter?: EqKey;
+  title?: string;
+}) {
+  const eq = useEqSettings(filter);
   const id = useId();
   const headroom = eq.bands.reduce((sum, band) => sum + Math.max(0, band.gainDb), 0);
   const validGain = eq.bands.every(
     (band) => Number.isFinite(band.gainDb) && Math.abs(band.gainDb) <= 12,
   );
   return (
-    <section aria-labelledby={`${id}-title`}>
-      <h2 id={`${id}-title`}>声の音色（EQ）</h2>
+    <section aria-labelledby={`${id}-title`} className="eq-section">
+      <h2 id={`${id}-title`}>{title}</h2>
       <label className={styles.check}>
         <input
           type="checkbox"
@@ -54,9 +61,13 @@ export function EqSettings() {
           onOpen={() => eq.setMode("pro")}
         >
           <>
-            {eq.outputDb !== 0 && <p>出力の追加減衰：{eq.outputDb} dB。詳細設定で変更できます。</p>}
+            {eq.outputDb !== 0 && (
+              <p>クリップ防止の出力調整：{eq.outputDb} dB（詳細設定で変更できます）</p>
+            )}
 
-            <p>ピーキングEQです。Qが小さいほど広い帯域、大きいほど狭い帯域に効きます。</p>
+            <p>
+              ピーキングEQです。帯域幅（Q値）が小さいほど広い帯域、大きいほど狭い帯域に効きます。
+            </p>
             {eq.bands.map((band, index) => (
               <EqBandDetails
                 key={index}
@@ -68,7 +79,7 @@ export function EqSettings() {
               />
             ))}
             <label>
-              出力の追加減衰（dB）
+              クリップ防止の出力調整（dB）
               <NumberInput
                 required
                 min="-18"
@@ -88,7 +99,9 @@ export function EqSettings() {
           <button type="button" onClick={eq.reset}>
             EQの補正量を0に戻す
           </button>
-          <p>全バンドの補正と追加減衰を0に戻します。周波数・Qはそのままです。</p>
+          <p>
+            全バンドの補正とクリップ防止の出力調整を0に戻します。周波数と帯域幅（Q値）はそのままです。
+          </p>
         </DetailsPopup>
       </fieldset>
     </section>

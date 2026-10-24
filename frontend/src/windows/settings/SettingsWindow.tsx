@@ -15,7 +15,7 @@ export function SettingsWindow() {
     <div className={styles["settings-window"]}>
       <header>
         <h1>設定</h1>
-        <span className={styles.muted}>Voice Changer</span>
+        <span className={styles.muted}>もふボイス</span>
       </header>
       {busy && <output>音声を停止すると設定を変更できます。</output>}
       <SettingsPanel />

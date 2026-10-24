@@ -5,7 +5,11 @@ export function RumbleSettings() {
   const { rumbleFilter, setRumbleFilter } = useNoiseGateSettings();
   return (
     <section>
-      <h2>低い唸りを減らす（低域ノイズ除去）</h2>
+      <h2>入力EQのハイパス（HPF）</h2>
+      <p>
+        80
+        Hz以下の低域を抑え、マイクの吹かれ・振動ノイズを減らします。EQの帯域調整とは個別に切り替えられます。
+      </p>
       <label className={styles.check}>
         <input
           type="checkbox"

@@ -1,4 +1,4 @@
-use rust_low_latency_voice_changer::{
+use mofu_voice::{
     pitch::{PitchAlgorithm, PitchSettings, SpectralWindows},
     RATE,
 };

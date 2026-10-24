@@ -1,6 +1,6 @@
 //! Device-independent cost of the complete streaming chain. Each case has equal
 //! weight in the aggregate; timings include DSP and exclude device I/O and setup.
-use rust_low_latency_voice_changer::{
+use mofu_voice::{
     audio::{AudioProcessor, DspSettings},
     cli::Options,
 };
@@ -89,6 +89,22 @@ fn main() {
                             "--auto-level".into(),
                             "on".into(),
                             "--compressor".into(),
+                            "on".into(),
+                            "--input-eq".into(),
+                            "on".into(),
+                            "--input-eq-band1".into(),
+                            "120,-2,0.7".into(),
+                            "--limiter".into(),
+                            "on".into(),
+                            "--dereverb".into(),
+                            "on".into(),
+                            "--pre-compressor".into(),
+                            "on".into(),
+                            "--pre-conversion-eq".into(),
+                            "on".into(),
+                            "--pre-conversion-eq-band2".into(),
+                            "3000,2,0.8".into(),
+                            "--reverb".into(),
                             "on".into(),
                             "--deesser".into(),
                             "on".into(),

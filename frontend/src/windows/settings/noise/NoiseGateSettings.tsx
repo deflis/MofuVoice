@@ -19,7 +19,7 @@ export function NoiseGateSettings() {
   const automatic = thresholdMode === "auto";
   return (
     <section>
-      <div>
+      <div className="section-heading">
         <h2>話していないときの雑音を減らす（ノイズゲート）</h2>
         <label className={styles.check}>
           <input
@@ -59,13 +59,18 @@ export function NoiseGateSettings() {
                     value={thresholdDb}
                     onChange={(event) => setThresholdDb(event.currentTarget.valueAsNumber)}
                   />
-                  <small>0に近づけるほど小さい音を強く抑えます。</small>
+                  <small>
+                    0
+                    dBFSに近づけるほど、より大きな声を出さないと音が出なくなります（雑音を強力に遮断します）。
+                  </small>
                 </label>
               )}
             </div>
           </div>
 
-          <p>アタックは音が通り始める速さ、リリースは話し終わったあとに音を閉じる速さです。</p>
+          <p>
+            アタックは声が出たときにゲートが開く速さ、リリースは話し終わったあとにゲートが閉じる速さです。
+          </p>
           <div className={styles["level-fields"]}>
             <label>
               アタック（ms）

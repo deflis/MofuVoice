@@ -1,5 +1,5 @@
 //! Split real/imaginary FFT storage and sparse real-input seeds.
-//! Dense stages process four butterflies per AVX2 vector with radix-2 arithmetic.
+//! Dense stages use AVX2 or ARM64 NEON vectors with radix-2 arithmetic.
 use super::complex::Complex;
 
 #[repr(C)]
@@ -130,6 +130,12 @@ fn pack_windowed_part(
         unsafe { pack_windowed_part_avx2(input, window, real, imag) };
         return;
     }
+    #[cfg(target_arch = "aarch64")]
+    if vector {
+        // SAFETY: caller selects NEON; equal input/output lengths checked above.
+        unsafe { pack_windowed_part_neon(input, window, real, imag) };
+        return;
+    }
     let _ = vector;
     for ((pair, weight), (real, imag)) in input
         .as_chunks::<2>()
@@ -190,6 +196,32 @@ unsafe fn pack_windowed_part_avx2(
         *imag = pair[1] * weight[1];
     }
 }
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn pack_windowed_part_neon(
+    input: &[f64],
+    window: &[f64],
+    real: &mut [f64],
+    imag: &mut [f64],
+) {
+    use std::arch::aarch64::*;
+    let end = real.len() / 2 * 2;
+    for j in (0..end).step_by(2) {
+        // SAFETY: two real/imaginary outputs consume four input/window values.
+        // NEON loads and stores permit unaligned slices.
+        unsafe {
+            let x = vld2q_f64(input[2 * j..2 * j + 4].as_ptr());
+            let w = vld2q_f64(window[2 * j..2 * j + 4].as_ptr());
+            vst1q_f64(real[j..j + 2].as_mut_ptr(), vmulq_f64(x.0, w.0));
+            vst1q_f64(imag[j..j + 2].as_mut_ptr(), vmulq_f64(x.1, w.1));
+        }
+    }
+    for j in end..real.len() {
+        real[j] = input[2 * j] * window[2 * j];
+        imag[j] = input[2 * j + 1] * window[2 * j + 1];
+    }
+}
+
 pub(crate) struct SplitRoots {
     re: Vec<f64>,
     im: Vec<f64>,
@@ -212,6 +244,12 @@ impl SplitRoots {
         if vector {
             // SAFETY: runtime AVX2 detection; the stage validates root/data ranges.
             unsafe { self.pair_avx2::<N, SMALL, LARGE>(data) };
+            return;
+        }
+        #[cfg(target_arch = "aarch64")]
+        if vector {
+            // SAFETY: caller selects NEON before streaming; stage bounds checked above.
+            unsafe { self.pair_neon::<N, SMALL, LARGE>(data) };
             return;
         }
         let _ = vector;
@@ -294,6 +332,78 @@ impl SplitRoots {
         }
     }
 
+    #[cfg(target_arch = "aarch64")]
+    #[target_feature(enable = "neon")]
+    unsafe fn pair_neon<const N: usize, const SMALL: usize, const LARGE: usize>(
+        &self,
+        data: &mut SplitBuffer<N>,
+    ) {
+        use std::arch::aarch64::*;
+        let half = SMALL / 2;
+        let wr = &self.re[half - 1..SMALL - 1];
+        let wi = &self.im[half - 1..SMALL - 1];
+        let vr = &self.re[SMALL - 1..LARGE - 1];
+        let vi = &self.im[SMALL - 1..LARGE - 1];
+        for (re, im) in data
+            .re
+            .as_chunks_mut::<LARGE>()
+            .0
+            .iter_mut()
+            .zip(data.im.as_chunks_mut::<LARGE>().0)
+        {
+            let (ab, cd) = re.split_at_mut(SMALL);
+            let (ar, br) = ab.split_at_mut(half);
+            let (cr, dr) = cd.split_at_mut(half);
+            let (ab, cd) = im.split_at_mut(SMALL);
+            let (ai, bi) = ab.split_at_mut(half);
+            let (ci, di) = cd.split_at_mut(half);
+            for j in (0..half).step_by(2) {
+                // SAFETY: half is a multiple of two. All component/root
+                // sub-slices have checked lengths and the outputs are disjoint.
+                unsafe {
+                    let w = vld1q_f64(wr[j..j + 2].as_ptr());
+                    let iw = vld1q_f64(wi[j..j + 2].as_ptr());
+                    let a = vld1q_f64(ar[j..j + 2].as_ptr());
+                    let ia = vld1q_f64(ai[j..j + 2].as_ptr());
+                    let b = vld1q_f64(br[j..j + 2].as_ptr());
+                    let ib = vld1q_f64(bi[j..j + 2].as_ptr());
+                    let pr = vsubq_f64(vmulq_f64(b, w), vmulq_f64(ib, iw));
+                    let pi = vaddq_f64(vmulq_f64(b, iw), vmulq_f64(ib, w));
+                    let left0 = vaddq_f64(a, pr);
+                    let ileft0 = vaddq_f64(ia, pi);
+                    let left1 = vsubq_f64(a, pr);
+                    let ileft1 = vsubq_f64(ia, pi);
+                    let c = vld1q_f64(cr[j..j + 2].as_ptr());
+                    let ic = vld1q_f64(ci[j..j + 2].as_ptr());
+                    let d = vld1q_f64(dr[j..j + 2].as_ptr());
+                    let id = vld1q_f64(di[j..j + 2].as_ptr());
+                    let pr = vsubq_f64(vmulq_f64(d, w), vmulq_f64(id, iw));
+                    let pi = vaddq_f64(vmulq_f64(d, iw), vmulq_f64(id, w));
+                    let right0 = vaddq_f64(c, pr);
+                    let iright0 = vaddq_f64(ic, pi);
+                    let right1 = vsubq_f64(c, pr);
+                    let iright1 = vsubq_f64(ic, pi);
+                    let w = vld1q_f64(vr[j..j + 2].as_ptr());
+                    let iw = vld1q_f64(vi[j..j + 2].as_ptr());
+                    let pr = vsubq_f64(vmulq_f64(right0, w), vmulq_f64(iright0, iw));
+                    let pi = vaddq_f64(vmulq_f64(right0, iw), vmulq_f64(iright0, w));
+                    vst1q_f64(ar[j..j + 2].as_mut_ptr(), vaddq_f64(left0, pr));
+                    vst1q_f64(ai[j..j + 2].as_mut_ptr(), vaddq_f64(ileft0, pi));
+                    vst1q_f64(cr[j..j + 2].as_mut_ptr(), vsubq_f64(left0, pr));
+                    vst1q_f64(ci[j..j + 2].as_mut_ptr(), vsubq_f64(ileft0, pi));
+                    let w = vld1q_f64(vr[j + half..j + half + 2].as_ptr());
+                    let iw = vld1q_f64(vi[j + half..j + half + 2].as_ptr());
+                    let pr = vsubq_f64(vmulq_f64(right1, w), vmulq_f64(iright1, iw));
+                    let pi = vaddq_f64(vmulq_f64(right1, iw), vmulq_f64(iright1, w));
+                    vst1q_f64(br[j..j + 2].as_mut_ptr(), vaddq_f64(left1, pr));
+                    vst1q_f64(bi[j..j + 2].as_mut_ptr(), vaddq_f64(ileft1, pi));
+                    vst1q_f64(dr[j..j + 2].as_mut_ptr(), vsubq_f64(left1, pr));
+                    vst1q_f64(di[j..j + 2].as_mut_ptr(), vsubq_f64(ileft1, pi));
+                }
+            }
+        }
+    }
+
     pub(crate) fn new(size: usize, inverse: bool) -> Self {
         assert!(size.is_power_of_two() && size >= 4);
         let sign = if inverse { 1.0 } else { -1.0 };
@@ -322,9 +432,15 @@ impl SplitRoots {
             unsafe { self.first_four_avx2(data) };
             return;
         }
+        #[cfg(target_arch = "aarch64")]
+        if vector {
+            // SAFETY: caller selects NEON; N is a multiple of four.
+            unsafe { self.first_four_neon(data) };
+            return;
+        }
         let _ = vector;
         self.stage::<N, 2, 0>(data, 0, 1, false);
-        self.stage::<N, 4, 0>(data, 0, 2, false);
+        self.stage::<N, 4, 0>(data, 0, 2, vector);
     }
 
     /// MODE: 0 retains both butterfly outputs, 1 only left, 2 only right.
@@ -347,6 +463,12 @@ impl SplitRoots {
         if vector {
             // SAFETY: runtime feature detection; checked sub-slices bound loads.
             unsafe { Self::stage_avx2::<N, SIZE, MODE>(data, wr, wi, first, last) };
+            return;
+        }
+        #[cfg(target_arch = "aarch64")]
+        if vector {
+            // SAFETY: NEON selected before streaming; all component/root slices checked.
+            unsafe { Self::stage_neon::<N, SIZE, MODE>(data, wr, wi, first, last) };
             return;
         }
         let _ = vector;
@@ -458,6 +580,118 @@ impl SplitRoots {
         }
     }
 
+    #[cfg(target_arch = "aarch64")]
+    #[target_feature(enable = "neon")]
+    unsafe fn stage_neon<const N: usize, const SIZE: usize, const MODE: u8>(
+        data: &mut SplitBuffer<N>,
+        wr: &[f64],
+        wi: &[f64],
+        first: usize,
+        last: usize,
+    ) {
+        use std::arch::aarch64::*;
+        for (re, im) in data
+            .re
+            .as_chunks_mut::<SIZE>()
+            .0
+            .iter_mut()
+            .zip(data.im.as_chunks_mut::<SIZE>().0)
+        {
+            let (ar, br) = re.split_at_mut(SIZE / 2);
+            let (ai, bi) = im.split_at_mut(SIZE / 2);
+            let ar = &mut ar[first..last];
+            let ai = &mut ai[first..last];
+            let br = &mut br[first..last];
+            let bi = &mut bi[first..last];
+            let end = ar.len() / 2 * 2;
+            for j in (0..end).step_by(2) {
+                // SAFETY: j..j+2 lies within all checked, disjoint component
+                // slices and root slices. Every vector lane is one butterfly.
+                unsafe {
+                    let a = vld1q_f64(ar[j..j + 2].as_ptr());
+                    let ia = vld1q_f64(ai[j..j + 2].as_ptr());
+                    let b = vld1q_f64(br[j..j + 2].as_ptr());
+                    let ib = vld1q_f64(bi[j..j + 2].as_ptr());
+                    let w = vld1q_f64(wr[j..j + 2].as_ptr());
+                    let iw = vld1q_f64(wi[j..j + 2].as_ptr());
+                    let pr = vsubq_f64(vmulq_f64(b, w), vmulq_f64(ib, iw));
+                    let pi = vaddq_f64(vmulq_f64(b, iw), vmulq_f64(ib, w));
+                    if MODE != 2 {
+                        vst1q_f64(ar[j..j + 2].as_mut_ptr(), vaddq_f64(a, pr));
+                        vst1q_f64(ai[j..j + 2].as_mut_ptr(), vaddq_f64(ia, pi));
+                    }
+                    if MODE != 1 {
+                        vst1q_f64(br[j..j + 2].as_mut_ptr(), vsubq_f64(a, pr));
+                        vst1q_f64(bi[j..j + 2].as_mut_ptr(), vsubq_f64(ia, pi));
+                    }
+                }
+            }
+            for j in end..ar.len() {
+                let product = Complex {
+                    re: br[j],
+                    im: bi[j],
+                }
+                .mul(Complex {
+                    re: wr[j],
+                    im: wi[j],
+                });
+                let a = Complex {
+                    re: ar[j],
+                    im: ai[j],
+                };
+                if MODE != 2 {
+                    ar[j] = a.re + product.re;
+                    ai[j] = a.im + product.im;
+                }
+                if MODE != 1 {
+                    br[j] = a.re - product.re;
+                    bi[j] = a.im - product.im;
+                }
+            }
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[target_feature(enable = "neon")]
+    unsafe fn first_four_neon<const N: usize>(&self, data: &mut SplitBuffer<N>) {
+        use std::arch::aarch64::*;
+        let w2 = vdupq_n_f64(self.re[0]);
+        let iw2 = vdupq_n_f64(self.im[0]);
+        // SAFETY: FFT plan has the roots for stages 2 and 4.
+        let w4 = unsafe { vld1q_f64(self.re[1..3].as_ptr()) };
+        let iw4 = unsafe { vld1q_f64(self.im[1..3].as_ptr()) };
+        for (re, im) in data
+            .re
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(data.im.as_chunks_mut::<4>().0)
+        {
+            // SAFETY: checked chunks contain four values. Both stages stay in
+            // registers; separate multiply/add operations preserve scalar bits.
+            unsafe {
+                let r = vld2q_f64(re.as_ptr());
+                let i = vld2q_f64(im.as_ptr());
+                let pr = vsubq_f64(vmulq_f64(r.1, w2), vmulq_f64(i.1, iw2));
+                let pi = vaddq_f64(vmulq_f64(r.1, iw2), vmulq_f64(i.1, w2));
+                let lr = vaddq_f64(r.0, pr);
+                let li = vaddq_f64(i.0, pi);
+                let rr = vsubq_f64(r.0, pr);
+                let ri = vsubq_f64(i.0, pi);
+                let ar = vzip1q_f64(lr, rr);
+                let ai = vzip1q_f64(li, ri);
+                let br = vzip2q_f64(lr, rr);
+                let bi = vzip2q_f64(li, ri);
+                let pr = vsubq_f64(vmulq_f64(br, w4), vmulq_f64(bi, iw4));
+                let pi = vaddq_f64(vmulq_f64(br, iw4), vmulq_f64(bi, w4));
+                vst1q_f64(re.as_mut_ptr(), vaddq_f64(ar, pr));
+                vst1q_f64(im.as_mut_ptr(), vaddq_f64(ai, pi));
+                vst1q_f64(re[2..].as_mut_ptr(), vsubq_f64(ar, pr));
+                vst1q_f64(im[2..].as_mut_ptr(), vsubq_f64(ai, pi));
+            }
+        }
+    }
+
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     #[target_feature(enable = "avx2")]
     unsafe fn first_four_avx2<const N: usize>(&self, data: &mut SplitBuffer<N>) {
@@ -517,7 +751,11 @@ mod tests {
         {
             std::is_x86_feature_detected!("avx2")
         }
-        #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+        #[cfg(target_arch = "aarch64")]
+        {
+            std::arch::is_aarch64_feature_detected!("neon")
+        }
+        #[cfg(not(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64")))]
         {
             false
         }

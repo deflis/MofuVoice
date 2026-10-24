@@ -1,4 +1,4 @@
-use rust_low_latency_voice_changer::pitch::{PitchAlgorithm, PitchEstimator, PitchSettings};
+use mofu_voice::pitch::{PitchAlgorithm, PitchEstimator, PitchSettings};
 use std::f64::consts::TAU;
 
 #[test]

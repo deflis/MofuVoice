@@ -6,7 +6,7 @@ export function AppHeader() {
   const status = useMainStore((state) => headerLabel(state));
   return (
     <header>
-      <h1>Voice Changer</h1>
+      <h1>もふボイス</h1>
       <output className={styles["status-badge"]}>{status}</output>
     </header>
   );

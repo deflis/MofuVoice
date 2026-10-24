@@ -71,20 +71,22 @@ struct EqControls {
 }
 impl EqControls {
     fn from_options(options: &Options) -> Self {
+        Self::from_settings(&options.eq, &options.eq_mode)
+    }
+    fn from_settings(settings: &crate::eq::EqSettings, mode: &str) -> Self {
         Self {
-            enabled: options.eq.enabled,
-            mode: options.eq_mode.clone(),
-            bands: options
-                .eq
+            enabled: settings.enabled,
+            mode: mode.into(),
+            bands: settings
                 .bands
                 .iter()
-                .map(|band| EqBandControls {
-                    frequency: band.frequency,
-                    gain_db: band.gain_db,
-                    q: band.q,
+                .map(|b| EqBandControls {
+                    frequency: b.frequency,
+                    gain_db: b.gain_db,
+                    q: b.q,
                 })
                 .collect(),
-            output_db: options.eq.output_db,
+            output_db: settings.output_db,
         }
     }
     fn settings(&self) -> crate::eq::EqSettings {
@@ -104,6 +106,107 @@ impl EqControls {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LimiterControls {
+    enabled: bool,
+    ceiling_db: f64,
+    release_ms: f64,
+}
+impl LimiterControls {
+    fn from_settings(s: crate::limiter::LimiterSettings) -> Self {
+        Self {
+            enabled: s.enabled,
+            ceiling_db: s.ceiling_db,
+            release_ms: s.release_ms,
+        }
+    }
+    fn settings(&self) -> crate::limiter::LimiterSettings {
+        crate::limiter::LimiterSettings {
+            enabled: self.enabled,
+            ceiling_db: self.ceiling_db,
+            release_ms: self.release_ms,
+        }
+    }
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DereverbControls {
+    enabled: bool,
+    amount: f64,
+    decay_ms: f64,
+}
+impl DereverbControls {
+    fn from_settings(s: crate::dereverb::DereverbSettings) -> Self {
+        Self {
+            enabled: s.enabled,
+            amount: s.amount,
+            decay_ms: s.decay_ms,
+        }
+    }
+    fn settings(&self) -> crate::dereverb::DereverbSettings {
+        crate::dereverb::DereverbSettings {
+            enabled: self.enabled,
+            amount: self.amount,
+            decay_ms: self.decay_ms,
+        }
+    }
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ReverbControls {
+    enabled: bool,
+    mix: f64,
+    pre_delay_ms: f64,
+    decay_ms: f64,
+}
+impl ReverbControls {
+    fn from_settings(s: crate::reverb::ReverbSettings) -> Self {
+        Self {
+            enabled: s.enabled,
+            mix: s.mix,
+            pre_delay_ms: s.pre_delay_ms,
+            decay_ms: s.decay_ms,
+        }
+    }
+    fn settings(&self) -> crate::reverb::ReverbSettings {
+        crate::reverb::ReverbSettings {
+            enabled: self.enabled,
+            mix: self.mix,
+            pre_delay_ms: self.pre_delay_ms,
+            decay_ms: self.decay_ms,
+        }
+    }
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CompressorControls {
+    enabled: bool,
+    threshold_db: f64,
+    ratio: f64,
+    attack_ms: f64,
+    release_ms: f64,
+}
+impl CompressorControls {
+    fn from_settings(s: crate::compressor::CompressorSettings) -> Self {
+        Self {
+            enabled: s.enabled,
+            threshold_db: s.threshold_db,
+            ratio: s.ratio,
+            attack_ms: s.attack_ms,
+            release_ms: s.release_ms,
+        }
+    }
+    fn settings(&self) -> crate::compressor::CompressorSettings {
+        crate::compressor::CompressorSettings {
+            enabled: self.enabled,
+            threshold_db: self.threshold_db,
+            ratio: self.ratio,
+            attack_ms: self.attack_ms,
+            release_ms: self.release_ms,
+        }
+    }
+}
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum GateThresholdMode {
@@ -149,6 +252,12 @@ impl DeEsserControls {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Settings {
+    compressor: CompressorControls,
+    input_eq: EqControls,
+    pre_conversion_eq: EqControls,
+    limiter: LimiterControls,
+    dereverb: DereverbControls,
+    reverb: ReverbControls,
     devices: DeviceSettings,
     voice: VoiceSettings,
     noise: NoiseSettings,
@@ -170,6 +279,7 @@ struct DeviceSettings {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct VoiceSettings {
+    enabled: bool,
     pitch_unit: String,
     psola_pitch_estimator: String,
     psola_analysis_window: usize,
@@ -204,6 +314,7 @@ impl Settings {
                 sample_rate: options.sample_rate,
             },
             voice: VoiceSettings {
+                enabled: options.voice_enabled,
                 pitch_unit: options.pitch_unit.clone(),
                 psola_pitch_estimator: options.pitch.psola_pitch_estimator.name().into(),
                 psola_analysis_window: options.pitch.psola_windows.analysis,
@@ -230,12 +341,30 @@ impl Settings {
                 release_ms: options.gate_release_ms,
             },
             deesser: DeEsserControls::from_options(options),
+            input_eq: EqControls::from_settings(&options.input_eq, &options.input_eq_mode),
+            pre_conversion_eq: EqControls::from_settings(
+                &options.pre_conversion_eq,
+                &options.pre_conversion_eq_mode,
+            ),
+            compressor: CompressorControls::from_settings(options.compressor),
+            limiter: LimiterControls::from_settings(options.limiter),
+            dereverb: DereverbControls::from_settings(options.dereverb),
+            reverb: ReverbControls::from_settings(options.reverb),
             eq: EqControls::from_options(options),
             level: LevelControls::from_settings(options.level),
         }
     }
     fn options(&self) -> Result<Options, String> {
         let mut options = Options {
+            input_eq: self.input_eq.settings(),
+            input_eq_mode: self.input_eq.mode.clone(),
+            pre_conversion_eq: self.pre_conversion_eq.settings(),
+            pre_conversion_eq_mode: self.pre_conversion_eq.mode.clone(),
+            voice_enabled: self.voice.enabled,
+            compressor: self.compressor.settings(),
+            limiter: self.limiter.settings(),
+            dereverb: self.dereverb.settings(),
+            reverb: self.reverb.settings(),
             eq: self.eq.settings(),
             eq_mode: self.eq.mode.clone(),
             pitch_unit: self.voice.pitch_unit.clone(),
@@ -343,6 +472,7 @@ struct AudioPhase {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SettingsView {
+    chain_stages: Vec<&'static str>,
     level_defaults: LevelControls,
     settings: Settings,
     #[serde(flatten)]
@@ -438,6 +568,10 @@ fn build_settings_view(desktop: &mut Desktop) -> Result<SettingsView, String> {
     let kind = backend::BackendKind::parse(&desktop.settings.devices.backend)
         .map_err(|error| error.to_string())?;
     Ok(SettingsView {
+        chain_stages: crate::audio::FILTER_STAGES
+            .iter()
+            .map(|stage| stage.id())
+            .collect(),
         level_defaults: LevelControls::from_settings(crate::level::LevelSettings::default()),
         settings: desktop.settings.clone(),
         choices: choices(kind),
@@ -689,7 +823,7 @@ async fn open_settings(app: tauri::AppHandle) -> Result<(), String> {
         show_or_create_window(
             app,
             "settings",
-            "設定 — Voice Changer",
+            "設定 — もふボイス",
             "index.html?window=settings",
             WindowSize {
                 width: 820.0,
@@ -708,7 +842,7 @@ async fn open_log(app: tauri::AppHandle) -> Result<(), String> {
         show_or_create_window(
             app,
             "log",
-            "ログ — Voice Changer",
+            "ログ — もふボイス",
             "index.html?window=log",
             WindowSize {
                 width: 640.0,
@@ -995,7 +1129,7 @@ pub fn show_message(message: &str, error: bool) {
             MessageBoxW, MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MESSAGEBOX_STYLE,
         },
     };
-    let title: Vec<u16> = "Voice Changer".encode_utf16().chain(Some(0)).collect();
+    let title: Vec<u16> = "もふボイス".encode_utf16().chain(Some(0)).collect();
     let body: Vec<u16> = message.encode_utf16().chain(Some(0)).collect();
     let icon: MESSAGEBOX_STYLE = if error {
         MB_ICONERROR
@@ -1294,5 +1428,38 @@ mod tests {
         controls.eq.bands[1].q = 1.0;
         controls.eq.output_db = f64::NAN;
         assert!(controls.options().is_err());
+    }
+    #[test]
+    #[allow(clippy::field_reassign_with_default)]
+    fn independent_filter_controls_preserve_parameters_and_validate_disabled_values() {
+        let mut options = Options::default();
+        options.voice_enabled = false;
+        options.pitch.semitones = 5.0;
+        options.rumble_filter = true;
+        options.input_eq.bands[0].gain_db = -4.0;
+        options.pre_conversion_eq.bands[0].gain_db = 2.0;
+        options.eq.bands[0].gain_db = 1.0;
+        options.compressor.threshold_db = -21.0;
+        options.level.threshold_db = -9.0;
+        options.limiter.ceiling_db = -6.0;
+        options.dereverb.amount = 0.7;
+        options.reverb.mix = 0.3;
+        let controls = Settings::from_options(&options);
+        assert_eq!(controls.options().unwrap(), options);
+        let mut invalid = controls.clone();
+        invalid.input_eq.bands[0].q = f64::NAN;
+        assert!(invalid.options().is_err());
+        let mut invalid = controls.clone();
+        invalid.compressor.ratio = 0.0;
+        assert!(invalid.options().is_err());
+        let mut invalid = controls.clone();
+        invalid.limiter.ceiling_db = 1.0;
+        assert!(invalid.options().is_err());
+        let mut invalid = controls.clone();
+        invalid.dereverb.amount = 2.0;
+        assert!(invalid.options().is_err());
+        let mut invalid = controls;
+        invalid.reverb.decay_ms = 0.0;
+        assert!(invalid.options().is_err());
     }
 }
