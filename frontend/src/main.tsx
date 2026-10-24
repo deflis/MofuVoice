@@ -1,6 +1,5 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { connectTheme } from "./theme";
 import { App } from "./App";
 import "./styles.css";
 import { activeMainConnection, connectMainWindow } from "./windows/main/listener";
@@ -25,12 +24,10 @@ function activeConnection() {
   }
   return activeMainConnection();
 }
-const disconnectTheme = connectTheme();
 connectCurrentWindow();
 window.addEventListener(
   "pagehide",
   () => {
-    disconnectTheme();
     if (windowKind === "log") {
       void setLogging(false);
     }

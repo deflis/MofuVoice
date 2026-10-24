@@ -3,6 +3,8 @@
 /* Global document defaults. Component classes below are CSS Module exports. */
 
 :root {
+  color-scheme: light dark;
+
   /* Typography */
   --font-family: system-ui, sans-serif;
   --font-size-base: 13px;
@@ -55,84 +57,45 @@
   /* Elevation */
   --shadow-popup: 0 16px 64px var(--color-shadow);
 
-  /* Light — 狐・柴犬のクリーム毛並みをイメージ */
-  color-scheme: light;
-  --color-bg: #f7f1ea;
-  --color-surface: #fffaf5;
-  --color-surface-raised: #f3ebe3;
-  --color-control: #ebe0d4;
-  --color-control-hover: #dfd1c2;
+  /* Colors — 狐・柴犬イメージ。OS の light / dark に追従 */
+  --color-bg: light-dark(#f7f1ea, #1a1512);
+  --color-surface: light-dark(#fffaf5, #241e1a);
+  --color-surface-raised: light-dark(#f3ebe3, #2c241e);
+  --color-control: light-dark(#ebe0d4, #3a3028);
+  --color-control-hover: light-dark(#dfd1c2, #4a3c32);
 
-  --color-text: #2a1f18;
-  --color-text-secondary: #6b5848;
-  --color-text-muted: #8a7464;
-  --color-text-tertiary: #5c4a3c;
+  --color-text: light-dark(#2a1f18, #f3e8dc);
+  --color-text-secondary: light-dark(#6b5848, #b8a898);
+  --color-text-muted: light-dark(#8a7464, #9a8a78);
+  --color-text-tertiary: light-dark(#5c4a3c, #d4c4b0);
 
-  --color-border: #d4c4b4;
-  --color-border-strong: #b8a090;
-  --color-border-muted: #c4b4a4;
-  --color-high-contrast: black;
+  --color-border: light-dark(#d4c4b4, #43362c);
+  --color-border-strong: light-dark(#b8a090, #5a4a3c);
+  --color-border-muted: light-dark(#c4b4a4, #6a5848);
+  --color-high-contrast: light-dark(black, white);
 
-  --color-accent: #d4652a;
-  --color-on-accent: #fff8f0;
-  --color-accent-soft: #b85420;
-  --color-accent-plot: #d4652a;
+  --color-accent: light-dark(#d4652a, #e8783a);
+  --color-on-accent: light-dark(#fff8f0, #1a120c);
+  --color-accent-soft: light-dark(#b85420, #f0a070);
+  --color-accent-plot: light-dark(#d4652a, #e8783a);
 
-  --color-danger: #a80000;
-  --color-warning: #9a6a20;
-  --color-warning-muted: #8a7040;
+  --color-danger: light-dark(#a80000, #ff9090);
+  --color-warning: light-dark(#9a6a20, #ffd092);
+  --color-warning-muted: light-dark(#8a7040, #e8c9a0);
 
-  --color-overlay: #0006;
-  --color-shadow: #0004;
+  --color-overlay: light-dark(#0006, #0009);
+  --color-shadow: light-dark(#0004, #0008);
 
-  --color-plot-label: #6b5848;
-  --color-plot-axis: #c4b4a4;
-  --color-plot-reference: #b8a090;
-  --color-plot-point: #fff8f0;
-  --color-plot-point-stroke: #8a5a30;
+  --color-plot-label: light-dark(#6b5848, #c4b4a0);
+  --color-plot-axis: light-dark(#c4b4a4, #6a5848);
+  --color-plot-reference: light-dark(#b8a090, #8a7868);
+  --color-plot-point: light-dark(#fff8f0, #fff5eb);
+  --color-plot-point-stroke: light-dark(#8a5a30, #3a2a1c);
 
   font-family: var(--font-family);
   font-size: var(--font-size-base);
   color: var(--color-text);
   background: var(--color-bg);
-}
-
-/* Dark — 焦げ茶ファー＋狐オレンジ */
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --color-bg: #1a1512;
-  --color-surface: #241e1a;
-  --color-surface-raised: #2c241e;
-  --color-control: #3a3028;
-  --color-control-hover: #4a3c32;
-
-  --color-text: #f3e8dc;
-  --color-text-secondary: #b8a898;
-  --color-text-muted: #9a8a78;
-  --color-text-tertiary: #d4c4b0;
-
-  --color-border: #43362c;
-  --color-border-strong: #5a4a3c;
-  --color-border-muted: #6a5848;
-  --color-high-contrast: white;
-
-  --color-accent: #e8783a;
-  --color-on-accent: #1a120c;
-  --color-accent-soft: #f0a070;
-  --color-accent-plot: #e8783a;
-
-  --color-danger: #ff9090;
-  --color-warning: #ffd092;
-  --color-warning-muted: #e8c9a0;
-
-  --color-overlay: #0009;
-  --color-shadow: #0008;
-
-  --color-plot-label: #c4b4a0;
-  --color-plot-axis: #6a5848;
-  --color-plot-reference: #8a7868;
-  --color-plot-point: #fff5eb;
-  --color-plot-point-stroke: #3a2a1c;
 }
 
 body {
