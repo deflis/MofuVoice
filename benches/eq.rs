@@ -1,6 +1,5 @@
 use rust_low_latency_voice_changer::{
-    audio::{AudioProcessor, DspSettings},
-    cli::Options,
+    eq::{Band, EqSettings},
     RATE,
 };
 use std::{hint::black_box, time::Instant};
@@ -12,44 +11,57 @@ fn main() {
             (0.12 * phase.sin() + 0.05 * (phase * 3.0).sin()) as f32
         })
         .collect();
-    for pitch in ["-12", "-3", "0", "3", "7", "12"] {
-        for enabled in ["off", "on"] {
-            let mut times = Vec::new();
-            let mut worst = 0.0_f64;
-            for _ in 0..5 {
-                let options = Options::parse(
-                    [
-                        "--pitch",
-                        pitch,
-                        "--eq",
-                        enabled,
-                        "--eq-band1",
-                        "250,-3,0.7",
-                        "--eq-band2",
-                        "3000,3,0.8",
-                        "--eq-band3",
-                        "8000,2,0.7",
-                    ]
-                    .map(String::from),
-                )
-                .unwrap();
-                let mut processor =
-                    AudioProcessor::<f32>::new(RATE, 512, DspSettings::from(&options)).unwrap();
-                let mut output = [0.0; 512];
-                let start = Instant::now();
-                for chunk in input.chunks(512) {
-                    let block = Instant::now();
-                    black_box(
-                        processor
-                            .process_block(black_box(chunk), black_box(&mut output[..chunk.len()]))
-                            .unwrap(),
-                    );
-                    worst = worst.max(block.elapsed().as_secs_f64() * 1000.0);
+
+    // Compare a normal three-band EQ with a maximum-sized EQ that has thirteen
+    // zero-gain bands, and with the worst case of sixteen active filters.
+    for (profile, active_bands, configured_bands) in [
+        ("three-active", 3, 3),
+        ("one-of-sixteen", 1, 16),
+        ("three-of-sixteen", 3, 16),
+        ("sixteen-active", 16, 16),
+    ] {
+        let bands = (1..=configured_bands)
+            .map(|band| {
+                let (frequency, active_gain) = match band {
+                    1 => (250.0, -3.0),
+                    2 => (3000.0, 3.0),
+                    3 => (8000.0, 2.0),
+                    _ => (500.0 + band as f64 * 700.0, 1.0),
+                };
+                Band {
+                    frequency,
+                    gain_db: if band <= active_bands {
+                        active_gain
+                    } else {
+                        0.0
+                    },
+                    q: 0.8,
                 }
-                times.push(start.elapsed().as_secs_f64());
+            })
+            .collect();
+        let settings = EqSettings {
+            enabled: true,
+            bands,
+            output_db: 0.0,
+        };
+
+        let mut times = Vec::new();
+        for _ in 0..31 {
+            let mut dsp = settings.build().unwrap();
+            let mut output = input.clone();
+            let start = Instant::now();
+            for chunk in output.chunks_mut(64) {
+                dsp.process_in_place(black_box(chunk));
+                black_box(chunk);
             }
-            times.sort_by(f64::total_cmp);
-            println!("pitch={pitch}, EQ={enabled}: median={:.1} ns/sample, CPU/audio={:.2}%, worst observed 512-frame block={worst:.3} ms", times[2] * 1e9 / input.len() as f64, times[2] * 100.0);
+            times.push(start.elapsed().as_secs_f64());
         }
+        times.sort_by(f64::total_cmp);
+        let seconds = times[15];
+        println!(
+            "{profile}: {:.2} ns/sample, CPU/audio={:.2}% (median of 31, 64-frame blocks)",
+            seconds * 1e9 / input.len() as f64,
+            seconds * 100.0
+        );
     }
 }
