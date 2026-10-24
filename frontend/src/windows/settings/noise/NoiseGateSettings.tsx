@@ -19,7 +19,7 @@ export function NoiseGateSettings() {
   const automatic = thresholdMode === "auto";
   return (
     <section>
-      <div className="section-heading">
+      <div>
         <h2>話していないときの雑音を減らす（ノイズゲート）</h2>
         <label className={styles.check}>
           <input

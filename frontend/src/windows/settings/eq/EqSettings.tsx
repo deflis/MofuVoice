@@ -26,7 +26,7 @@ export function EqSettings({
     (band) => Number.isFinite(band.gainDb) && Math.abs(band.gainDb) <= 12,
   );
   return (
-    <section aria-labelledby={`${id}-title`} className="eq-section">
+    <section aria-labelledby={`${id}-title`}>
       <h2 id={`${id}-title`}>{title}</h2>
       <label className={styles.check}>
         <input
