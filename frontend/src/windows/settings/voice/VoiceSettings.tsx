@@ -1,4 +1,4 @@
-import styles from "./VoiceSettings.module.css";
+import styles from "../settings.module.css";
 import { pitchLatency } from "./latency";
 import { DetailsPopup } from "../DetailsPopup";
 import { useSettingsStore } from "../store";

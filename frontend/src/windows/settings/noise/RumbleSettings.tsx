@@ -1,4 +1,4 @@
-import styles from "./RumbleSettings.module.css";
+import styles from "../settings.module.css";
 import { useNoiseGateSettings } from "./hooks";
 
 export function RumbleSettings() {

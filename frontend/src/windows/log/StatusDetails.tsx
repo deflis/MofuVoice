@@ -1,4 +1,4 @@
-import styles from "./StatusDetails.module.css";
+import styles from "./log.module.css";
 import { setLogging } from "./listener";
 import { useLogStore } from "./store";
 import { AudioLogPanel } from "./AudioLogPanel";

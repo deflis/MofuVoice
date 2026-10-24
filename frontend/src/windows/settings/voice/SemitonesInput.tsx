@@ -1,4 +1,4 @@
-import styles from "./SemitonesInput.module.css";
+import styles from "../settings.module.css";
 import { NumberInput } from "../NumberInput";
 import { useId } from "react";
 import { percentToSemitones, semitonesToPercent } from "./pitchUnits";

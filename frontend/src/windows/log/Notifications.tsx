@@ -1,4 +1,4 @@
-import styles from "./Notifications.module.css";
+import styles from "./log.module.css";
 import { useLogStore } from "./store";
 
 export function Notifications() {

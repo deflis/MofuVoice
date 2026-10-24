@@ -1,0 +1,209 @@
+/* Main window styles. */
+
+/* Styles colocated with StatusDetails.tsx. */
+
+.error {
+  color: light-dark(#a80000, #ff9090);
+  overflow-wrap: anywhere;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+dt,
+.muted {
+  color: #8c94a0;
+  font-size: 12px;
+}
+
+.settings-content section > .check {
+  margin: 8px 0;
+}
+
+/* Styles colocated with App.tsx. */
+
+dt,
+.muted {
+  color: #8c94a0;
+  font-size: 12px;
+}
+
+/* Styles colocated with Notifications.tsx. */
+
+.error {
+  color: light-dark(#a80000, #ff9090);
+  overflow-wrap: anywhere;
+}
+
+/* Styles colocated with Home.tsx. */
+
+main:has(.home-layout) {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.home-layout {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+
+.home-settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.home-primary-action {
+  flex: 1;
+  min-width: 8rem;
+  padding: 12px;
+}
+
+.home-secondary-action {
+  color: #abb3c0;
+}
+
+.setup-guidance {
+  border-top: 1px solid #373c46;
+  padding-top: 8px;
+}
+
+/* Styles colocated with AudioControls.tsx. */
+
+/* Main window styles. */
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.actions button:first-child {
+  background: #00c4b4;
+  color: #0a1416;
+}
+
+.actions .audio-toggle {
+  width: 100%;
+  padding: 14px;
+  font-weight: 600;
+}
+
+/* Styles colocated with AppHeader.tsx. */
+
+.status-badge {
+  color: #00c4b4;
+  background: #20242a;
+  border-radius: 12px;
+  padding: 4px 10px;
+}
+
+/* Styles colocated with SettingsWindow.tsx. */
+
+dt,
+.muted {
+  color: #8c94a0;
+  font-size: 12px;
+}
+
+/* Styles colocated with DeEsserSettings.tsx. */
+
+.error {
+  color: light-dark(#a80000, #ff9090);
+  overflow-wrap: anywhere;
+}
+
+/* Styles colocated with ChannelRoutingSettings.tsx. */
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Styles colocated with SampleRateSettings.tsx. */
+
+dt,
+.muted {
+  color: #8c94a0;
+  font-size: 12px;
+}
+
+/* Styles colocated with EqSettings.tsx. */
+
+.error {
+  color: light-dark(#a80000, #ff9090);
+  overflow-wrap: anywhere;
+}
+
+/* Styles colocated with AutoLevelSettings.tsx. */
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Styles colocated with NoiseGateSettings.tsx. */
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Styles colocated with RumbleSettings.tsx. */
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Styles colocated with VoiceSettings.tsx. */
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Styles colocated with ReverbSettings.tsx. */
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Styles colocated with LimiterSettings.tsx. */
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Styles colocated with DereverbSettings.tsx. */
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Styles colocated with CompressorSettings.tsx. */
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}

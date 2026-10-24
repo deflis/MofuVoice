@@ -1,4 +1,4 @@
-import styles from "./AudioControls.module.css";
+import styles from "./main.module.css";
 import { useMainStore } from "./store";
 import { startAudio, stopAudio } from "./listener";
 import { canStart, canStop, togglePending } from "./selectors";

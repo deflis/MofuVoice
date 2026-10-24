@@ -1,4 +1,4 @@
-import styles from "./SettingsPanel.module.css";
+import styles from "./settings.module.css";
 import { CompressorSettings } from "./compressor/CompressorSettings";
 import { FilterOverview } from "./overview/FilterOverview";
 import { LimiterSettings } from "./limiter/LimiterSettings";

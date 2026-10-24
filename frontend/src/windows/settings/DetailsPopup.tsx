@@ -1,4 +1,4 @@
-import styles from "./DetailsPopup.module.css";
+import styles from "./settings.module.css";
 import { Notifications } from "./Notifications";
 import { createPortal } from "react-dom";
 import { useSettingsLocked } from "./hooks";

@@ -1,4 +1,4 @@
-import styles from "./DeviceAdvancedSettings.module.css";
+import styles from "../settings.module.css";
 import { NumberInput } from "../NumberInput";
 import { DetailsPopup } from "../DetailsPopup";
 import { ChannelRoutingDetails } from "./ChannelRoutingSettings";

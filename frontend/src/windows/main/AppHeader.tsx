@@ -1,4 +1,4 @@
-import styles from "./AppHeader.module.css";
+import styles from "./main.module.css";
 import { useMainStore } from "./store";
 import { headerLabel } from "./selectors";
 

@@ -1,4 +1,4 @@
-import styles from "./AutoLevelSettings.module.css";
+import styles from "../settings.module.css";
 import { NumberField } from "../NumberField";
 import { DetailsPopup } from "../DetailsPopup";
 import { useAutoLevelSettings } from "./hooks";

@@ -1,4 +1,4 @@
-import styles from "./SettingsWindow.module.css";
+import styles from "./settings.module.css";
 import { SettingsPanel } from "./SettingsPanel";
 import { SaveSettingsButton } from "./SaveSettingsButton";
 import { useSettingsConnection } from "./listener";

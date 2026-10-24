@@ -1,4 +1,4 @@
-import styles from "./App.module.css";
+import styles from "./log.module.css";
 import { Notifications } from "./Notifications";
 import { StatusDetails } from "./StatusDetails";
 
