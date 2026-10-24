@@ -12,8 +12,8 @@
     "desktop:build": "tauri build --features desktop -- --locked",
     "dev:vite": "vite --config frontend/vite.config.ts",
     "dev:css": "pnpm generate:css --watch",
-    "generate:css": "pnpm --dir frontend/tooling/css-modules-kit exec cmk --clean -p ../../tsconfig.json",
-    "check:css": "pnpm generate:css && git diff --exit-code -- frontend/generated",
+    "generate:css": "node frontend/tooling/css-modules-kit/clean-generated.mjs && pnpm --dir frontend/tooling/css-modules-kit exec cmk -p ../../tsconfig.json",
+    "check:css": "pnpm generate:css && git diff --exit-code -- ':(glob)frontend/src/**/*.module.css.d.ts'",
     "typecheck": "tsc -p frontend/tsconfig.json"
   },
   "dependencies": {
