@@ -17,7 +17,7 @@
     "typecheck": "tsc -p frontend/tsconfig.json"
   },
   "dependencies": {
-    "@tauri-apps/api": "2.12.3",
+    "@tauri-apps/api": "2.12.4",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "valibot": "1.5.0",
