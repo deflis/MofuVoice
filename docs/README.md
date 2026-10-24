@@ -20,4 +20,4 @@
 
 ## 開発者・上級者向け
 
-ソースコードからのビルド手順、CLIツール（`mofu-voice-cli`）の使い方、設定INIファイルの構造、DSPアルゴリズム仕様については [DEVELOPMENT.md](../DEVELOPMENT.md) を参照してください。
+ソースコードからのビルド手順、CLIツール（`mofu-voice-cli`）の使い方、DSPアルゴリズム仕様については [DEVELOPMENT.md](../DEVELOPMENT.md) を参照してください。

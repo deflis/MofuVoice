@@ -56,7 +56,7 @@
 
 ## 開発・ビルド・詳細仕様
 
-ソースコードからのビルド手順、開発ワークフロー、CLIツール（`mofu-voice-cli`）の使い方、設定INIファイルの仕様、DSPアルゴリズムの詳細については **[DEVELOPMENT.md](DEVELOPMENT.md)** を参照してください。
+ソースコードからのビルド手順、開発ワークフロー、CLIツール（`mofu-voice-cli`）の使い方、DSPアルゴリズムの詳細については **[DEVELOPMENT.md](DEVELOPMENT.md)** を参照してください。
 
 ---
 

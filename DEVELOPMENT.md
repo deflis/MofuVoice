@@ -2,7 +2,7 @@
 
 [READMEに戻る](README.md)
 
-もふボイスのソースコードからのビルド手順、開発ワークフロー、CLIツール、設定ファイル仕様、およびDSPアルゴリズム仕様をまとめた開発者・上級者向けドキュメントです。
+もふボイスのソースコードからのビルド手順、開発ワークフロー、CLIツール、およびDSPアルゴリズム仕様をまとめた開発者・上級者向けドキュメントです。
 
 ---
 
@@ -98,43 +98,9 @@ pnpm desktop:build
 
 ---
 
-## 4. 設定ファイル仕様（`settings.ini`）
+## 4. 設定ファイル（`settings.ini`）
 
-GUIの設定は、実行ファイルと同じディレクトリに `settings.ini`（UTF-8）として保存されます。
-
-```ini
-[gui]
-backend=asio                  ; cpal または asio
-output_device=                ; CPAL時の出力デバイス名（ASIO時は空）
-device=Example ASIO Device    ; 使用するデバイス名
-frames=512                    ; バッファサイズ（サンプル数）
-sample_rate=48000             ; サンプリングレート（Hz）
-pitch=0                       ; ピッチ変更量（半音、-12〜+12）
-formant_shift=0               ; フォルマント変更量（半音、-12〜+12）
-preserve_formants=true        ; フォルマント独立調整（true / false）
-pitch_algorithm=phase-locked  ; phase-locked, pvsola, pvsola-sync, td-psola, td-psola-resampled, fd-psola
-
-; 入力フィルター
-rumble_filter=false           ; 80 Hz ハイパスフィルター
-limiter=false                 ; 入力ピークリミッター
-gate=false                    ; ノイズゲート
-dereverb=false                ; 反響低減
-deesser=false                 ; サ行刺さり軽減（ディエッサー）
-pre_compressor=false          ; 前処理コンプレッサー
-
-; EQ（3系統: 入力 / 変換前 / 変換後）
-eq=off                        ; 変換後EQの有効/無効
-eq_mode=simple
-eq_band1=250,0,0.7            ; 周波数(Hz), ゲイン(dB), Q値
-eq_band2=3000,0,0.8
-eq_band3=8000,0,0.7
-eq_output=0
-
-; 後処理エフェクト
-auto_level=false              ; 自動音量調整（Auto Level）
-compressor=false              ; 後処理コンプレッサー
-reverb=false                  ; リバーブ
-```
+GUIの設定は、実行ファイルと同じディレクトリに `settings.ini`（UTF-8）として自動保存・復元されます。設定の変更はGUI上から行えるため、通常は手動で編集する必要はありません。設定を初期状態にリセットしたい場合は、`settings.ini` を削除してアプリを再起動してください。
 
 ---
 
