@@ -15,8 +15,10 @@ const TOLERANCE: usize = 2 * HOP;
 const RESAMPLE_RADIUS: usize = 32;
 const RESAMPLE_TAPS: usize = 2 * RESAMPLE_RADIUS + 1;
 const RESAMPLE_PHASES: usize = 256;
-/// Quantize anti-alias cutoffs so smooth pitch ramps rebuild kernels sparsely.
-const CUTOFF_STEPS: f64 = 512.0;
+const KERNEL_STRIDE: usize = (RESAMPLE_PHASES + 1) * RESAMPLE_TAPS;
+/// Precomputed anti-alias tables for ratio 1.0..=2.0. Pitch-down shares index 0.
+/// Built at construction so smooth pitch ramps never rebuild sincs in the callback.
+const CUTOFF_TABLES: usize = 33;
 const CORRELATION_SIZE: usize = (2 * FRAME + 2 * TOLERANCE).next_power_of_two();
 const RING: usize = 16384;
 const CEPSTRUM_CUTOFF: usize = 48;
@@ -41,10 +43,10 @@ pub(crate) struct PvsOla {
     magnitude: Box<[f64; FRAME]>,
     current_phase: Box<[f64; FRAME]>,
     envelope: Box<[f64; FRAME]>,
-    /// Polyphase windowed-sinc kernels for pitch-rate reads. Built once per
-    /// quantized cutoff so the callback never recomputes sin/cos per sample.
+    /// Polyphase windowed-sinc kernels for every cutoff table. Filled once at
+    /// construction; the callback only swaps the active table index.
     kernels: Box<[f64]>,
-    kernel_cutoff: f64,
+    kernel_table: usize,
     preserve_formants: bool,
     formant_ratio: f64,
     polarity: f64,
@@ -68,9 +70,13 @@ impl PvsOla {
     pub fn new(ratio: f64, preserve_formants: bool, formant_ratio: f64) -> Self {
         assert!(ratio.is_finite() && (0.5..=2.0).contains(&ratio));
         let window = Box::new(std::array::from_fn(|i| hann(i, FRAME)));
-        let mut kernels = vec![0.0; (RESAMPLE_PHASES + 1) * RESAMPLE_TAPS].into_boxed_slice();
-        let kernel_cutoff = quantized_cutoff(ratio);
-        fill_resample_kernels(&mut kernels, kernel_cutoff);
+        let mut kernels = vec![0.0; CUTOFF_TABLES * KERNEL_STRIDE].into_boxed_slice();
+        for table in 0..CUTOFF_TABLES {
+            fill_resample_kernels(
+                &mut kernels[table * KERNEL_STRIDE..(table + 1) * KERNEL_STRIDE],
+                cutoff_for_table(table),
+            );
+        }
         Self {
             fft: Fft::new(FRAME),
             vector_phase: {
@@ -105,7 +111,7 @@ impl PvsOla {
             current_phase: Box::new([0.0; FRAME]),
             envelope: Box::new([0.0; FRAME]),
             kernels,
-            kernel_cutoff,
+            kernel_table: cutoff_table_index(ratio),
             preserve_formants,
             formant_ratio,
             polarity: 1.0,
@@ -167,7 +173,7 @@ impl PvsOla {
         self.ratio = ratio;
         self.preserve_formants = preserve_formants;
         self.formant_ratio = formant_ratio;
-        self.refresh_kernels(ratio);
+        self.kernel_table = cutoff_table_index(ratio);
         self.input[self.input_clock % RING] = sample;
         self.input_clock += 1;
         self.generate_available_frames();
@@ -187,15 +193,6 @@ impl PvsOla {
             self.clear_until += 1;
         }
         output
-    }
-
-    fn refresh_kernels(&mut self, ratio: f64) {
-        let cutoff = quantized_cutoff(ratio);
-        if cutoff == self.kernel_cutoff {
-            return;
-        }
-        fill_resample_kernels(&mut self.kernels, cutoff);
-        self.kernel_cutoff = cutoff;
     }
 
     fn generate_available_frames(&mut self) {
@@ -481,8 +478,10 @@ impl PvsOla {
         let phase = (position - center as f64) * RESAMPLE_PHASES as f64;
         let index = phase.floor() as usize;
         let fraction = phase - index as f64;
-        let lower = &self.kernels[index * RESAMPLE_TAPS..(index + 1) * RESAMPLE_TAPS];
-        let upper = &self.kernels[(index + 1) * RESAMPLE_TAPS..(index + 2) * RESAMPLE_TAPS];
+        let base = self.kernel_table * KERNEL_STRIDE;
+        let lower = &self.kernels[base + index * RESAMPLE_TAPS..base + (index + 1) * RESAMPLE_TAPS];
+        let upper =
+            &self.kernels[base + (index + 1) * RESAMPLE_TAPS..base + (index + 2) * RESAMPLE_TAPS];
         let first = center - RESAMPLE_RADIUS as isize;
         let mut value = 0.0;
         let mut weight = 0.0;
@@ -507,8 +506,18 @@ impl PvsOla {
     }
 }
 
-fn quantized_cutoff(ratio: f64) -> f64 {
-    ((0.45 / ratio.max(1.0)) * CUTOFF_STEPS).round() / CUTOFF_STEPS
+fn cutoff_table_index(ratio: f64) -> usize {
+    if ratio <= 1.0 {
+        0
+    } else {
+        let t = ((ratio - 1.0) / 1.0).clamp(0.0, 1.0);
+        (t * (CUTOFF_TABLES - 1) as f64).round() as usize
+    }
+}
+
+fn cutoff_for_table(index: usize) -> f64 {
+    let ratio = 1.0 + index as f64 / (CUTOFF_TABLES - 1) as f64;
+    0.45 / ratio
 }
 
 fn fill_resample_kernels(kernels: &mut [f64], cutoff: f64) {
@@ -728,7 +737,7 @@ mod tests {
                 let actual = dsp.resample(position);
                 let center = position.floor() as isize;
                 let fraction = position - center as f64;
-                let cutoff = quantized_cutoff(ratio);
+                let cutoff = cutoff_for_table(cutoff_table_index(ratio));
                 let mut expected = 0.0;
                 let mut weight = 0.0;
                 for offset in -(RESAMPLE_RADIUS as isize)..=RESAMPLE_RADIUS as isize {
@@ -766,12 +775,26 @@ mod tests {
     }
 
     #[test]
-    fn kernel_rebuild_is_skipped_for_tiny_ratio_changes() {
-        let mut dsp = PvsOla::new(1.3, false, 1.0);
-        let cutoff = dsp.kernel_cutoff;
-        dsp.refresh_kernels(1.3 + 1.0 / CUTOFF_STEPS / 4.0);
-        assert_eq!(dsp.kernel_cutoff, cutoff);
-        dsp.refresh_kernels(1.6);
-        assert_ne!(dsp.kernel_cutoff, cutoff);
+    fn pitch_ramps_only_swap_precomputed_kernel_tables() {
+        let mut dsp = PvsOla::new(1.0, false, 1.0);
+        let fingerprint: Vec<u64> = dsp.kernels.iter().map(|x| x.to_bits()).collect();
+        let start = std::time::Instant::now();
+        for i in 0..960 {
+            let ratio = 1.0 + i as f64 / 959.0;
+            dsp.push(0.01 * (i as f64 * 0.11).sin(), ratio, false, 1.0);
+        }
+        assert!(
+            start.elapsed().as_secs_f64() < 0.02,
+            "pitch ramp spent {} ms rebuilding kernels in the callback",
+            start.elapsed().as_secs_f64() * 1000.0
+        );
+        assert_eq!(dsp.kernel_table, CUTOFF_TABLES - 1);
+        assert!(dsp
+            .kernels
+            .iter()
+            .zip(fingerprint)
+            .all(|(&value, bits)| value.to_bits() == bits));
+        dsp.push(0.0, 0.75, false, 1.0);
+        assert_eq!(dsp.kernel_table, 0);
     }
 }
