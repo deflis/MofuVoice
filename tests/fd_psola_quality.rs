@@ -1,5 +1,5 @@
-use rust_low_latency_voice_changer::pitch::{pitch_ratio, PitchAlgorithm, PitchShifter};
-use rust_low_latency_voice_changer::SAMPLE_RATES;
+use mofu_voice::pitch::{pitch_ratio, PitchAlgorithm, PitchShifter};
+use mofu_voice::SAMPLE_RATES;
 
 fn shifter(pitch: f64, preserve_formants: bool) -> PitchShifter {
     PitchShifter::new(
@@ -7,7 +7,7 @@ fn shifter(pitch: f64, preserve_formants: bool) -> PitchShifter {
         preserve_formants,
         0.0,
         PitchAlgorithm::FdPsola,
-        rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+        mofu_voice::pitch::SpectralWindows::default(),
         Default::default(),
     )
     .unwrap()
@@ -131,7 +131,7 @@ fn fd_psola_is_independent_of_audio_block_boundaries() {
 
 #[test]
 fn fd_psola_applies_independent_formant_shift_and_emits_audio() {
-    use rust_low_latency_voice_changer::pitch::PitchSettings;
+    use mofu_voice::pitch::PitchSettings;
     let rate = 48000;
     let input: Vec<f32> = (0..rate)
         .map(|i| {

@@ -1,4 +1,4 @@
-use rust_low_latency_voice_changer::{
+use mofu_voice::{
     pitch::{pitch_ratio, PitchAlgorithm, PitchShifter},
     SAMPLE_RATES,
 };
@@ -9,7 +9,7 @@ fn shifter(pitch: f64) -> PitchShifter {
         true,
         0.0,
         PitchAlgorithm::TdPsola,
-        rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+        mofu_voice::pitch::SpectralWindows::default(),
         Default::default(),
     )
     .unwrap()
@@ -158,7 +158,7 @@ fn resampled_td_psola_handles_voicing_boundaries_and_flushes_cleanly() {
         true,
         2.53,
         PitchAlgorithm::TdPsolaResampled,
-        rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+        mofu_voice::pitch::SpectralWindows::default(),
         Default::default(),
     )
     .unwrap();
@@ -237,14 +237,14 @@ fn td_psola_is_block_independent_and_preserves_neutral_sample_bits() {
 
 #[test]
 fn td_psola_formant_settings_and_pipeline_latency_are_validated() {
-    use rust_low_latency_voice_changer::cli::Options;
+    use mofu_voice::cli::Options;
     for (preserve, shift) in [(false, 0.0), (false, 3.0), (false, -3.0)] {
         assert!(PitchShifter::new(
             7.0,
             preserve,
             shift,
             PitchAlgorithm::TdPsola,
-            rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+            mofu_voice::pitch::SpectralWindows::default(),
             Default::default(),
         )
         .is_err());
@@ -254,7 +254,7 @@ fn td_psola_formant_settings_and_pipeline_latency_are_validated() {
             .unwrap();
     assert_eq!(options.pitch.latency(), 5888);
     assert_eq!(
-        rust_low_latency_voice_changer::pitch::PitchSettings {
+        mofu_voice::pitch::PitchSettings {
             formant_shift: 0.0,
             ..options.pitch
         }
@@ -303,7 +303,7 @@ fn resampled_grains_keep_td_pitch_and_move_vowel_resonance() {
                     true,
                     shift,
                     PitchAlgorithm::TdPsolaResampled,
-                    rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+                    mofu_voice::pitch::SpectralWindows::default(),
                     Default::default(),
                 )
                 .unwrap();
@@ -346,7 +346,7 @@ fn resampled_grains_are_block_independent_during_pitch_changes() {
             true,
             2.53,
             PitchAlgorithm::TdPsolaResampled,
-            rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+            mofu_voice::pitch::SpectralWindows::default(),
             Default::default(),
         )
         .unwrap();
@@ -412,7 +412,7 @@ fn resampling_moves_unvoiced_resonance_without_changing_duration() {
                 true,
                 shift,
                 PitchAlgorithm::TdPsolaResampled,
-                rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+                mofu_voice::pitch::SpectralWindows::default(),
                 Default::default(),
             )
             .unwrap()
@@ -446,7 +446,7 @@ fn resampled_grains_keep_fixed_delay_and_flush_without_drifting() {
             true,
             shift,
             PitchAlgorithm::TdPsolaResampled,
-            rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+            mofu_voice::pitch::SpectralWindows::default(),
             Default::default(),
         )
         .unwrap();
@@ -489,7 +489,7 @@ fn extreme_independent_ratios_remain_finite_across_many_ring_wraps() {
                 true,
                 shift,
                 PitchAlgorithm::TdPsolaResampled,
-                rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+                mofu_voice::pitch::SpectralWindows::default(),
                 Default::default(),
             )
             .unwrap();

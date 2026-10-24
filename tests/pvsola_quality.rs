@@ -1,4 +1,4 @@
-use rust_low_latency_voice_changer::{
+use mofu_voice::{
     pitch::{pitch_ratio, PitchAlgorithm, PitchShifter, LATENCY},
     RATE,
 };
@@ -30,7 +30,7 @@ fn voiced_glides_keep_the_fundamental_phase_continuous() {
                 false,
                 0.0,
                 algorithm,
-                rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+                mofu_voice::pitch::SpectralWindows::default(),
                 Default::default(),
             )
             .unwrap()
@@ -118,7 +118,7 @@ fn voiced_harmonics_keep_their_relative_phase_shape() {
                             preserve,
                             0.0,
                             algorithm,
-                            rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+                            mofu_voice::pitch::SpectralWindows::default(),
                             Default::default(),
                         )
                         .unwrap()

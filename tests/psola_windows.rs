@@ -1,4 +1,4 @@
-use rust_low_latency_voice_changer::pitch::{PitchAlgorithm, PitchSettings, SpectralWindows};
+use mofu_voice::pitch::{PitchAlgorithm, PitchSettings, SpectralWindows};
 use std::f64::consts::TAU;
 
 const ALGORITHMS: [PitchAlgorithm; 3] = [

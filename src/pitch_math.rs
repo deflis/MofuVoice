@@ -1,7 +1,7 @@
 //! Bounded, double-precision formant math. The portable path uses the system math.
-//! AVX2 evaluates four independent values; no FMA or reduced-precision arithmetic.
+//! AVX2 and ARM64 NEON evaluate independent values without FMA or reduced precision.
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"))]
 #[path = "pitch_exp_table.rs"]
 mod exp_table;
 
@@ -11,6 +11,12 @@ pub(super) fn log(input: &[f64], output: &mut [f64], vector: bool) {
     if vector {
         // SAFETY: the caller uses the FFT's runtime AVX2 detection.
         unsafe { log_avx2(input, output) };
+        return;
+    }
+    #[cfg(target_arch = "aarch64")]
+    if vector {
+        // SAFETY: caller selects NEON before processing; kernels bound all loads.
+        unsafe { log_neon(input, output) };
         return;
     }
     let _ = vector;
@@ -24,6 +30,12 @@ pub(super) fn exp(values: &mut [f64], vector: bool) {
     if vector {
         // SAFETY: the caller uses the FFT's runtime AVX2 detection.
         unsafe { exp_avx2(values) };
+        return;
+    }
+    #[cfg(target_arch = "aarch64")]
+    if vector {
+        // SAFETY: caller selects NEON before processing; kernels bound all loads.
+        unsafe { exp_neon(values) };
         return;
     }
     let _ = vector;
@@ -124,6 +136,90 @@ unsafe fn exp_avx2(values: &mut [f64]) {
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+use std::arch::aarch64::*;
+
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn log_neon(input: &[f64], output: &mut [f64]) {
+    let (blocks, tail) = input.as_chunks::<2>();
+    let (results, remainder) = output.as_chunks_mut::<2>();
+    for (block, result) in blocks.iter().zip(results) {
+        // SAFETY: checked chunks contain two f64s; all loads/stores stay inside.
+        // maxNum matches scalar max, including NaN magnitudes clamped to the floor.
+        unsafe {
+            let x = vmaxnmq_f64(vld1q_f64(block.as_ptr()), vdupq_n_f64(1e-12));
+            let bits = vreinterpretq_u64_f64(x);
+            let exponent64 = vsubq_s64(
+                vreinterpretq_s64_u64(vshrq_n_u64::<52>(bits)),
+                vdupq_n_s64(1023),
+            );
+            let exponent = vcvtq_f64_s64(exponent64);
+            let mantissa = vreinterpretq_f64_u64(vorrq_u64(
+                vandq_u64(bits, vdupq_n_u64((1 << 52) - 1)),
+                vdupq_n_u64(1023 << 52),
+            ));
+            let high = vcgtq_f64(mantissa, vdupq_n_f64(std::f64::consts::SQRT_2));
+            let one = vdupq_n_f64(1.0);
+            let m = vmulq_f64(mantissa, vbslq_f64(high, vdupq_n_f64(0.5), one));
+            let e = vaddq_f64(exponent, vbslq_f64(high, one, vdupq_n_f64(0.0)));
+            let z = vdivq_f64(vsubq_f64(m, one), vaddq_f64(m, one));
+            let z2 = vmulq_f64(z, z);
+            // Same atanh series as AVX2, without fused multiply/add rounding.
+            let mut p = vdupq_n_f64(1.0 / 19.0);
+            for denominator in [17.0, 15.0, 13.0, 11.0, 9.0, 7.0, 5.0, 3.0, 1.0] {
+                p = vaddq_f64(vdupq_n_f64(1.0 / denominator), vmulq_f64(z2, p));
+            }
+            let y = vaddq_f64(
+                vmulq_f64(e, vdupq_n_f64(std::f64::consts::LN_2)),
+                vmulq_f64(vaddq_f64(z, z), p),
+            );
+            vst1q_f64(result.as_mut_ptr(), y);
+        }
+    }
+    for (&value, result) in tail.iter().zip(remainder) {
+        *result = value.max(1e-12).ln();
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn exp_neon(values: &mut [f64]) {
+    let (blocks, tail) = values.as_chunks_mut::<2>();
+    for block in blocks {
+        // SAFETY: checked chunks contain two f64s. Reduction indices are masked
+        // to 0..32; two scalar table loads replace AVX2's gather instruction.
+        unsafe {
+            let x = vminq_f64(
+                vmaxq_f64(vld1q_f64(block.as_ptr()), vdupq_n_f64(-2.0)),
+                vdupq_n_f64(2.0),
+            );
+            let n = vrndnq_f64(vmulq_f64(x, vdupq_n_f64(32.0 * std::f64::consts::LOG2_E)));
+            let integer = vcvtq_s64_f64(n);
+            let index = vandq_u64(vreinterpretq_u64_s64(integer), vdupq_n_u64(31));
+            let fraction = vsetq_lane_f64::<1>(
+                exp_table::EXP2_FRAC[vgetq_lane_u64::<1>(index) as usize],
+                vdupq_n_f64(exp_table::EXP2_FRAC[vgetq_lane_u64::<0>(index) as usize]),
+            );
+            let r = vsubq_f64(
+                vsubq_f64(x, vmulq_f64(n, vdupq_n_f64(exp_table::EXP_STEP_HI))),
+                vmulq_f64(n, vdupq_n_f64(exp_table::EXP_STEP_LO)),
+            );
+            let mut p = vdupq_n_f64(1.0 / 720.0);
+            for coefficient in [1.0 / 120.0, 1.0 / 24.0, 1.0 / 6.0, 0.5, 1.0, 1.0] {
+                p = vaddq_f64(vdupq_n_f64(coefficient), vmulq_f64(r, p));
+            }
+            let exponent =
+                vshlq_n_s64::<52>(vaddq_s64(vshrq_n_s64::<5>(integer), vdupq_n_s64(1023)));
+            let scale = vmulq_f64(fraction, vreinterpretq_f64_s64(exponent));
+            vst1q_f64(block.as_mut_ptr(), vmulq_f64(p, scale));
+        }
+    }
+    for value in tail {
+        *value = value.clamp(-2.0, 2.0).exp();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,9 +269,61 @@ mod tests {
         {
             std::is_x86_feature_detected!("avx2")
         }
-        #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+        #[cfg(target_arch = "aarch64")]
+        {
+            std::arch::is_aarch64_feature_detected!("neon")
+        }
+        #[cfg(not(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64")))]
         {
             false
+        }
+    }
+
+    #[test]
+    fn log_clamping_preserves_slice_guards_for_unaligned_inputs_and_tails() {
+        let values = [
+            -1.0,
+            -0.0,
+            0.0,
+            f64::NEG_INFINITY,
+            f64::NAN,
+            f64::from_bits(1),
+            f64::MIN_POSITIVE,
+            1e-12,
+            1.0,
+            std::f64::consts::SQRT_2,
+            2.0,
+            2048.0,
+            2.0_f64.powi(140),
+        ];
+        let input: Vec<_> = (0..24).map(|i| values[i % values.len()]).collect();
+        for vector in [false, vector_available()] {
+            for head in 0..4 {
+                for length in 0..=17 {
+                    let mut output = vec![12345.0; head + length + 2];
+                    log(
+                        &input[head..head + length],
+                        &mut output[head..head + length],
+                        vector,
+                    );
+                    assert!(output[..head].iter().all(|&v| v == 12345.0));
+                    assert!(output[head + length..].iter().all(|&v| v == 12345.0));
+                    for (&value, &actual) in input[head..head + length]
+                        .iter()
+                        .zip(&output[head..head + length])
+                    {
+                        let expected = value.max(1e-12).ln();
+                        assert!(
+                            (actual - expected).abs() < 3e-14,
+                            "log({value}): {actual} != {expected}"
+                        );
+                    }
+                }
+            }
+            assert!(std::panic::catch_unwind(|| {
+                log(&[1.0; 4], &mut [0.0; 3], vector);
+            })
+            .is_err());
         }
     }
 

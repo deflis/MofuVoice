@@ -1,6 +1,6 @@
 # Voicemeeter シリーズ 設定ガイド
 
-Voicemeeter **Banana** または **Potato** の **Insert Virtual ASIO** を使い、マイク入力に本アプリ（Rust Low-Latency Voice Changer）を差し込みます。
+Voicemeeter **Banana** または **Potato** の **Insert Virtual ASIO** を使い、マイク入力に本アプリ（もふボイス）を差し込みます。
 
 > **VoiceMeeter（無料版）** には Insert ドライバがありません。Banana または Potato が必要です。
 
@@ -26,7 +26,7 @@ Insert が有効なとき、そのストリップでは **生のマイクと処�
 2. マイクを Voicemeeter に入れる方法を決めます。
    - **USB マイクのみ**: Windows の録音デバイスとしてストリップに割り当てる、など。
    - **ASIO インターフェース**: 出力 **A1** にその ASIO を選び、**System settings / Options** の **PATCH ASIO Inputs to strips** でマイクの物理入力番号を **ストリップ1** に割り当てます（[マイクと ASIO の公式手順](https://voicemeeter.com/setup-a-mic-with-your-asio-audio-interface/)）。
-3. 本アプリの実行ファイル（`rust-low-latency-voice-changer-gui.exe`）を用意します。
+3. 本アプリの実行ファイル（`MofuVoice.exe`）を用意します。
 
 ## 1. Voicemeeter の基本設定
 

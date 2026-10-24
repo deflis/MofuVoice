@@ -109,6 +109,10 @@ fn select_dot() -> Dot {
     if std::is_x86_feature_detected!("avx2") {
         return vector_dot;
     }
+    #[cfg(target_arch = "aarch64")]
+    if std::arch::is_aarch64_feature_detected!("neon") {
+        return neon_dot;
+    }
     scalar_dot
 }
 
@@ -189,16 +193,47 @@ unsafe fn avx2_dot(samples: &[f64], lo: &[f64], hi: &[f64], fraction: f64) -> f6
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+fn neon_dot(samples: &[f64], lo: &[f64], hi: &[f64], fraction: f64) -> f64 {
+    assert_eq!(samples.len(), lo.len());
+    assert_eq!(samples.len(), hi.len());
+    // SAFETY: selected after NEON detection; checked equal lengths bound loads.
+    unsafe { neon_dot_inner(samples, lo, hi, fraction) }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn neon_dot_inner(samples: &[f64], lo: &[f64], hi: &[f64], fraction: f64) -> f64 {
+    use std::arch::aarch64::*;
+    let mut sums = [vdupq_n_f64(0.0); 2];
+    let phase = vdupq_n_f64(fraction);
+    let end = samples.len() / 4 * 4;
+    for i in (0..end).step_by(4) {
+        for (lane, sum) in sums.iter_mut().enumerate() {
+            let j = i + lane * 2;
+            // SAFETY: j..j+2 is inside this checked four-sample block.
+            // Separate multiply/add operations preserve scalar rounding (no FMA).
+            unsafe {
+                let lower = vld1q_f64(lo[j..j + 2].as_ptr());
+                let upper = vld1q_f64(hi[j..j + 2].as_ptr());
+                let gain = vaddq_f64(lower, vmulq_f64(phase, vsubq_f64(upper, lower)));
+                *sum = vaddq_f64(*sum, vmulq_f64(vld1q_f64(samples[j..j + 2].as_ptr()), gain));
+            }
+        }
+    }
+    let mut sum = vaddvq_f64(sums[0]) + vaddvq_f64(sums[1]);
+    for i in end..samples.len() {
+        sum += samples[i] * (lo[i] + fraction * (hi[i] - lo[i]));
+    }
+    sum
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     #[test]
-    fn avx2_matches_portable_for_every_tail_and_unaligned_offset() {
-        if !std::is_x86_feature_detected!("avx2") {
-            return;
-        }
+    fn selected_simd_matches_portable_for_every_tail_and_unaligned_offset() {
         let mut seed = 7_u64;
         let mut random = || {
             seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
@@ -215,7 +250,9 @@ mod tests {
                     let lo = &lower[offset..end];
                     let hi = &upper[offset..end];
                     let expected = scalar_dot(a, lo, hi, phase);
-                    let actual = vector_dot(a, lo, hi, phase);
+                    let actual = select_dot()(a, lo, hi, phase);
+                    #[cfg(target_arch = "aarch64")]
+                    assert_eq!(actual.to_bits(), expected.to_bits());
                     assert!(
                         (actual - expected).abs() < 1e-12,
                         "offset={offset}, length={length}, phase={phase}"
