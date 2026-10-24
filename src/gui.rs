@@ -1429,4 +1429,36 @@ mod tests {
         controls.eq.output_db = f64::NAN;
         assert!(controls.options().is_err());
     }
+    #[test]
+    fn independent_filter_controls_preserve_parameters_and_validate_disabled_values() {
+        let mut options = Options::default();
+        options.voice_enabled = false;
+        options.pitch.semitones = 5.0;
+        options.rumble_filter = true;
+        options.input_eq.bands[0].gain_db = -4.0;
+        options.pre_conversion_eq.bands[0].gain_db = 2.0;
+        options.eq.bands[0].gain_db = 1.0;
+        options.compressor.threshold_db = -21.0;
+        options.level.threshold_db = -9.0;
+        options.limiter.ceiling_db = -6.0;
+        options.dereverb.amount = 0.7;
+        options.reverb.mix = 0.3;
+        let controls = Settings::from_options(&options);
+        assert_eq!(controls.options().unwrap(), options);
+        let mut invalid = controls.clone();
+        invalid.input_eq.bands[0].q = f64::NAN;
+        assert!(invalid.options().is_err());
+        let mut invalid = controls.clone();
+        invalid.compressor.ratio = 0.0;
+        assert!(invalid.options().is_err());
+        let mut invalid = controls.clone();
+        invalid.limiter.ceiling_db = 1.0;
+        assert!(invalid.options().is_err());
+        let mut invalid = controls.clone();
+        invalid.dereverb.amount = 2.0;
+        assert!(invalid.options().is_err());
+        let mut invalid = controls;
+        invalid.reverb.decay_ms = 0.0;
+        assert!(invalid.options().is_err());
+    }
 }
