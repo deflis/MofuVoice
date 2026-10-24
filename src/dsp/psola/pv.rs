@@ -6,12 +6,19 @@
 //! overlap-added, resetting the vocoder phases as described by Moinet & Dutoit.
 //! All storage is allocated at construction; the audio callback does no I/O.
 use crate::dsp::{complex::Complex, fft::Fft, phase, window::hann};
+use std::f64::consts::{PI, TAU};
 
 const FRAME: usize = 1024;
 const HOP: usize = FRAME / 4;
 const RESET_EVERY: usize = 4;
 const TOLERANCE: usize = 2 * HOP;
 const RESAMPLE_RADIUS: usize = 32;
+const RESAMPLE_TAPS: usize = 2 * RESAMPLE_RADIUS + 1;
+const RESAMPLE_PHASES: usize = 256;
+const KERNEL_STRIDE: usize = (RESAMPLE_PHASES + 1) * RESAMPLE_TAPS;
+/// Precomputed anti-alias tables for ratio 1.0..=2.0. Pitch-down shares index 0.
+/// Built at construction so smooth pitch ramps never rebuild sincs in the callback.
+const CUTOFF_TABLES: usize = 33;
 const CORRELATION_SIZE: usize = (2 * FRAME + 2 * TOLERANCE).next_power_of_two();
 const RING: usize = 16384;
 const CEPSTRUM_CUTOFF: usize = 48;
@@ -36,6 +43,10 @@ pub(crate) struct PvsOla {
     magnitude: Box<[f64; FRAME]>,
     current_phase: Box<[f64; FRAME]>,
     envelope: Box<[f64; FRAME]>,
+    /// Polyphase windowed-sinc kernels for every cutoff table. Filled once at
+    /// construction; the callback only swaps the active table index.
+    kernels: Box<[f64]>,
+    kernel_table: usize,
     preserve_formants: bool,
     formant_ratio: f64,
     polarity: f64,
@@ -59,6 +70,13 @@ impl PvsOla {
     pub fn new(ratio: f64, preserve_formants: bool, formant_ratio: f64) -> Self {
         assert!(ratio.is_finite() && (0.5..=2.0).contains(&ratio));
         let window = Box::new(std::array::from_fn(|i| hann(i, FRAME)));
+        let mut kernels = vec![0.0; CUTOFF_TABLES * KERNEL_STRIDE].into_boxed_slice();
+        for table in 0..CUTOFF_TABLES {
+            fill_resample_kernels(
+                &mut kernels[table * KERNEL_STRIDE..(table + 1) * KERNEL_STRIDE],
+                cutoff_for_table(table),
+            );
+        }
         Self {
             fft: Fft::new(FRAME),
             vector_phase: {
@@ -92,6 +110,8 @@ impl PvsOla {
             magnitude: Box::new([0.0; FRAME]),
             current_phase: Box::new([0.0; FRAME]),
             envelope: Box::new([0.0; FRAME]),
+            kernels,
+            kernel_table: cutoff_table_index(ratio),
             preserve_formants,
             formant_ratio,
             polarity: 1.0,
@@ -153,6 +173,7 @@ impl PvsOla {
         self.ratio = ratio;
         self.preserve_formants = preserve_formants;
         self.formant_ratio = formant_ratio;
+        self.kernel_table = cutoff_table_index(ratio);
         self.input[self.input_clock % RING] = sample;
         self.input_clock += 1;
         self.generate_available_frames();
@@ -454,30 +475,26 @@ impl PvsOla {
 
     fn resample(&self, position: f64) -> f64 {
         let center = position.floor() as isize;
-        let fraction = position - center as f64;
+        let phase = (position - center as f64) * RESAMPLE_PHASES as f64;
+        let index = phase.floor() as usize;
+        let fraction = phase - index as f64;
+        let base = self.kernel_table * KERNEL_STRIDE;
+        let lower = &self.kernels[base + index * RESAMPLE_TAPS..base + (index + 1) * RESAMPLE_TAPS];
+        let upper =
+            &self.kernels[base + (index + 1) * RESAMPLE_TAPS..base + (index + 2) * RESAMPLE_TAPS];
+        let first = center - RESAMPLE_RADIUS as isize;
         let mut value = 0.0;
         let mut weight = 0.0;
-        for offset in -(RESAMPLE_RADIUS as isize)..=RESAMPLE_RADIUS as isize {
-            let sample_position = center + offset;
+        for tap in 0..RESAMPLE_TAPS {
+            let sample_position = first + tap as isize;
             if sample_position < 0 {
                 continue;
             }
-            let distance = offset as f64 - fraction;
-            let normalized = distance / (RESAMPLE_RADIUS as f64 + 1.0);
-            let window = 0.42
-                + 0.5 * (std::f64::consts::PI * normalized).cos()
-                + 0.08 * (std::f64::consts::TAU * normalized).cos();
-            let cutoff = 0.45 / self.ratio.max(1.0);
-            let kernel = if distance.abs() < 1e-12 {
-                2.0 * cutoff
-            } else {
-                (std::f64::consts::TAU * cutoff * distance).sin()
-                    / (std::f64::consts::PI * distance)
-            } * window;
-            let index = sample_position as usize % RING;
-            let frame_weight = self.weight[index];
+            let ring = sample_position as usize % RING;
+            let frame_weight = self.weight[ring];
             if frame_weight > 1e-12 {
-                value += kernel * self.output[index] / frame_weight;
+                let kernel = lower[tap] + fraction * (upper[tap] - lower[tap]);
+                value += kernel * self.output[ring] / frame_weight;
                 weight += kernel;
             }
         }
@@ -489,8 +506,40 @@ impl PvsOla {
     }
 }
 
+fn cutoff_table_index(ratio: f64) -> usize {
+    if ratio <= 1.0 {
+        0
+    } else {
+        let t = ((ratio - 1.0) / 1.0).clamp(0.0, 1.0);
+        (t * (CUTOFF_TABLES - 1) as f64).round() as usize
+    }
+}
+
+fn cutoff_for_table(index: usize) -> f64 {
+    let ratio = 1.0 + index as f64 / (CUTOFF_TABLES - 1) as f64;
+    0.45 / ratio
+}
+
+fn fill_resample_kernels(kernels: &mut [f64], cutoff: f64) {
+    for phase in 0..=RESAMPLE_PHASES {
+        let fraction = phase as f64 / RESAMPLE_PHASES as f64;
+        let kernel = &mut kernels[phase * RESAMPLE_TAPS..(phase + 1) * RESAMPLE_TAPS];
+        for (i, tap) in kernel.iter_mut().enumerate() {
+            let distance = i as f64 - RESAMPLE_RADIUS as f64 - fraction;
+            let normalized = distance / (RESAMPLE_RADIUS as f64 + 1.0);
+            let window = 0.42 + 0.5 * (PI * normalized).cos() + 0.08 * (TAU * normalized).cos();
+            let sinc = if distance.abs() < 1e-12 {
+                2.0 * cutoff
+            } else {
+                (TAU * cutoff * distance).sin() / (PI * distance)
+            };
+            *tap = window * sinc;
+        }
+    }
+}
+
 fn wrap(phase: f64) -> f64 {
-    (phase + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI
+    (phase + PI).rem_euclid(TAU) - PI
 }
 
 #[cfg(test)]
@@ -670,5 +719,82 @@ mod tests {
             assert_eq!(dsp.output[i], 0.25, "read audio rewritten at {i}");
             assert_eq!(dsp.weight[i], 1.0);
         }
+    }
+
+    #[test]
+    fn polyphase_resampler_matches_direct_windowed_sinc() {
+        for ratio in [0.5, 0.83, 1.0, 1.3, 2.0] {
+            let mut dsp = PvsOla::new(ratio, false, 1.0);
+            for i in 0..RING {
+                dsp.output[i] = (i as f64 * 0.137).sin() * 0.4;
+                dsp.weight[i] = if i % 23 == 0 {
+                    0.0
+                } else {
+                    0.7 + (i % 5) as f64
+                };
+            }
+            for position in [0.0, 12.31, 128.9, 2047.37, 4096.01, 8000.63] {
+                let actual = dsp.resample(position);
+                let center = position.floor() as isize;
+                let fraction = position - center as f64;
+                let cutoff = cutoff_for_table(cutoff_table_index(ratio));
+                let mut expected = 0.0;
+                let mut weight = 0.0;
+                for offset in -(RESAMPLE_RADIUS as isize)..=RESAMPLE_RADIUS as isize {
+                    let sample_position = center + offset;
+                    if sample_position < 0 {
+                        continue;
+                    }
+                    let distance = offset as f64 - fraction;
+                    let normalized = distance / (RESAMPLE_RADIUS as f64 + 1.0);
+                    let window =
+                        0.42 + 0.5 * (PI * normalized).cos() + 0.08 * (TAU * normalized).cos();
+                    let kernel = if distance.abs() < 1e-12 {
+                        2.0 * cutoff
+                    } else {
+                        (TAU * cutoff * distance).sin() / (PI * distance)
+                    } * window;
+                    let index = sample_position as usize % RING;
+                    let frame_weight = dsp.weight[index];
+                    if frame_weight > 1e-12 {
+                        expected += kernel * dsp.output[index] / frame_weight;
+                        weight += kernel;
+                    }
+                }
+                let expected = if weight.abs() > 1e-12 {
+                    expected / weight
+                } else {
+                    0.0
+                };
+                assert!(
+                    (actual - expected).abs() < 2e-4,
+                    "ratio={ratio}, position={position}, actual={actual}, expected={expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pitch_ramps_only_swap_precomputed_kernel_tables() {
+        let mut dsp = PvsOla::new(1.0, false, 1.0);
+        let fingerprint: Vec<u64> = dsp.kernels.iter().map(|x| x.to_bits()).collect();
+        let start = std::time::Instant::now();
+        for i in 0..960 {
+            let ratio = 1.0 + i as f64 / 959.0;
+            dsp.push(0.01 * (i as f64 * 0.11).sin(), ratio, false, 1.0);
+        }
+        assert!(
+            start.elapsed().as_secs_f64() < 0.02,
+            "pitch ramp spent {} ms rebuilding kernels in the callback",
+            start.elapsed().as_secs_f64() * 1000.0
+        );
+        assert_eq!(dsp.kernel_table, CUTOFF_TABLES - 1);
+        assert!(dsp
+            .kernels
+            .iter()
+            .zip(fingerprint)
+            .all(|(&value, bits)| value.to_bits() == bits));
+        dsp.push(0.0, 0.75, false, 1.0);
+        assert_eq!(dsp.kernel_table, 0);
     }
 }
