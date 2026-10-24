@@ -293,6 +293,8 @@ const HALF: usize = WINDOW / 2;
 struct Fft {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     avx2: bool,
+    #[cfg(target_arch = "aarch64")]
+    neon: bool,
     reverse_half: Box<[usize; HALF]>,
     forward_roots_half: SplitRoots,
     inverse_roots_half: SplitRoots,
@@ -321,6 +323,8 @@ impl Fft {
         Self {
             #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
             avx2: std::is_x86_feature_detected!("avx2"),
+            #[cfg(target_arch = "aarch64")]
+            neon: std::arch::is_aarch64_feature_detected!("neon"),
             reverse_half: Box::new(std::array::from_fn(|i| {
                 i.reverse_bits() >> (usize::BITS - half_bits)
             })),
@@ -379,7 +383,11 @@ impl Fft {
         {
             self.avx2
         }
-        #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+        #[cfg(target_arch = "aarch64")]
+        {
+            self.neon
+        }
+        #[cfg(not(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64")))]
         {
             false
         }
@@ -911,10 +919,7 @@ impl PitchShifter {
             );
         }
         Complex::magnitudes(&self.spectrum[..bins], self.magnitude.as_mut_slice());
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-        let vector = self.fft.avx2;
-        #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
-        let vector = false;
+        let vector = self.fft.vector();
         let neutral = ratio == 1.0 && self.formant_ratio == 1.0;
         if self.preserve_formants && !neutral {
             math::log(
@@ -1396,13 +1401,17 @@ mod tests {
         let window = std::array::from_fn(|i| (i as f64 * 0.17).cos().abs());
         let sentinel = f64::from_bits(0x7ff8_0000_0000_0123);
         for vector in [false, true] {
-            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"))]
             let mut fft = Fft::new();
-            #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+            #[cfg(not(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64")))]
             let fft = Fft::new();
             #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
             {
                 fft.avx2 = vector && std::is_x86_feature_detected!("avx2");
+            }
+            #[cfg(target_arch = "aarch64")]
+            {
+                fft.neon = vector && std::arch::is_aarch64_feature_detected!("neon");
             }
             for first in [0, 2, 4, 6, 128, 512, WINDOW / 2, WINDOW - 2] {
                 let mut expected = std::array::from_fn(|i| Complex {
@@ -1439,13 +1448,17 @@ mod tests {
     #[test]
     fn sparse_cepstrum_transform_matches_full_fft_and_direct_dft() {
         for vector in [false, true] {
-            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"))]
             let mut fft = Fft::new();
-            #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+            #[cfg(not(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64")))]
             let fft = Fft::new();
             #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
             {
                 fft.avx2 = vector && std::is_x86_feature_detected!("avx2");
+            }
+            #[cfg(target_arch = "aarch64")]
+            {
+                fft.neon = vector && std::arch::is_aarch64_feature_detected!("neon");
             }
             for pattern in 0..4 {
                 let input: [Complex; WINDOW] = std::array::from_fn(|i| {
@@ -1530,9 +1543,9 @@ mod tests {
 
     #[test]
     fn pruned_inverse_preserves_every_retained_sample_bit() {
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"))]
         let mut fft = Fft::new();
-        #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+        #[cfg(not(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64")))]
         let fft = Fft::new();
         let input = std::array::from_fn(|i| Complex {
             re: (i as f64 * 0.31).sin(),
@@ -1542,6 +1555,10 @@ mod tests {
             #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
             {
                 fft.avx2 = vector && std::is_x86_feature_detected!("avx2");
+            }
+            #[cfg(target_arch = "aarch64")]
+            {
+                fft.neon = vector && std::arch::is_aarch64_feature_detected!("neon");
             }
             let _ = vector;
             let mut expected = input;
@@ -1567,11 +1584,11 @@ mod tests {
         }
     }
 
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"))]
     #[test]
     fn vector_frame_matches_portable_across_formant_and_pitch_transitions() {
         for algorithm in PitchAlgorithm::SPECTRAL {
-            if !std::is_x86_feature_detected!("avx2") {
+            if !Fft::new().vector() {
                 return;
             }
             let mut seed = 7_u32;
@@ -1606,7 +1623,14 @@ mod tests {
                         Default::default(),
                     )
                     .unwrap();
-                    portable.fft.avx2 = false;
+                    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+                    {
+                        portable.fft.avx2 = false;
+                    }
+                    #[cfg(target_arch = "aarch64")]
+                    {
+                        portable.fft.neon = false;
+                    }
                     for pitch in [-12.0, -3.0, 0.0, 3.0, 7.0, 12.0, 0.0] {
                         vector.set_semitones(pitch).unwrap();
                         portable.set_semitones(pitch).unwrap();
