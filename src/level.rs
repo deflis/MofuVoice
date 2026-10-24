@@ -207,12 +207,13 @@ impl AutoLevel {
             };
             if self.settings.enabled {
                 self.power += (input * input - self.power) * self.rms_rate;
-                if self.power > self.floor_power && input.abs() > self.floor_amplitude {
-                    if update_target {
-                        let rms_db = amplitude_db(self.power.sqrt(), 1e-12);
-                        self.cached_level_target_db = (self.settings.target_db - rms_db)
-                            .clamp(-18.0, self.settings.max_gain_db);
-                    }
+                let above_level_floor = self.power > self.floor_power;
+                if update_target && above_level_floor {
+                    let rms_db = amplitude_db(self.power.sqrt(), 1e-12);
+                    self.cached_level_target_db = (self.settings.target_db - rms_db)
+                        .clamp(-18.0, self.settings.max_gain_db);
+                }
+                if above_level_floor && input.abs() > self.floor_amplitude {
                     self.level_gain_db +=
                         (self.cached_level_target_db - self.level_gain_db) * self.level_rate;
                 }
@@ -671,6 +672,32 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn level_target_refresh_is_independent_of_zero_crossing_gate() {
+        let settings = LevelSettings {
+            enabled: true,
+            compressor_enabled: false,
+            target_db: -20.0,
+            floor_db: -50.0,
+            response_ms: 100.0,
+            ..LevelSettings::default()
+        };
+        let mut samples: Vec<f32> = (0..RATE as usize * 2)
+            .map(|i| {
+                (0.5 * (std::f64::consts::TAU * 3000.0 * i as f64 / RATE as f64).sin()) as f32
+            })
+            .collect();
+        settings.build().unwrap().process_in_place(&mut samples);
+
+        let settled_rms = rms(&samples[RATE as usize * 3 / 2..]);
+        let settled_db = amplitude_db(settled_rms, 1e-12);
+        assert!(
+            (settled_db - settings.target_db).abs() <= 0.2,
+            "steady-state level {settled_db} dBFS should approach {} dBFS",
+            settings.target_db
+        );
     }
 
     #[test]
