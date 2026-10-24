@@ -527,7 +527,11 @@ fn build<T: Sample + cpal::SizedSample + Send + 'static>(
     routing: &ChannelRouting,
     dsp: DspSettings,
 ) -> Result<Box<dyn AudioStream>> {
-    let pitch_latency = dsp.pitch.latency();
+    let pitch_latency = if dsp.voice_enabled {
+        dsp.pitch.latency()
+    } else {
+        0
+    };
     let capacity = (frames as usize * 8).max(32768).next_power_of_two();
     let (producer, consumer) = audio_queue::channel::<T>(capacity);
     let rate = prepared.input_config.sample_rate;

@@ -1,4 +1,14 @@
-import { connectSettingsNavigation, readSettingsSection, type SettingsSection } from "./navigation";
+import { CompressorSettings } from "./compressor/CompressorSettings";
+import { FilterOverview } from "./overview/FilterOverview";
+import { LimiterSettings } from "./limiter/LimiterSettings";
+import { DereverbSettings } from "./dereverb/DereverbSettings";
+import { ReverbSettings } from "./reverb/ReverbSettings";
+import {
+  connectSettingsNavigation,
+  readSettingsSection,
+  settingsSections,
+  type SettingsSection,
+} from "./navigation";
 import { useEffect, useState } from "react";
 import { useSettingsLocked } from "./hooks";
 import { DeviceSettings } from "./devices/DeviceSettings";
@@ -10,6 +20,7 @@ import { AutoLevelSettings } from "./level/AutoLevelSettings";
 import { RumbleSettings } from "./noise/RumbleSettings";
 
 const groups: { id: SettingsSection; name: string }[] = [
+  { id: "overview", name: "フィルタ構成" },
   { id: "devices", name: "音声デバイス" },
   { id: "voice", name: "声を変える" },
   { id: "noise", name: "雑音を減らす" },
@@ -35,23 +46,64 @@ export function SettingsPanel() {
         ))}
       </nav>
       <div className="settings-content">
-        <fieldset className="settings" disabled={locked}>
-          {group === "devices" && <DeviceSettings />}
-          {group === "voice" && <VoiceSettings />}
-          {group === "noise" && (
-            <>
-              <RumbleSettings />
-              <NoiseGateSettings />
-              <DeEsserSettings />
-            </>
-          )}
-          {group === "tone" && (
-            <>
-              <EqSettings />
-              <AutoLevelSettings />
-            </>
-          )}
-        </fieldset>
+        {group === "overview" ? (
+          <FilterOverview
+            onSelect={(stageId) => {
+              const section = settingsSections.find((candidate) => candidate === stageId);
+              if (section) {
+                setGroup(section);
+              }
+            }}
+          />
+        ) : (
+          <>
+            <button type="button" onClick={() => setGroup("overview")}>
+              フィルタ構成へ戻る
+            </button>
+            <fieldset className="settings" disabled={locked}>
+              {group === "inputEq" && (
+                <>
+                  <EqSettings filter="inputEq" title="入力EQ" />
+                  <RumbleSettings />
+                </>
+              )}
+              {group === "preConversionEq" && (
+                <EqSettings filter="preConversionEq" title="変換前EQ" />
+              )}
+              {group === "postConversionEq" && <EqSettings />}
+              {group === "noiseGate" && <NoiseGateSettings />}
+              {group === "deesser" && <DeEsserSettings />}
+              {group === "level" && <AutoLevelSettings />}
+              {group === "compressor" && <CompressorSettings />}
+              {group === "postCompressor" && <AutoLevelSettings part="compressor" />}
+              {group === "autoLevel" && <AutoLevelSettings part="auto" />}
+              {group === "limiter" && <LimiterSettings />}
+              {group === "dereverb" && <DereverbSettings />}
+              {group === "reverb" && <ReverbSettings />}
+              {group === "devices" && <DeviceSettings />}
+              {group === "voice" && <VoiceSettings />}
+              {group === "noise" && (
+                <>
+                  <NoiseGateSettings />
+                  <DeEsserSettings />
+                  <DereverbSettings />
+                </>
+              )}
+              {group === "tone" && (
+                <>
+                  <EqSettings filter="inputEq" title="入力EQ" />
+                  <RumbleSettings />
+                  <LimiterSettings />
+                  <CompressorSettings />
+                  <EqSettings filter="preConversionEq" title="変換前EQ" />
+                  <EqSettings />
+                  <ReverbSettings />
+                  <AutoLevelSettings />
+                </>
+              )}
+            </fieldset>
+          </>
+        )}
       </div>
     </div>
   );

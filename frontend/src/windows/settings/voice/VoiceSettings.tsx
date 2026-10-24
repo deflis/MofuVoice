@@ -9,6 +9,8 @@ import { voiceSchema, type VoiceValues } from "./schema";
 
 export function VoiceSettings() {
   const {
+    enabled,
+    setEnabled,
     pitchUnit,
     setPitchUnit,
     psolaPitchEstimator,
@@ -49,146 +51,157 @@ export function VoiceSettings() {
   return (
     <section>
       <h2>声の変換</h2>
-      <DetailsPopup title="声の変換" buttonLabel="詳細設定">
-        <label>
-          <span id={pitchAlgorithmId}>ピッチ変換方式</span>
-          <select
-            aria-labelledby={pitchAlgorithmId}
-            value={pitchAlgorithm}
-            onChange={(event) =>
-              setPitchAlgorithm(v.parse(voiceSchema.entries.pitchAlgorithm, event.target.value))
-            }
-          >
-            <optgroup label="フェーズボコーダー">
-              <option value="phase-locked">位相ロック（標準）</option>
-              <option value="pvsola-sync">スペクトル位相同期</option>
-            </optgroup>
-            <optgroup label="PVSOLA">
-              <option value="pvsola">PVSOLA</option>
-            </optgroup>
-            <optgroup label="PSOLA">
-              <option value="td-psola">TD-PSOLA＋フェーズボコーダー</option>
-              <option value="td-psola-resampled">TD-PSOLA＋リサンプリング</option>
-              <option value="fd-psola">FD-PSOLA</option>
-            </optgroup>
-          </select>
-        </label>
-        <p>
-          同じピッチとフォルマントの設定で聞き比べてください。変更は保存後、次の音声開始時に反映します。
-        </p>
-        <p>{algorithmDescription(pitchAlgorithm)}</p>
-        <WindowControls
-          title="ボコーダーのウィンドウ"
-          analysis={analysisWindow}
-          synthesis={synthesisWindow}
-          setAnalysis={setAnalysisWindow}
-          setSynthesis={setSynthesisWindow}
-          disabled={!vocoder}
-        />
-        <p>
-          位相ロック（標準）・スペクトル位相同期と、TD-PSOLA＋フェーズボコーダー／FD-PSOLAのフォルマント補正に使います。
-        </p>
-        <label>
-          <span id={pitchEstimatorId}>PSOLAのピッチ推定</span>
-          <select
-            aria-labelledby={pitchEstimatorId}
-            value={psolaPitchEstimator}
-            disabled={!psola}
-            onChange={(event) =>
-              setPsolaPitchEstimator(
-                v.parse(voiceSchema.entries.psolaPitchEstimator, event.target.value),
-              )
-            }
-          >
-            <optgroup label="YIN">
-              <option value="yin">YIN（標準）</option>
-            </optgroup>
-            <optgroup label="MPM">
-              <option value="mpm">MPM</option>
-              <option value="mpm-fft">MPM＋FFT</option>
-            </optgroup>
-            <optgroup label="NCCF">
-              <option value="nccf">NCCF</option>
-            </optgroup>
-          </select>
-        </label>
-        <p>
-          声によって推定精度が変わります。低音や息の多い声で聞き比べてください。追加の解析待ちはありません。MPMは正規化相関、MPM＋FFTはFFT自己相関で、ウィンドウ長によって計算負荷が変わります。NCCFは過去の周期も参考にします。
-        </p>
-        <WindowControls
-          title="PSOLAのウィンドウ"
-          analysis={psolaAnalysisWindow}
-          synthesis={psolaSynthesisWindow}
-          setAnalysis={setPsolaAnalysisWindow}
-          setSynthesis={setPsolaSynthesisWindow}
-          disabled={!psola}
-        />
-        <p>
-          TD-PSOLA＋フェーズボコーダーとTD-PSOLA＋リサンプリングはピッチ周期（波形単位）を基準にウィンドウを適用し、FD-PSOLAは解析ウィンドウと合成ウィンドウのサイズを設定します。設定値によって遅延時間や音質が変化します。
-        </p>
-        <p>
-          変換時のDSP遅延の合計：{((delay / sampleRate) * 1000).toFixed(1)}{" "}
-          ms。高さとフォルマントがともに0の場合は0
-          msです。入出力バッファーと機器の遅延は含みません。
-        </p>
-        <p>変更は保存後、次の音声開始時に反映します。PVSOLAは固定長です。</p>
-      </DetailsPopup>
-      <label>
-        ピッチの表示単位
-        <select
-          value={pitchUnit}
-          onChange={(event) =>
-            setPitchUnit(v.parse(voiceSchema.entries.pitchUnit, event.target.value))
-          }
-        >
-          <option value="semitones">半音</option>
-          <option value="percent">パーセント</option>
-        </select>
-      </label>
-      {pitchUnit === "percent" && (
-        <p>100%が元の高さ、50%で1オクターブ下、200%で1オクターブ上です。</p>
-      )}
-      <SemitonesInput
-        percent={pitchUnit === "percent"}
-        lowerLabel="低く"
-        upperLabel="高く"
-        label="声の高さ（ピッチ）"
-        value={pitch}
-        onChange={(value) => setPitch(value)}
-      />
-      <fieldset className="settings" disabled={!preserveFormants}>
-        <SemitonesInput
-          label="フォルマント"
-          lowerLabel="太く"
-          upperLabel="明るく"
-          value={formantShift}
-          onChange={(value) => setFormantShift(value)}
-        />
-      </fieldset>
-      <p>声の太さ・明るさです。残響（リバーブ）とは別の調整です。</p>
-      <button
-        type="button"
-        onClick={() => {
-          setPitch(0);
-          setFormantShift(0);
-        }}
-      >
-        元の声に戻す
-      </button>
       <label className="check">
         <input
           type="checkbox"
-          checked={preserveFormants}
-          disabled={tdPsola}
-          onChange={(event) => {
-            setPreserveFormants(event.target.checked);
-            if (!event.target.checked) {
-              setFormantShift(0);
-            }
-          }}
+          checked={enabled}
+          onChange={(event) => setEnabled(event.target.checked)}
         />
-        フォルマントを独立して調整する
+        有効
       </label>
+      {!enabled && <p>バイパス中。変換量は保持されます。</p>}
+      <fieldset className="settings" disabled={!enabled}>
+        <DetailsPopup title="声の変換" buttonLabel="詳細設定">
+          <label>
+            <span id={pitchAlgorithmId}>ピッチ変換方式</span>
+            <select
+              aria-labelledby={pitchAlgorithmId}
+              value={pitchAlgorithm}
+              onChange={(event) =>
+                setPitchAlgorithm(v.parse(voiceSchema.entries.pitchAlgorithm, event.target.value))
+              }
+            >
+              <optgroup label="フェーズボコーダー">
+                <option value="phase-locked">位相ロック（標準）</option>
+                <option value="pvsola-sync">スペクトル位相同期</option>
+              </optgroup>
+              <optgroup label="PVSOLA">
+                <option value="pvsola">PVSOLA</option>
+              </optgroup>
+              <optgroup label="PSOLA">
+                <option value="td-psola">TD-PSOLA＋フェーズボコーダー</option>
+                <option value="td-psola-resampled">TD-PSOLA＋リサンプリング</option>
+                <option value="fd-psola">FD-PSOLA</option>
+              </optgroup>
+            </select>
+          </label>
+          <p>
+            同じピッチとフォルマントの設定で聞き比べてください。変更は保存後、次の音声開始時に反映します。
+          </p>
+          <p>{algorithmDescription(pitchAlgorithm)}</p>
+          <WindowControls
+            title="ボコーダーのウィンドウ"
+            analysis={analysisWindow}
+            synthesis={synthesisWindow}
+            setAnalysis={setAnalysisWindow}
+            setSynthesis={setSynthesisWindow}
+            disabled={!vocoder}
+          />
+          <p>
+            位相ロック（標準）・スペクトル位相同期と、TD-PSOLA＋フェーズボコーダー／FD-PSOLAのフォルマント補正に使います。
+          </p>
+          <label>
+            <span id={pitchEstimatorId}>PSOLAのピッチ推定</span>
+            <select
+              aria-labelledby={pitchEstimatorId}
+              value={psolaPitchEstimator}
+              disabled={!psola}
+              onChange={(event) =>
+                setPsolaPitchEstimator(
+                  v.parse(voiceSchema.entries.psolaPitchEstimator, event.target.value),
+                )
+              }
+            >
+              <optgroup label="YIN">
+                <option value="yin">YIN（標準）</option>
+              </optgroup>
+              <optgroup label="MPM">
+                <option value="mpm">MPM</option>
+                <option value="mpm-fft">MPM＋FFT</option>
+              </optgroup>
+              <optgroup label="NCCF">
+                <option value="nccf">NCCF</option>
+              </optgroup>
+            </select>
+          </label>
+          <p>
+            声によって推定精度が変わります。低音や息の多い声で聞き比べてください。追加の解析待ちはありません。MPMは正規化相関、MPM＋FFTはFFT自己相関で、ウィンドウ長によって計算負荷が変わります。NCCFは過去の周期も参考にします。
+          </p>
+          <WindowControls
+            title="PSOLAのウィンドウ"
+            analysis={psolaAnalysisWindow}
+            synthesis={psolaSynthesisWindow}
+            setAnalysis={setPsolaAnalysisWindow}
+            setSynthesis={setPsolaSynthesisWindow}
+            disabled={!psola}
+          />
+          <p>
+            TD-PSOLA＋フェーズボコーダーとTD-PSOLA＋リサンプリングはピッチ周期（波形単位）を基準にウィンドウを適用し、FD-PSOLAは解析ウィンドウと合成ウィンドウのサイズを設定します。設定値によって遅延時間や音質が変化します。
+          </p>
+          <p>
+            変換時のDSP遅延の合計：{((delay / sampleRate) * 1000).toFixed(1)}{" "}
+            ms。高さとフォルマントがともに0の場合は0
+            msです。入出力バッファーと機器の遅延は含みません。
+          </p>
+          <p>変更は保存後、次の音声開始時に反映します。PVSOLAは固定長です。</p>
+        </DetailsPopup>
+        <label>
+          ピッチの表示単位
+          <select
+            value={pitchUnit}
+            onChange={(event) =>
+              setPitchUnit(v.parse(voiceSchema.entries.pitchUnit, event.target.value))
+            }
+          >
+            <option value="semitones">半音</option>
+            <option value="percent">パーセント</option>
+          </select>
+        </label>
+        {pitchUnit === "percent" && (
+          <p>100%が元の高さ、50%で1オクターブ下、200%で1オクターブ上です。</p>
+        )}
+        <SemitonesInput
+          percent={pitchUnit === "percent"}
+          lowerLabel="低く"
+          upperLabel="高く"
+          label="声の高さ（ピッチ）"
+          value={pitch}
+          onChange={(value) => setPitch(value)}
+        />
+        <fieldset className="settings" disabled={!preserveFormants}>
+          <SemitonesInput
+            label="フォルマント"
+            lowerLabel="太く"
+            upperLabel="明るく"
+            value={formantShift}
+            onChange={(value) => setFormantShift(value)}
+          />
+        </fieldset>
+        <p>声の太さ・明るさです。残響（リバーブ）とは別の調整です。</p>
+        <button
+          type="button"
+          onClick={() => {
+            setPitch(0);
+            setFormantShift(0);
+          }}
+        >
+          元の声に戻す
+        </button>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={preserveFormants}
+            disabled={tdPsola}
+            onChange={(event) => {
+              setPreserveFormants(event.target.checked);
+              if (!event.target.checked) {
+                setFormantShift(0);
+              }
+            }}
+          />
+          フォルマントを独立して調整する
+        </label>
+      </fieldset>
     </section>
   );
 }

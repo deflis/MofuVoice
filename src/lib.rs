@@ -9,6 +9,11 @@ pub mod cli;
 #[cfg(feature = "cpal-backend")]
 mod cpal_backend;
 pub mod deesser;
+pub mod limiter;
+pub mod compressor;
+pub mod dereverb;
+pub mod reverb;
+mod filter_settings;
 pub mod dsp;
 pub mod eq;
 pub mod gate;

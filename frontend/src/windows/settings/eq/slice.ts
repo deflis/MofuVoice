@@ -3,7 +3,7 @@ import type { SettingsStore } from "../store";
 import type { EqValues } from "./schema";
 import { copyEqBands } from "./values";
 
-type EqState = EqValues & {
+export type EqState = EqValues & {
   setEnabled: (value: EqValues["enabled"]) => void;
   setMode: (value: EqValues["mode"]) => void;
   setBands: (value: EqValues["bands"]) => void;
@@ -13,9 +13,10 @@ type EqState = EqValues & {
   setBandQ: (index: number, value: number) => void;
   reset: () => void;
 };
-export type EqSlice = { eq: EqState };
-export const createEqSlice: StateCreator<SettingsStore, [], [], EqSlice> = (set) => ({
-  eq: {
+export type EqKey = "eq" | "inputEq" | "preConversionEq";
+export type EqSlice = Record<EqKey, EqState>;
+export const createEqSlice: StateCreator<SettingsStore, [], [], EqSlice> = (set) => {
+  const create = (key: EqKey): EqState => ({
     enabled: false,
     mode: "simple",
     bands: [
@@ -24,35 +25,40 @@ export const createEqSlice: StateCreator<SettingsStore, [], [], EqSlice> = (set)
       { frequency: 8000, gainDb: 0, q: 0.7 },
     ],
     outputDb: 0,
-    setEnabled: (value) => set((state) => ({ eq: { ...state.eq, enabled: value } })),
-    setMode: (value) => set((state) => ({ eq: { ...state.eq, mode: value } })),
-    setBands: (value) => set((state) => ({ eq: { ...state.eq, bands: copyEqBands(value) } })),
-    setOutputDb: (value) => set((state) => ({ eq: { ...state.eq, outputDb: value } })),
+    setEnabled: (value) => set((state) => ({ [key]: { ...state[key], enabled: value } })),
+    setMode: (value) => set((state) => ({ [key]: { ...state[key], mode: value } })),
+    setBands: (value) => set((state) => ({ [key]: { ...state[key], bands: copyEqBands(value) } })),
+    setOutputDb: (value) => set((state) => ({ [key]: { ...state[key], outputDb: value } })),
     setBandFrequency: (index, value) =>
       set((state) => {
-        const bands = copyEqBands(state.eq.bands);
+        const bands = copyEqBands(state[key].bands);
         bands[index].frequency = value;
-        return { eq: { ...state.eq, bands } };
+        return { [key]: { ...state[key], bands } };
       }),
     setBandGainDb: (index, value) =>
       set((state) => {
-        const bands = copyEqBands(state.eq.bands);
+        const bands = copyEqBands(state[key].bands);
         bands[index].gainDb = value;
-        return { eq: { ...state.eq, bands } };
+        return { [key]: { ...state[key], bands } };
       }),
     setBandQ: (index, value) =>
       set((state) => {
-        const bands = copyEqBands(state.eq.bands);
+        const bands = copyEqBands(state[key].bands);
         bands[index].q = value;
-        return { eq: { ...state.eq, bands } };
+        return { [key]: { ...state[key], bands } };
       }),
     reset: () =>
       set((state) => ({
-        eq: {
-          ...state.eq,
-          bands: state.eq.bands.map((band) => ({ ...band, gainDb: 0 })),
+        [key]: {
+          ...state[key],
+          bands: state[key].bands.map((band) => ({ ...band, gainDb: 0 })),
           outputDb: 0,
         },
       })),
-  },
-});
+  });
+  return {
+    eq: create("eq"),
+    inputEq: create("inputEq"),
+    preConversionEq: create("preConversionEq"),
+  };
+};

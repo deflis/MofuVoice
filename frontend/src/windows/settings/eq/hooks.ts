@@ -1,2 +1,3 @@
 import { useSettingsStore } from "../store";
-export const useEqSettings = () => useSettingsStore((state) => state.eq);
+import type { EqKey } from "./slice";
+export const useEqSettings = (key: EqKey = "eq") => useSettingsStore((state) => state[key]);

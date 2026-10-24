@@ -3,6 +3,15 @@ use std::error::Error;
 
 #[derive(Debug, PartialEq)]
 pub struct Options {
+    pub input_eq: crate::eq::EqSettings,
+    pub input_eq_mode: String,
+    pub pre_conversion_eq: crate::eq::EqSettings,
+    pub pre_conversion_eq_mode: String,
+    pub voice_enabled: bool,
+    pub compressor: crate::compressor::CompressorSettings,
+    pub limiter: crate::limiter::LimiterSettings,
+    pub dereverb: crate::dereverb::DereverbSettings,
+    pub reverb: crate::reverb::ReverbSettings,
     pub eq: crate::eq::EqSettings,
     pub eq_mode: String,
     pub pitch_unit: String,
@@ -32,6 +41,15 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Self {
         Self {
+            input_eq: crate::eq::EqSettings::default(),
+            input_eq_mode: "simple".into(),
+            pre_conversion_eq: crate::eq::EqSettings::default(),
+            pre_conversion_eq_mode: "simple".into(),
+            voice_enabled: true,
+            compressor: crate::compressor::CompressorSettings::default(),
+            limiter: crate::limiter::LimiterSettings::default(),
+            dereverb: crate::dereverb::DereverbSettings::default(),
+            reverb: crate::reverb::ReverbSettings::default(),
             eq: crate::eq::EqSettings::default(),
             eq_mode: "simple".into(),
             pitch_unit: "semitones".into(),
@@ -77,6 +95,8 @@ impl Options {
         let mut window_given = [false; 4];
         let mut formant_given = false;
         let mut shift_given = false;
+        let mut filter_bands = std::collections::BTreeMap::new();
+        let mut filters_given = std::collections::HashSet::new();
         let mut eq_given = std::collections::HashSet::new();
         let mut eq_bands = std::collections::BTreeMap::new();
         let mut level_given = false;
@@ -92,6 +112,19 @@ impl Options {
         let mut gate_release_given = false;
         while let Some(arg) = args.next() {
             match arg.as_str() {
+                flag if crate::filter_settings::is_flag(flag) => {
+                    if !filters_given.insert(flag.to_string()) {
+                        return Err(format!("Repeated argument {flag}").into());
+                    }
+                    let value = args
+                        .next()
+                        .ok_or_else(|| format!("{flag} requires a value"))?;
+                    if let Some((prefix, number)) = flag.rsplit_once("-eq-band") {
+                        filter_bands.insert((prefix.to_string(), number.parse::<usize>()?), value);
+                    } else {
+                        crate::filter_settings::set(&mut options, flag, &value)?;
+                    }
+                }
                 flag if crate::eq::is_flag(flag) => {
                     if !eq_given.insert(flag.to_string()) {
                         return Err(format!("Repeated argument {flag}").into());
@@ -382,6 +415,9 @@ impl Options {
                 return Err("EQ bands must be contiguous".into());
             }
         }
+        for ((prefix, index), value) in filter_bands {
+            crate::filter_settings::set(&mut options, &format!("{prefix}-eq-band{index}"), &value)?;
+        }
         options.validate()?;
         options.output_channels.sort_unstable();
         let gate_tuned = gate_threshold_given || gate_attack_given || gate_release_given;
@@ -396,6 +432,7 @@ impl Options {
                     || window_given.iter().any(|given| *given)
                     || formant_given
                     || shift_given
+                    || !filters_given.is_empty()
                     || !eq_given.is_empty()
                     || level_given
                     || compressor_given
@@ -436,6 +473,17 @@ impl Options {
             return Err(crate::pitch::InvalidFormant.into());
         }
         self.eq.validate()?;
+        self.input_eq.validate()?;
+        self.pre_conversion_eq.validate()?;
+        self.compressor.validate()?;
+        self.limiter.validate()?;
+        self.dereverb.validate()?;
+        self.reverb.validate()?;
+        for mode in [&self.input_eq_mode, &self.pre_conversion_eq_mode] {
+            if !["simple", "pro"].contains(&mode.as_str()) {
+                return Err("EQ mode requires simple or pro".into());
+            }
+        }
         if !["semitones", "percent"].contains(&self.pitch_unit.as_str()) {
             return Err("Pitch display unit requires semitones or percent".into());
         }
