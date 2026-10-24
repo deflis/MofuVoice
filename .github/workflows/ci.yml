@@ -78,7 +78,9 @@ jobs:
       - name: Check frontend formatting
         run: pnpm exec oxfmt --check frontend package.json tauri.conf.json capabilities .oxlintrc.json .oxfmtrc.json .github/workflows
       - name: Lint frontend
-        run: pnpm exec oxlint --deny-warnings frontend
+        run: pnpm exec oxlint --deny-warnings --ignore-pattern 'frontend/generated/**' frontend
+      - name: Check CSS Module declarations
+        run: pnpm check:css
       - name: Check frontend types
         run: pnpm typecheck
       - name: Frontend regression tests

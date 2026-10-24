@@ -23,9 +23,9 @@ pnpm desktop:build
 
 ## CSS Modules
 
-画面の基本要素スタイルは `frontend/src/styles.css` に置き、画面単位の共通スタイルは `windows/main/main.module.css`、`windows/log/log.module.css`、`windows/settings/settings.module.css` に分けています。EQ、デエッサー、チャンネル割り当て、詳細ポップアップなど固有のスタイルは各機能ディレクトリの CSS Module に置き、フィルタ概要のカード群は `overview/overview.module.css` を共有します。コンポーネントでは担当する CSS Module を `styles` として import して `className={styles.check}` のように参照します。
+画面の基本要素スタイルは `frontend/src/styles.css` に置き、画面単位の共通スタイルは `windows/main`、`windows/log`、`windows/settings` の CSS Module に分けています。EQ、デエッサー、チャンネル割り当て、詳細ポップアップなど固有のスタイルは各機能ディレクトリの CSS Module に置き、フィルタ概要のカード群は `overview/overview.module.css` を共有します。コンポーネントでは担当する CSS Module を `styles` として import して `className={styles.check}` のように参照します。
 
-[CSS Modules Kit](https://github.com/mizdra/css-modules-kit) でクラス名の型を生成します。`pnpm dev` は Vite と型生成の監視を同時に起動します。`pnpm typecheck` と `pnpm build` は実行前に型を生成します。手動で生成する場合は `pnpm generate:css` を実行してください。生成先の `frontend/generated/` は Git 管理対象外です。
+[CSS Modules Kit](https://github.com/mizdra/css-modules-kit) でクラス名の型を生成し、生成先の `frontend/generated/` は Git 管理します。`pnpm dev` は Vite と型生成の監視を同時に起動します。CSS Module を変更したら `pnpm generate:css` を実行して型定義を更新してください。`pnpm check:css` は生成結果がコミット済みの型定義と一致するか確認します。`pnpm typecheck` と `pnpm build` はコミット済みの型定義を使います。
 
 Kit 1.4 は TypeScript 5/6 の JavaScript API を使うため、`frontend/tooling/css-modules-kit` に TypeScript 6 と一緒に分離しています。アプリの型チェックには引き続きルートの TypeScript 7 を使います。依存関係はルートの `pnpm install` でまとめてインストールされます。
 
