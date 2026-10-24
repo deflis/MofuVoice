@@ -1,5 +1,5 @@
 //! Offline pitch rendering. Accepts mono 48 kHz PCM16 WAV only.
-use rust_low_latency_voice_changer::{
+use mofu_voice::{
     audio::{AudioProcessor, DspSettings},
     cli::Options,
     RATE,

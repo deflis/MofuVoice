@@ -53,6 +53,6 @@ jobs:
         with:
           name: windows-x64-release
           path: |
-            target/release/rust-low-latency-voice-changer-gui.exe
-            target/release/rust-low-latency-voice-changer-cli.exe
+            target/release/MofuVoice.exe
+            target/release/mofu-voice-cli.exe
           if-no-files-found: error

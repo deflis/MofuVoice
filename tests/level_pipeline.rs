@@ -1,4 +1,4 @@
-use rust_low_latency_voice_changer::{
+use mofu_voice::{
     gate::{GateSettings, GateThreshold},
     level::LevelSettings,
     pitch::PitchShifter,
@@ -32,8 +32,8 @@ fn gate_pitch_and_level_chain_is_independent_of_callback_boundaries() {
                     pitch,
                     true,
                     formant,
-                    rust_low_latency_voice_changer::pitch::PitchAlgorithm::PhaseLocked,
-                    rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+                    mofu_voice::pitch::PitchAlgorithm::PhaseLocked,
+                    mofu_voice::pitch::SpectralWindows::default(),
                     Default::default(),
                 )
                 .unwrap();

@@ -1,9 +1,9 @@
-use rust_low_latency_voice_changer::pitch::{PitchAlgorithm, PitchSettings, SpectralWindows};
+use mofu_voice::pitch::{PitchAlgorithm, PitchSettings, SpectralWindows};
 
 // Keep the reference cascade at the same precision as the internal connection.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 struct Exact(f64);
-impl rust_low_latency_voice_changer::dsp::Sample for Exact {
+impl mofu_voice::dsp::Sample for Exact {
     fn normalized(self) -> f64 {
         self.0
     }

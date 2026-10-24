@@ -1,5 +1,5 @@
-use rust_low_latency_voice_changer::pitch::{pitch_ratio, PitchAlgorithm, PitchShifter};
-use rust_low_latency_voice_changer::RATE;
+use mofu_voice::pitch::{pitch_ratio, PitchAlgorithm, PitchShifter};
+use mofu_voice::RATE;
 
 fn peak_frequency(samples: &[f32], low: f64, high: f64) -> f64 {
     let mut best = (0.0, 0.0);
@@ -35,7 +35,7 @@ fn paper_pvsola_time_stretch_then_resampling_moves_pitch() {
         false,
         0.0,
         PitchAlgorithm::Pvsola,
-        rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+        mofu_voice::pitch::SpectralWindows::default(),
         Default::default(),
     )
     .unwrap();
@@ -79,7 +79,7 @@ fn formant_preservation_keeps_the_first_resonance_after_pitch_resampling() {
         true,
         0.0,
         PitchAlgorithm::Pvsola,
-        rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+        mofu_voice::pitch::SpectralWindows::default(),
         Default::default(),
     )
     .unwrap()
@@ -98,7 +98,7 @@ fn paper_pvsola_survives_pitch_transitions_and_reports_its_delay() {
         true,
         0.0,
         PitchAlgorithm::Pvsola,
-        rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+        mofu_voice::pitch::SpectralWindows::default(),
         Default::default(),
     )
     .unwrap();
@@ -133,7 +133,7 @@ fn neutral_interval_does_not_replay_old_pvsola_audio() {
         false,
         0.0,
         PitchAlgorithm::Pvsola,
-        rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+        mofu_voice::pitch::SpectralWindows::default(),
         Default::default(),
     )
     .unwrap();
@@ -159,7 +159,7 @@ fn neutral_to_pitched_keeps_live_audio_until_the_delayed_path_is_ready() {
         false,
         0.0,
         PitchAlgorithm::Pvsola,
-        rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+        mofu_voice::pitch::SpectralWindows::default(),
         Default::default(),
     )
     .unwrap();

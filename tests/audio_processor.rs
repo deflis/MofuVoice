@@ -1,4 +1,4 @@
-use rust_low_latency_voice_changer::{
+use mofu_voice::{
     audio::{AudioProcessor, DspSettings},
     cli::Options,
     dsp::Sample,
@@ -120,12 +120,12 @@ fn pipeline_matches_rumble_gate_deesser_pitch_eq_level_order_across_variable_blo
         "3000,2,0.8",
     ];
     let dsp = settings(&args);
-    let mut rumble = rust_low_latency_voice_changer::rumble::RumbleFilter::new(dsp.rumble_filter);
+    let mut rumble = mofu_voice::rumble::RumbleFilter::new(dsp.rumble_filter);
     let mut gate: NoiseGate = dsp.gate.build().unwrap();
     let mut pitch = dsp.pitch.build().unwrap();
     let mut eq = dsp.eq.build().unwrap();
     let mut level = dsp.level.build().unwrap();
-    let mut deesser = rust_low_latency_voice_changer::deesser::DeEsser::new(dsp.deesser);
+    let mut deesser = mofu_voice::deesser::DeEsser::new(dsp.deesser);
     let mut processor = AudioProcessor::<f32>::new(RATE, 512, dsp).unwrap();
     let input: Vec<_> = (0..12000).map(|i| (i as f32 * 0.03).sin() * 0.1).collect();
     let mut gated = vec![0.0; input.len()];
@@ -180,7 +180,7 @@ fn rumble_only_filters_before_neutral_pitch_without_gate_or_level() {
         .map(|i| (0.2 * (std::f64::consts::TAU * 20.0 * i as f64 / RATE as f64).sin()) as f32)
         .collect();
     let mut expected = input.clone();
-    rust_low_latency_voice_changer::rumble::RumbleFilter::new(true).process_in_place(&mut expected);
+    mofu_voice::rumble::RumbleFilter::new(true).process_in_place(&mut expected);
     let mut processor =
         AudioProcessor::<f32>::new(RATE, 512, settings(&["--rumble-filter", "on"])).unwrap();
     let mut actual = vec![0.0; input.len()];
@@ -262,7 +262,7 @@ fn deesser_mode_only_changes_presentation_and_custom_parameters_reach_audio() {
         .collect();
     let mut reference = input.clone();
     let parameters = settings(&common).deesser_parameters;
-    rust_low_latency_voice_changer::deesser::DeEsser::with_parameters(true, parameters)
+    mofu_voice::deesser::DeEsser::with_parameters(true, parameters)
         .unwrap()
         .process_in_place(&mut reference);
     for mode in ["simple", "pro"] {
@@ -279,7 +279,7 @@ fn deesser_mode_only_changes_presentation_and_custom_parameters_reach_audio() {
 
 #[test]
 fn selected_rates_preserve_neutral_bits_and_wet_block_continuity() {
-    for rate in rust_low_latency_voice_changer::SAMPLE_RATES {
+    for rate in mofu_voice::SAMPLE_RATES {
         let input = [f32::from_bits(0x7fc01234), -0.0, f32::from_bits(1), 0.25];
         let mut output = [0.0; 4];
         let mut processor = AudioProcessor::new(rate, 4, settings(&[])).unwrap();
@@ -352,7 +352,7 @@ fn selected_rates_keep_filter_frequencies_and_envelope_times() {
     }
     let mut gate_levels = Vec::new();
     let mut auto_levels = Vec::new();
-    for rate in rust_low_latency_voice_changer::SAMPLE_RATES {
+    for rate in mofu_voice::SAMPLE_RATES {
         let tone = |hz: f64| -> Vec<f32> {
             (0..rate)
                 .map(|i| (0.1 * (std::f64::consts::TAU * hz * i as f64 / rate as f64).sin()) as f32)

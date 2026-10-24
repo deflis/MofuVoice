@@ -1,4 +1,4 @@
-use rust_low_latency_voice_changer::{level::LevelSettings, RATE};
+use mofu_voice::{level::LevelSettings, RATE};
 use std::{hint::black_box, time::Instant};
 
 fn main() {

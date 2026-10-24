@@ -1,4 +1,4 @@
-use rust_low_latency_voice_changer::pitch::{PitchAlgorithm, PitchSettings, SpectralWindows};
+use mofu_voice::pitch::{PitchAlgorithm, PitchSettings, SpectralWindows};
 
 fn configurations() -> impl Iterator<Item = SpectralWindows> {
     [1024, 2048, 4096, 8192].into_iter().flat_map(|analysis| {
