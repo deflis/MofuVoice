@@ -66,6 +66,17 @@ impl Limiter {
         if !self.enabled {
             return;
         }
+        // At unity gain, a finite block wholly below the ceiling is an exact
+        // dry pass: the per-sample loop would leave both samples and gain
+        // unchanged. Check that common case once before entering the limiter.
+        if self.gain == 1.0
+            && samples.iter().all(|sample| {
+                let input = sample.normalized();
+                input.is_finite() && input.abs() <= self.ceiling
+            })
+        {
+            return;
+        }
         for sample in samples {
             let input = sample.normalized();
             if !input.is_finite() {
@@ -195,6 +206,64 @@ mod tests {
             assert_eq!(input[2].to_bits(), (-0.0_f32).to_bits());
             assert_eq!(input[3], 0.1);
         }
+    }
+
+    #[test]
+    fn unity_gain_below_ceiling_preserves_bits_for_all_formats() {
+        let mut dsp = active().build().unwrap();
+        let input = [
+            0.0_f32,
+            -0.0,
+            f32::from_bits(1),
+            -f32::from_bits(1),
+            0.25,
+            -0.75,
+        ];
+        let mut output = input;
+        dsp.process_in_place(&mut output);
+        assert_eq!(input.map(f32::to_bits), output.map(f32::to_bits));
+        assert_eq!(dsp.gain, 1.0);
+
+        let input = [0_i16, 1, -1, 20_000, -20_000];
+        let mut output = input;
+        dsp.process_in_place(&mut output);
+        assert_eq!(input, output);
+
+        let input = [0_i32, 1, -1, 1_500_000_000, -1_500_000_000];
+        let mut output = input;
+        dsp.process_in_place(&mut output);
+        assert_eq!(input, output);
+        assert_eq!(dsp.gain, 1.0);
+    }
+
+    #[test]
+    fn unsafe_blocks_fall_back_to_normal_limiter_processing() {
+        let settings = LimiterSettings {
+            ceiling_db: -6.0,
+            ..active()
+        };
+        let ceiling = amplitude(settings.ceiling_db);
+        let ceiling_f32 = ceiling as f32;
+        let above_ceiling = f32::from_bits(ceiling_f32.to_bits() + 1);
+        assert!(above_ceiling as f64 > ceiling);
+
+        let mut dsp = settings.build().unwrap();
+        let mut input = [0.1_f32, above_ceiling];
+        dsp.process_in_place(&mut input);
+        assert!(input[1].abs() as f64 <= ceiling + 1e-7);
+        assert!(dsp.gain < 1.0);
+
+        // A later block remains limited while the gain releases.
+        let mut input = [0.5_f32; 4];
+        dsp.process_in_place(&mut input);
+        assert!(input.iter().all(|sample| *sample < 0.5));
+
+        // Invalid values must take the normal path and reset limiter history.
+        let mut invalid = [f32::NAN, 0.25];
+        dsp.process_in_place(&mut invalid);
+        assert_eq!(invalid[0], 0.0);
+        assert_eq!(invalid[1], 0.25);
+        assert_eq!(dsp.gain, 1.0);
     }
 
     #[test]
