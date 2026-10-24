@@ -1,5 +1,7 @@
 # Voicemeeter シリーズ 設定ガイド
 
+[READMEに戻る](../README.md) / [はじめてのセットアップ](quickstart.md)
+
 Voicemeeter **Banana** または **Potato** の **Insert Virtual ASIO** を使い、マイク入力に本アプリ（もふボイス）を差し込みます。
 
 > **VoiceMeeter（無料版）** には Insert ドライバがありません。Banana または Potato が必要です。
@@ -80,7 +82,7 @@ Potato では Banana 用の Insert 名ではなく、**Potato 用**を選びま�
 5. **音声を開始** を押してマイクに向かって話し、A1 または B1 経由で声が聞こえることを確認します。
 6. **音声を停止** を押してからピッチなどを変更し、**設定を保存** → **音声を開始** で聞き比べます。
 
-設定の保存形式などは [README の「はじめに」](../README.md) を参照してください。
+基本的な操作の流れは [はじめてのセットアップ](quickstart.md) を参照してください。
 
 ## 4. 配信・通話への接続例
 

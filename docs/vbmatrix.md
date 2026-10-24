@@ -1,5 +1,7 @@
 # VB-Audio Matrix 設定ガイド
 
+[READMEに戻る](../README.md) / [はじめてのセットアップ](quickstart.md)
+
 VB-Audio Matrix（以下 **Matrix**）の **Virtual ASIO（VASIO）** スロットを使い、マイクなどの音源を本アプリ（もふボイス）に通してから、ヘッドホン・仮想出力・別 ASIO へ送ります。
 
 Voicemeeter の **Insert** に相当する「1本の処理ループ」は、Matrix では **ルーティンググリッド上の VASIO 入出力** で作ります。

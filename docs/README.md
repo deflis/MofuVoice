@@ -1,20 +1,23 @@
-# 利用ガイド
+# 利用ガイド一覧
 
-[GUIの簡単な使い方](../README.md#guiでの使い方) / [詳細な使い方・トラブル対処・CLI](usage.md)
+[READMEに戻る](../README.md)
 
-## 音声の接続ガイド
+もふボイスのユーザー向けドキュメント一覧です。目的に応じて各ガイドを参照してください。
 
-[もふボイス](../README.md) を Voicemeeter または VB-Audio Matrix と組み合わせる手順です。いずれも **ASIO** で接続し、アプリ側は **入力1 → 出力1**（モノラル1本）だけを処理します。
+---
 
-| ガイド | 向いている構成 |
-| --- | --- |
-| [Voicemeeter シリーズ](./voicemeeter.md) | Banana / Potato の **Insert Virtual ASIO** でマイクストリップにボイスチェンジャーを差し込む |
-| [VB-Audio Matrix](./vbmatrix.md) | Matrix の **Virtual ASIO（VASIO）** で送受信し、同じ要領で処理する |
+## ガイド一覧
 
-共通の前提:
+| ガイド | 対象・内容 |
+| :--- | :--- |
+| **[はじめてのセットアップガイド](quickstart.md)** | アプリの起動、マイク・ヘッドホン設定、最初の音出し確認までの最短ステップ |
+| **[声作り・エフェクト活用ガイド](voice-tuning.md)** | 自然な女声を作るためのピッチ・フォルマント調整、ノイズ対策、イコライザーやコンプレッサーの使い方 |
+| **[困ったとき（トラブルシューティング）](troubleshooting.md)** | 音が出ない、二重に聞こえる、音が途切れるなどの症状別対処法 |
+| **[Voicemeeter 連携ガイド](voicemeeter.md)** | Voicemeeter Banana / Potato の Insert Virtual ASIO を使って配信や通話に声を送る手順 |
+| **[VB-Audio Matrix 連携ガイド](vbmatrix.md)** | VB-Audio Matrix の Virtual ASIO（VASIO）を使ったルーティング手順 |
 
-- サンプルレート **48 kHz**（Voicemeeter / Matrix / 本アプリで一致させる）
-- GUI の **バッファサイズ（サンプル）** はまず **512**（設定の **音声デバイス → 詳細設定** で変更し、保存後の音声開始時にエラーが出ないことを確認）
-- Insert / VASIO ドライバは **同時に1つの ASIO アプリだけ** が開けることが多い（本アプリ実行中は他の DAW などを同じドライバで開かない）
+---
 
-公式の Insert 解説: [Connect audio apps to the VoiceMeeter Insert Driver](https://voicemeeter.com/user-guide-connect-audio-apps-to-the-voicemeeter-insert-driver/)
+## 開発者・上級者向け
+
+ソースコードからのビルド手順、CLIツール（`mofu-voice-cli`）の使い方、設定INIファイルの構造、DSPアルゴリズム仕様については [DEVELOPMENT.md](../DEVELOPMENT.md) を参照してください。
