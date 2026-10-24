@@ -1430,6 +1430,7 @@ mod tests {
         assert!(controls.options().is_err());
     }
     #[test]
+    #[allow(clippy::field_reassign_with_default)]
     fn independent_filter_controls_preserve_parameters_and_validate_disabled_values() {
         let mut options = Options::default();
         options.voice_enabled = false;

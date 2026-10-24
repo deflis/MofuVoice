@@ -312,7 +312,7 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
     options.eq.bands.truncate(band_count);
     // Apply additions after legacy parsing; malformed supplied values always fail.
     let defaults = crate::filter_settings::arguments(&Options::default());
-    for pair in defaults.chunks_exact(2) {
+    for pair in defaults.as_chunks::<2>().0 {
         let key = pair[0].trim_start_matches("--").replace('-', "_");
         if let Some(value) = values.get(key.as_str()) {
             crate::filter_settings::set(&mut options, &pair[0], value)?;
@@ -527,7 +527,10 @@ pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>>
         text.push_str(&format!("{key}={value}\n"));
     }
     text.push_str("settings_version=2\n");
-    for pair in crate::filter_settings::arguments(options).chunks_exact(2) {
+    for pair in crate::filter_settings::arguments(options)
+        .as_chunks::<2>()
+        .0
+    {
         text.push_str(&format!(
             "{}={}\n",
             pair[0].trim_start_matches("--").replace('-', "_"),

@@ -36,6 +36,7 @@ unsafe impl GlobalAlloc for CountingAllocator {
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
+#[allow(clippy::field_reassign_with_default)]
 fn configured() -> Options {
     let mut o = Options::default();
     o.rumble_filter = true;
@@ -132,6 +133,7 @@ fn complete_chain_matches_independent_processors_in_all_formats() {
 }
 
 #[test]
+#[allow(clippy::field_reassign_with_default)]
 fn voice_disabled_preserves_bits_with_non_neutral_saved_pitch() {
     let mut o = Options::default();
     o.voice_enabled = false;
