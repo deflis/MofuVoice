@@ -9,6 +9,10 @@ pub(super) fn select() -> Kernel {
     if std::is_x86_feature_detected!("avx2") {
         return vector;
     }
+    #[cfg(target_arch = "aarch64")]
+    if std::arch::is_aarch64_feature_detected!("neon") {
+        return vector_neon;
+    }
     scalar
 }
 
@@ -199,13 +203,91 @@ unsafe fn avx2<const MPM: bool, const REUSE: bool>(input: &[f64], output: &mut [
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+fn vector_neon(input: &[f64], output: &mut [f64], mpm: bool) {
+    assert!(input.len() >= output.len());
+    // SAFETY: selected after NEON detection; loads are bounded by both lags' overlap.
+    unsafe {
+        if mpm {
+            neon::<true, true>(input, output);
+        } else {
+            neon::<false, true>(input, output);
+        }
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn neon<const MPM: bool, const REUSE: bool>(input: &[f64], output: &mut [f64]) {
+    use std::arch::aarch64::*;
+    let length = input.len() - output.len() + 1;
+    let batches = output.len() / 2 * 2;
+    for lag in (0..batches).step_by(2) {
+        let end = if MPM { input.len() - lag - 1 } else { length };
+        let mut sum = vdupq_n_f64(0.0);
+        let mut energy = vdupq_n_f64(0.0);
+        for i in 0..end {
+            let a = vdupq_n_f64(input[i]);
+            // SAFETY: i + lag + 1 < input.len() for every iteration,
+            // including fixed-length YIN's last two-lag batch.
+            let b = unsafe { vld1q_f64(input.as_ptr().add(i + lag)) };
+            if MPM {
+                sum = vaddq_f64(sum, vmulq_f64(a, b));
+                if !REUSE {
+                    energy = vaddq_f64(energy, vaddq_f64(vmulq_f64(a, a), vmulq_f64(b, b)));
+                }
+            } else {
+                let delta = vsubq_f64(a, b);
+                sum = vaddq_f64(sum, vmulq_f64(delta, delta));
+            }
+        }
+        let mut sums = [0.0; 2];
+        let mut energies = [0.0; 2];
+        // SAFETY: both arrays have two writable f64 elements; unaligned stores.
+        unsafe {
+            vst1q_f64(sums.as_mut_ptr(), sum);
+            vst1q_f64(energies.as_mut_ptr(), energy);
+        }
+        for lane in 0..2 {
+            if MPM {
+                // Restore the extra 0..1 samples of each longer overlap in
+                // their original order, rather than padding or rounding it.
+                for i in end..input.len() - lag - lane {
+                    accumulate::<MPM, REUSE>(
+                        input[i],
+                        input[i + lag + lane],
+                        &mut sums[lane],
+                        &mut energies[lane],
+                    );
+                }
+            }
+            output[lag + lane] = normalize::<MPM, REUSE>(sums[lane], energies[lane]);
+        }
+    }
+    for lag in batches..output.len() {
+        let (mut sum, mut energy) = (0.0, 0.0);
+        let end = if MPM { input.len() - lag } else { length };
+        for (&a, &b) in input[..end].iter().zip(&input[lag..lag + end]) {
+            accumulate::<MPM, REUSE>(a, b, &mut sum, &mut energy);
+        }
+        output[lag] = normalize::<MPM, REUSE>(sum, energy);
+    }
+    if MPM && REUSE {
+        normalize_mpm(input, output);
+    }
+}
+
 // Retain the previous arithmetic only in test builds for quality and timing
-// comparisons against the same scalar/AVX2 implementation without energy reuse.
+// comparisons against the same scalar/SIMD implementation without energy reuse.
 #[cfg(test)]
 pub(super) fn select_reference() -> Kernel {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     if std::is_x86_feature_detected!("avx2") {
         return vector_reference;
+    }
+    #[cfg(target_arch = "aarch64")]
+    if std::arch::is_aarch64_feature_detected!("neon") {
+        return vector_reference_neon;
     }
     scalar_reference
 }
@@ -229,6 +311,19 @@ fn vector_reference(input: &[f64], output: &mut [f64], mpm: bool) {
             avx2::<true, false>(input, output);
         } else {
             avx2::<false, false>(input, output);
+        }
+    }
+}
+
+#[cfg(all(test, target_arch = "aarch64"))]
+fn vector_reference_neon(input: &[f64], output: &mut [f64], mpm: bool) {
+    assert!(input.len() >= output.len());
+    // SAFETY: selected after NEON detection; same checked bounds as vector_neon.
+    unsafe {
+        if mpm {
+            neon::<true, false>(input, output);
+        } else {
+            neon::<false, false>(input, output);
         }
     }
 }

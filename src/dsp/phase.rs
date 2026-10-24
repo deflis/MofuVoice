@@ -25,6 +25,12 @@ pub(crate) fn wrap_in_place(values: &mut [f64], vector: bool) {
         unsafe { wrap_avx2(values) };
         return;
     }
+    #[cfg(target_arch = "aarch64")]
+    if vector {
+        // SAFETY: caller selects NEON before processing; kernels check slice bounds.
+        unsafe { wrap_neon(values) };
+        return;
+    }
     let _ = vector;
     for value in values {
         *value = wrap(*value);
@@ -61,6 +67,12 @@ pub(crate) fn angles(input: &[Complex], output: &mut [f64], vector: bool) {
         unsafe { angles_avx2(input, output) };
         return;
     }
+    #[cfg(target_arch = "aarch64")]
+    if vector {
+        // SAFETY: caller selects NEON before processing; kernels check slice bounds.
+        unsafe { angles_neon(input, output) };
+        return;
+    }
     let _ = vector;
     for (value, angle) in input.iter().zip(output) {
         *angle = value.im.atan2(value.re);
@@ -75,6 +87,12 @@ pub(crate) fn unit_phasors(input: &[f64], output: &mut [Complex], vector: bool) 
     if vector {
         // SAFETY: callers use the FFT plan's runtime AVX2 detection.
         unsafe { phasors_avx2(input, output) };
+        return;
+    }
+    #[cfg(target_arch = "aarch64")]
+    if vector {
+        // SAFETY: caller selects NEON before processing; kernels check slice bounds.
+        unsafe { phasors_neon(input, output) };
         return;
     }
     let _ = vector;
@@ -250,6 +268,175 @@ unsafe fn phasors_avx2(input: &[f64], output: &mut [Complex]) {
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+use std::arch::aarch64::*;
+
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn wrap_neon(values: &mut [f64]) {
+    let (blocks, tail) = values.as_chunks_mut::<2>();
+    let pi = vdupq_n_f64(std::f64::consts::PI);
+    let period = vdupq_n_f64(std::f64::consts::TAU);
+    for block in blocks {
+        // SAFETY: checked chunks contain two f64s. Keep scalar operation order.
+        unsafe {
+            let shifted = vaddq_f64(vld1q_f64(block.as_ptr()), pi);
+            let quotient = vrndmq_f64(vdivq_f64(shifted, period));
+            let remainder = vsubq_f64(shifted, vmulq_f64(quotient, period));
+            let negative = vcltq_f64(remainder, vdupq_n_f64(0.0));
+            let high = vcgeq_f64(remainder, period);
+            let corrected = vbslq_f64(negative, vaddq_f64(remainder, period), remainder);
+            let corrected = vbslq_f64(high, vsubq_f64(remainder, period), corrected);
+            vst1q_f64(block.as_mut_ptr(), vsubq_f64(corrected, pi));
+        }
+    }
+    for value in tail {
+        *value = wrap(*value);
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn angles_neon(input: &[Complex], output: &mut [f64]) {
+    let (blocks, tail) = input.as_chunks::<2>();
+    let (results, remainder) = output.as_chunks_mut::<2>();
+    for (block, result) in blocks.iter().zip(results) {
+        // SAFETY: two repr(C) complexes contain four f64s; result has two f64s.
+        // Range reduction and polynomial match AVX2, with no fused operations.
+        unsafe {
+            let xy = vld2q_f64(block.as_ptr().cast());
+            let (x, y) = (xy.0, xy.1);
+            let ax = vabsq_f64(x);
+            let ay = vabsq_f64(y);
+            let largest = vmaxq_f64(ax, ay);
+            let smallest = vminq_f64(ax, ay);
+            let one = vdupq_n_f64(1.0);
+            let zero = vdupq_n_f64(0.0);
+            let is_zero = vceqq_f64(largest, zero);
+            let mut t = vdivq_f64(smallest, vbslq_f64(is_zero, one, largest));
+            let both_inf = vceqq_f64(smallest, vdupq_n_f64(f64::INFINITY));
+            t = vbslq_f64(both_inf, one, t);
+            let middle = vcgtq_f64(t, vdupq_n_f64(0.198912367379658));
+            let high = vcgtq_f64(t, vdupq_n_f64(0.6681786379192989));
+            let pivot = vbslq_f64(
+                high,
+                one,
+                vbslq_f64(middle, vdupq_n_f64(0.41421356237309503), zero),
+            );
+            let base = vbslq_f64(
+                high,
+                vdupq_n_f64(std::f64::consts::FRAC_PI_4),
+                vbslq_f64(middle, vdupq_n_f64(std::f64::consts::FRAC_PI_8), zero),
+            );
+            let z = vdivq_f64(vsubq_f64(t, pivot), vaddq_f64(one, vmulq_f64(t, pivot)));
+            let z2 = vmulq_f64(z, z);
+            let mut p = vdupq_n_f64(-0.05909857213116147);
+            for coefficient in [
+                0.07652130942243261,
+                -0.09089837900709528,
+                0.11111096372965647,
+                -0.14285714188882723,
+                0.1999999999976099,
+                -0.33333333333333237,
+            ] {
+                p = vaddq_f64(vdupq_n_f64(coefficient), vmulq_f64(z2, p));
+            }
+            let a = vaddq_f64(base, vaddq_f64(z, vmulq_f64(vmulq_f64(z, z2), p)));
+            let a = vbslq_f64(
+                vcgtq_f64(ay, ax),
+                vsubq_f64(vdupq_n_f64(std::f64::consts::FRAC_PI_2), a),
+                a,
+            );
+            // Compare sign bits as integers to retain atan2's negative-zero axes.
+            let negative_x = vcltq_s64(vreinterpretq_s64_f64(x), vdupq_n_s64(0));
+            let a = vbslq_f64(
+                negative_x,
+                vsubq_f64(vdupq_n_f64(std::f64::consts::PI), a),
+                a,
+            );
+            let sign_y = vandq_u64(vreinterpretq_u64_f64(y), vdupq_n_u64(1 << 63));
+            let a = vreinterpretq_f64_u64(veorq_u64(vreinterpretq_u64_f64(a), sign_y));
+            let ordered = vandq_u64(vceqq_f64(x, x), vceqq_f64(y, y));
+            vst1q_f64(
+                result.as_mut_ptr(),
+                vbslq_f64(ordered, a, vdupq_n_f64(f64::NAN)),
+            );
+        }
+    }
+    for (value, angle) in tail.iter().zip(remainder) {
+        *angle = value.im.atan2(value.re);
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn phasors_neon(input: &[f64], output: &mut [Complex]) {
+    let (blocks, tail) = input.as_chunks::<2>();
+    let (results, remainder) = output.as_chunks_mut::<2>();
+    for (block, result) in blocks.iter().zip(results) {
+        // SAFETY: two checked input f64s and two repr(C) output complexes.
+        unsafe {
+            let x = vld1q_f64(block.as_ptr());
+            let valid = vcleq_f64(vabsq_f64(x), vdupq_n_f64(16384.0));
+            assert_eq!(
+                vgetq_lane_u64::<0>(valid) & vgetq_lane_u64::<1>(valid),
+                u64::MAX,
+                "phase rotation out of range"
+            );
+            let n = vrndnq_f64(vmulq_f64(x, vdupq_n_f64(std::f64::consts::FRAC_2_PI)));
+            // Same split pi/2 and Chebyshev interpolants as the AVX2 path.
+            let r = vsubq_f64(
+                vsubq_f64(x, vmulq_f64(n, vdupq_n_f64(1.5707963267341256))),
+                vmulq_f64(n, vdupq_n_f64(6.077100506506192e-11)),
+            );
+            let r2 = vmulq_f64(r, r);
+            let mut s = vdupq_n_f64(1.5918129294866608e-10);
+            for coefficient in [
+                -2.5051131845003624e-08,
+                2.755731610255244e-06,
+                -0.00019841269836758574,
+                0.008333333333330948,
+                -0.16666666666666666,
+            ] {
+                s = vaddq_f64(vdupq_n_f64(coefficient), vmulq_f64(r2, s));
+            }
+            let s = vaddq_f64(r, vmulq_f64(vmulq_f64(r, r2), s));
+            let mut c = vdupq_n_f64(-1.1367998654022494e-11);
+            for coefficient in [
+                2.0875886738047052e-09,
+                -2.7557315566341895e-07,
+                2.480158729369346e-05,
+                -0.0013888888888880775,
+                0.04166666666666664,
+                -0.5,
+            ] {
+                c = vaddq_f64(vdupq_n_f64(coefficient), vmulq_f64(r2, c));
+            }
+            let c = vaddq_f64(vdupq_n_f64(1.0), vmulq_f64(r2, c));
+            let quadrant = vreinterpretq_u64_s64(vcvtq_s64_f64(n));
+            let odd = vceqq_u64(vandq_u64(quadrant, vdupq_n_u64(1)), vdupq_n_u64(1));
+            let sign_s = vshlq_n_u64::<62>(vandq_u64(quadrant, vdupq_n_u64(2)));
+            let sign_c = vshlq_n_u64::<62>(vandq_u64(
+                vaddq_u64(quadrant, vdupq_n_u64(1)),
+                vdupq_n_u64(2),
+            ));
+            let sine = vreinterpretq_f64_u64(veorq_u64(
+                vreinterpretq_u64_f64(vbslq_f64(odd, c, s)),
+                sign_s,
+            ));
+            let cosine = vreinterpretq_f64_u64(veorq_u64(
+                vreinterpretq_u64_f64(vbslq_f64(odd, s, c)),
+                sign_c,
+            ));
+            vst2q_f64(result.as_mut_ptr().cast(), float64x2x2_t(cosine, sine));
+        }
+    }
+    for (&angle, value) in tail.iter().zip(remainder) {
+        assert!(angle.abs() <= 16384.0, "phase rotation out of range");
+        *value = Complex::polar(1.0, angle);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,7 +499,11 @@ mod tests {
         {
             std::is_x86_feature_detected!("avx2")
         }
-        #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+        #[cfg(target_arch = "aarch64")]
+        {
+            std::arch::is_aarch64_feature_detected!("neon")
+        }
+        #[cfg(not(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64")))]
         {
             false
         }

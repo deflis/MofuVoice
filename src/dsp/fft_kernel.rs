@@ -79,6 +79,67 @@ impl FftKernel {
         }
     }
 
+    #[cfg(target_arch = "aarch64")]
+    #[target_feature(enable = "neon")]
+    pub(crate) unsafe fn stages_neon<const N: usize>(roots: &[Complex], data: &mut [Complex; N]) {
+        Self::stage::<N, 2>(roots, data);
+        // SAFETY: this function requires NEON and each stage checks its bounds.
+        unsafe {
+            Self::stage_neon::<N, 4>(roots, data);
+            Self::stage_neon::<N, 8>(roots, data);
+            Self::stage_neon::<N, 16>(roots, data);
+            Self::stage_neon::<N, 32>(roots, data);
+            Self::stage_neon::<N, 64>(roots, data);
+            Self::stage_neon::<N, 128>(roots, data);
+            Self::stage_neon::<N, 256>(roots, data);
+            Self::stage_neon::<N, 512>(roots, data);
+            Self::stage_neon::<N, 1024>(roots, data);
+            Self::stage_neon::<N, 2048>(roots, data);
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[target_feature(enable = "neon")]
+    pub(crate) unsafe fn stage_neon<const N: usize, const SIZE: usize>(
+        roots: &[Complex],
+        data: &mut [Complex; N],
+    ) {
+        use std::arch::aarch64::*;
+        if SIZE > N {
+            return;
+        }
+        let half = SIZE / 2;
+        let roots = &roots[half - 1..SIZE - 1];
+        for block in data.as_chunks_mut::<SIZE>().0 {
+            let (left, right) = block.split_at_mut(half);
+            for ((left, right), root) in left
+                .as_chunks_mut::<2>()
+                .0
+                .iter_mut()
+                .zip(right.as_chunks_mut::<2>().0)
+                .zip(roots.as_chunks::<2>().0)
+            {
+                // SAFETY: each chunk contains two repr(C) complexes (four f64s).
+                // Deinterleaved loads/stores stay in disjoint checked slices.
+                unsafe {
+                    let a = vld2q_f64(left.as_ptr().cast());
+                    let b = vld2q_f64(right.as_ptr().cast());
+                    let w = vld2q_f64(root.as_ptr().cast());
+                    let re = vsubq_f64(vmulq_f64(b.0, w.0), vmulq_f64(b.1, w.1));
+                    let im = vaddq_f64(vmulq_f64(b.0, w.1), vmulq_f64(b.1, w.0));
+                    vst2q_f64(
+                        left.as_mut_ptr().cast(),
+                        float64x2x2_t(vaddq_f64(a.0, re), vaddq_f64(a.1, im)),
+                    );
+                    vst2q_f64(
+                        right.as_mut_ptr().cast(),
+                        float64x2x2_t(vsubq_f64(a.0, re), vsubq_f64(a.1, im)),
+                    );
+                }
+            }
+        }
+    }
+
     #[inline(always)]
     pub(crate) fn stage<const N: usize, const SIZE: usize>(
         roots: &[Complex],
@@ -143,10 +204,20 @@ mod tests {
                 assert_eq!(actual.im.to_bits(), reference.im.to_bits(), "AVX2 N={N}");
             }
         }
+        #[cfg(target_arch = "aarch64")]
+        if std::arch::is_aarch64_feature_detected!("neon") {
+            let mut vector = reversed;
+            // SAFETY: NEON detected above; stage tables match N.
+            unsafe { FftKernel::stages_neon(&stages, &mut vector) };
+            for (actual, reference) in vector.iter().zip(scalar) {
+                assert_eq!(actual.re.to_bits(), reference.re.to_bits(), "NEON N={N}");
+                assert_eq!(actual.im.to_bits(), reference.im.to_bits(), "NEON N={N}");
+            }
+        }
     }
 
     #[test]
-    fn specialized_scalar_and_avx2_stages_match_generic_fft_bits() {
+    fn specialized_scalar_and_simd_stages_match_generic_fft_bits() {
         check::<4>();
         check::<8>();
         check::<32>();

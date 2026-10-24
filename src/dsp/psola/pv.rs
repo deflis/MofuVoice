@@ -66,7 +66,15 @@ impl PvsOla {
                 {
                     std::is_x86_feature_detected!("avx2")
                 }
-                #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+                #[cfg(target_arch = "aarch64")]
+                {
+                    std::arch::is_aarch64_feature_detected!("neon")
+                }
+                #[cfg(not(any(
+                    target_arch = "x86",
+                    target_arch = "x86_64",
+                    target_arch = "aarch64"
+                )))]
                 {
                     false
                 }
