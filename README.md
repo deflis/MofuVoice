@@ -1,4 +1,4 @@
-# Rust Low-Latency Voice Changer
+# もふボイス (MofuVoice)
 
 配信・通話向けのリアルタイムボイスチェンジャーです。GUIでマイクと出力先を選び、声の高さやフォルマントを調整できます。
 

@@ -1,17 +1,17 @@
 [package]
-name = "rust-low-latency-voice-changer"
+name = "mofu-voice"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
 autobins = false
-default-run = "rust-low-latency-voice-changer-gui"
+default-run = "MofuVoice"
 
 [[bin]]
-name = "rust-low-latency-voice-changer-cli"
+name = "mofu-voice-cli"
 path = "src/bin/cli.rs"
 
 [[bin]]
-name = "rust-low-latency-voice-changer-gui"
+name = "MofuVoice"
 path = "src/bin/gui.rs"
 required-features = ["desktop"]
 

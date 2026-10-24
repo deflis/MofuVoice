@@ -1,6 +1,6 @@
 #![cfg(windows)]
 //! Separate process from spectrum unit tests, so the singleton analyzer cannot race.
-use rust_low_latency_voice_changer::native_spectrum;
+use mofu_voice::native_spectrum;
 use windows::{
     core::w,
     Win32::{

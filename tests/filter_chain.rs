@@ -1,5 +1,5 @@
 //! Contract tests for the complete fixed chain, independent stage state and bypass.
-use rust_low_latency_voice_changer::{
+use mofu_voice::{
     audio::{AudioProcessor, DspSettings, FILTER_STAGES},
     cli::Options,
     dsp::Sample,
@@ -90,13 +90,13 @@ fn complete_chain_matches_independent_processors_in_all_formats() {
             })
             .collect();
         let mut before = input.clone();
-        rust_low_latency_voice_changer::rumble::RumbleFilter::new(s.rumble_filter)
+        mofu_voice::rumble::RumbleFilter::new(s.rumble_filter)
             .process_in_place(&mut before);
         s.input_eq.build().unwrap().process_in_place(&mut before);
         s.limiter.build().unwrap().process_in_place(&mut before);
         s.gate.build().unwrap().process_in_place(&mut before);
         s.dereverb.build().unwrap().process_in_place(&mut before);
-        rust_low_latency_voice_changer::deesser::DeEsser::with_parameters(
+        mofu_voice::deesser::DeEsser::with_parameters(
             s.deesser,
             s.deesser_parameters,
         )

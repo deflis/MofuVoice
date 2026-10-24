@@ -8,7 +8,7 @@ export function LogApp() {
       <div className="log-window">
         <header>
           <h1>ログ</h1>
-          <span className="muted">Voice Changer</span>
+          <span className="muted">もふボイス (MofuVoice)</span>
         </header>
         <StatusDetails />
       </div>

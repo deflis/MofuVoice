@@ -1,4 +1,4 @@
-use rust_low_latency_voice_changer::pitch::{PitchAlgorithm, PitchShifter};
+use mofu_voice::pitch::{PitchAlgorithm, PitchShifter};
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::Cell,
@@ -33,7 +33,7 @@ static ALLOCATOR: CountingAllocator = CountingAllocator;
 
 #[test]
 fn portable_processor_does_not_allocate_with_rumble_gate_pitch_eq_level_and_deesser_enabled() {
-    use rust_low_latency_voice_changer::{
+    use mofu_voice::{
         audio::{AudioProcessor, DspSettings},
         cli::Options,
         RATE,
@@ -84,11 +84,11 @@ fn callback_does_not_allocate_including_first_frames_and_transitions() {
                 preserve,
                 shift,
                 algorithm,
-                rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+                mofu_voice::pitch::SpectralWindows::default(),
                 Default::default(),
             )
             .unwrap();
-            let mut level = rust_low_latency_voice_changer::level::LevelSettings {
+            let mut level = mofu_voice::level::LevelSettings {
                 enabled: true,
                 compressor_enabled: true,
                 ..Default::default()
@@ -117,7 +117,7 @@ fn callback_does_not_allocate_including_first_frames_and_transitions() {
 }
 
 fn configured_windows_do_not_allocate_in_callbacks_or_pitch_transitions(
-    windows: rust_low_latency_voice_changer::pitch::SpectralWindows,
+    windows: mofu_voice::pitch::SpectralWindows,
 ) {
     for algorithm in PitchAlgorithm::ALL {
         let mut dsp = PitchShifter::new(7.0, true, 2.53, algorithm, windows, windows).unwrap();

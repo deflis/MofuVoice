@@ -823,7 +823,7 @@ async fn open_settings(app: tauri::AppHandle) -> Result<(), String> {
         show_or_create_window(
             app,
             "settings",
-            "設定 — Voice Changer",
+            "設定 — もふボイス (MofuVoice)",
             "index.html?window=settings",
             WindowSize {
                 width: 820.0,
@@ -842,7 +842,7 @@ async fn open_log(app: tauri::AppHandle) -> Result<(), String> {
         show_or_create_window(
             app,
             "log",
-            "ログ — Voice Changer",
+            "ログ — もふボイス (MofuVoice)",
             "index.html?window=log",
             WindowSize {
                 width: 640.0,
@@ -1129,7 +1129,7 @@ pub fn show_message(message: &str, error: bool) {
             MessageBoxW, MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MESSAGEBOX_STYLE,
         },
     };
-    let title: Vec<u16> = "Voice Changer".encode_utf16().chain(Some(0)).collect();
+    let title: Vec<u16> = "もふボイス (MofuVoice)".encode_utf16().chain(Some(0)).collect();
     let body: Vec<u16> = message.encode_utf16().chain(Some(0)).collect();
     let icon: MESSAGEBOX_STYLE = if error {
         MB_ICONERROR

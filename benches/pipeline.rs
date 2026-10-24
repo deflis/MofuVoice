@@ -1,6 +1,6 @@
 //! Device-independent cost of the complete streaming chain. Each case has equal
 //! weight in the aggregate; timings include DSP and exclude device I/O and setup.
-use rust_low_latency_voice_changer::{
+use mofu_voice::{
     audio::{AudioProcessor, DspSettings},
     cli::Options,
 };

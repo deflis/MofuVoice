@@ -28,7 +28,7 @@ macro_rules! window_cases {
     (@tests [$($test:ident),+]; $analysis:expr, $synthesis:expr) => {
         $(#[test]
         fn $test() {
-            super::$test(rust_low_latency_voice_changer::pitch::SpectralWindows {
+            super::$test(mofu_voice::pitch::SpectralWindows {
                 analysis: $analysis,
                 synthesis: $synthesis,
             });

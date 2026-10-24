@@ -11,8 +11,8 @@
 CPALでは選択したサンプリングレートの共通f32/i32/i16形式を検査し、入力と出力の間に事前確保キューを使います。キュー遅延はDSP遅延とは別に表示します。別デバイスのクロック差は補正せず、キュー不足・満杯やデバイス異常を検出して停止します。実機の往復遅延と聴取品質は個別に確認してください。
 
 ```sh
-cargo run --bin rust-low-latency-voice-changer-cli -- --list-devices
-cargo run --bin rust-low-latency-voice-changer-cli -- --backend cpal --device "INPUT" --output-device "OUTPUT" --frames 512
+cargo run --bin mofu-voice-cli -- --list-devices
+cargo run --bin mofu-voice-cli -- --backend cpal --device "INPUT" --output-device "OUTPUT" --frames 512
 ```
 
 CPALではデバイスを省略するとOSの既定入力・出力を使います。ASIOではドライバ名を指定してください。`--backend cpal` / `--backend asio`で明示選択できます。実行ファイルのビルド構成については[ビルド・開発](../DEVELOPMENT.md)を参照してください。
@@ -23,7 +23,7 @@ CPALではデバイスを省略するとOSの既定入力・出力を使いま�
 
 ### 1. 起動する
 
-`rust-low-latency-voice-changer-gui.exe` をダブルクリックします。コンソールウィンドウは開きません。メイン画面の **設定** を押すと、独立したOSウィンドウで設定できます。「フィルタ構成」で処理順を確認し、カードやメニューから個別設定を開きます。変更後は **設定を保存** を押してください。保存した設定は次の音声開始時に使用します。設定ウィンドウは開いたままメイン画面を操作でき、閉じるときにも自動保存します。
+`MofuVoice.exe` をダブルクリックします。コンソールウィンドウは開きません。メイン画面の **設定** を押すと、独立したOSウィンドウで設定できます。「フィルタ構成」で処理順を確認し、カードやメニューから個別設定を開きます。変更後は **設定を保存** を押してください。保存した設定は次の音声開始時に使用します。設定ウィンドウは開いたままメイン画面を操作でき、閉じるときにも自動保存します。
 
 ### 2. デバイスと音声の接続を準備する
 
@@ -188,8 +188,8 @@ CLIの全オプションと範囲は `--help` で確認できます。
 GUIの詳細値は保存・復元され、CLI指定は各項目だけを上書きします。設定変更は停止 → 変更 → 設定を保存 → 音声を開始の順です。CLIでは `--auto-level on|off` と `--compressor on|off` で個別に切り替えます。GUI設定INIには `auto_level`、`compressor` と、表の順に `level_target_db`、`level_max_gain_db`、`level_floor_db`、`level_response_ms`、`compress_threshold_db`、`compress_ratio`、`compress_attack_ms`、`compress_release_ms` を保存します。既存のINIにはこれらのキーが必要です。分離前のINIには `compressor=true` または `compressor=false` を追加してください。起動エラーが出た場合はキーを追加するか、INIを削除して既定値で起動してください。
 
 ```powershell
-.\target\release\rust-low-latency-voice-changer-cli.exe --backend asio --device "ASIOデバイス名" --auto-level on
-.\target\release\rust-low-latency-voice-changer-cli.exe --backend asio --device "ASIOデバイス名" --auto-level on --compressor on --level-target -18 --level-max-gain 6 --compress-ratio 4
+.\target\release\mofu-voice-cli.exe --backend asio --device "ASIOデバイス名" --auto-level on
+.\target\release\mofu-voice-cli.exe --backend asio --device "ASIOデバイス名" --auto-level on --compressor on --level-target -18 --level-max-gain 6 --compress-ratio 4
 ```
 
 無音では補正量を保持し、下限を超えるノイズも声として扱うため、発話判定の下限と最大増幅量を環境に合わせて調整してください。前段のゲートとも併用できます。音量補正の減衰は最大18 dB、後段のピーク保護は−1 dBFSで固定です。突発ピークは即時にゲインを下げるため、強い過渡音では波形に影響があります。入力やピッチ変換ですでにクリップした波形は復元しません。
@@ -280,13 +280,13 @@ compress_release_ms=150
 
 ## CLIでの操作
 
-設定確認や時間を指定した実行には、補助ツールの `rust-low-latency-voice-changer-cli.exe` を使用できます。
+設定確認や時間を指定した実行には、補助ツールの `mofu-voice-cli.exe` を使用できます。
 
 ```powershell
-.\target\release\rust-low-latency-voice-changer-cli.exe --list-devices
-.\target\release\rust-low-latency-voice-changer-cli.exe --backend asio --device "ASIOデバイス名" --inspect
-.\target\release\rust-low-latency-voice-changer-cli.exe --backend asio --device "ASIOデバイス名" --pitch 3 --seconds 60
-.\target\release\rust-low-latency-voice-changer-cli.exe --backend asio --device "ASIOデバイス名" --pitch 0 --formant-shift -3
+.\target\release\mofu-voice-cli.exe --list-devices
+.\target\release\mofu-voice-cli.exe --backend asio --device "ASIOデバイス名" --inspect
+.\target\release\mofu-voice-cli.exe --backend asio --device "ASIOデバイス名" --pitch 3 --seconds 60
+.\target\release\mofu-voice-cli.exe --backend asio --device "ASIOデバイス名" --pitch 0 --formant-shift -3
 ```
 
 `--seconds` を省略するとEnterで停止します。`--frames`、`--pitch`、`--formant preserve` または `--formant off`、`--formant-shift` で設定を指定できます。フォルマントシフトは−12〜+12半音、小数可、既定0です。詳細は `--help` を参照してください。

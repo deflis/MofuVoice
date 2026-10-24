@@ -1,4 +1,4 @@
-use rust_low_latency_voice_changer::{
+use mofu_voice::{
     pitch::{pitch_ratio, PitchAlgorithm, PitchShifter, LATENCY, WINDOW},
     RATE,
 };
@@ -24,7 +24,7 @@ fn pitch_lobes_above_nyquist_are_discarded_without_aliasing() {
                     preserve,
                     0.0,
                     algorithm,
-                    rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+                    mofu_voice::pitch::SpectralWindows::default(),
                     Default::default(),
                 )
                 .unwrap()
@@ -60,7 +60,7 @@ fn moving_pitch_keeps_amplitude_and_phase_continuous() {
                 false,
                 0.0,
                 algorithm,
-                rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+                mofu_voice::pitch::SpectralWindows::default(),
                 Default::default(),
             )
             .unwrap()
@@ -131,7 +131,7 @@ fn power_at_rate(signal: &[f32], frequency: f64, rate: u32) -> f64 {
 #[test]
 fn low_voice_tones_have_accurate_pitch_without_subharmonic_energy() {
     for algorithm in PitchAlgorithm::SPECTRAL {
-        for rate in rust_low_latency_voice_changer::SAMPLE_RATES {
+        for rate in mofu_voice::SAMPLE_RATES {
             low_voice_quality_at_rate(rate, algorithm);
         }
     }
@@ -146,7 +146,7 @@ fn low_voice_quality_at_rate(rate: u32, algorithm: PitchAlgorithm) {
                 false,
                 0.0,
                 algorithm,
-                rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+                mofu_voice::pitch::SpectralWindows::default(),
                 Default::default(),
             )
             .unwrap()
@@ -179,7 +179,7 @@ fn low_voice_quality_at_rate(rate: u32, algorithm: PitchAlgorithm) {
 #[test]
 fn preservation_and_shift_move_a_broadband_resonance_independently_of_pitch() {
     for algorithm in PitchAlgorithm::SPECTRAL {
-        for rate in rust_low_latency_voice_changer::SAMPLE_RATES {
+        for rate in mofu_voice::SAMPLE_RATES {
             formant_quality_at_rate(rate, algorithm, Default::default(), 200.0);
         }
     }
@@ -187,7 +187,7 @@ fn preservation_and_shift_move_a_broadband_resonance_independently_of_pitch() {
 fn formant_quality_at_rate(
     rate: u32,
     algorithm: PitchAlgorithm,
-    windows: rust_low_latency_voice_changer::pitch::SpectralWindows,
+    windows: mofu_voice::pitch::SpectralWindows,
     maximum_error_hz: f64,
 ) {
     let mut seed = 1_u32;
@@ -211,7 +211,7 @@ fn formant_quality_at_rate(
         (7.0, true, 3.0),
     ] {
         let mut output = vec![0.0; input.len()];
-        let options = rust_low_latency_voice_changer::cli::Options::parse([
+        let options = mofu_voice::cli::Options::parse([
             "--analysis-window".into(),
             windows.analysis.to_string(),
             "--synthesis-window".into(),
@@ -226,10 +226,10 @@ fn formant_quality_at_rate(
             if preserve { "preserve" } else { "off" }.into(),
         ])
         .unwrap();
-        let mut dsp = rust_low_latency_voice_changer::audio::AudioProcessor::new(
+        let mut dsp = mofu_voice::audio::AudioProcessor::new(
             rate,
             512,
-            rust_low_latency_voice_changer::audio::DspSettings::from(&options),
+            mofu_voice::audio::DspSettings::from(&options),
         )
         .unwrap();
         for (a, b) in input.chunks(512).zip(output.chunks_mut(512)) {
@@ -269,7 +269,7 @@ fn low_components_are_suppressed_with_formants_enabled() {
                 true,
                 shift,
                 algorithm,
-                rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+                mofu_voice::pitch::SpectralWindows::default(),
                 Default::default(),
             )
             .unwrap()
@@ -295,7 +295,7 @@ fn block_boundaries_formats_bypass_and_retargeting() {
                 preserve,
                 shift,
                 algorithm,
-                rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+                mofu_voice::pitch::SpectralWindows::default(),
                 Default::default(),
             )
             .unwrap()
@@ -306,7 +306,7 @@ fn block_boundaries_formats_bypass_and_retargeting() {
                     preserve,
                     shift,
                     algorithm,
-                    rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+                    mofu_voice::pitch::SpectralWindows::default(),
                     Default::default(),
                 )
                 .unwrap();
@@ -323,7 +323,7 @@ fn block_boundaries_formats_bypass_and_retargeting() {
             true,
             0.0,
             algorithm,
-            rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+            mofu_voice::pitch::SpectralWindows::default(),
             Default::default(),
         )
         .unwrap();
@@ -357,7 +357,7 @@ fn silence_and_impulse_delay_and_invalid_settings() {
                 preserve,
                 0.0,
                 algorithm,
-                rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+                mofu_voice::pitch::SpectralWindows::default(),
                 Default::default(),
             )
             .unwrap();
@@ -384,7 +384,7 @@ fn silence_and_impulse_delay_and_invalid_settings() {
             false,
             1.0,
             algorithm,
-            rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+            mofu_voice::pitch::SpectralWindows::default(),
             Default::default(),
         )
         .is_err());
@@ -394,7 +394,7 @@ fn silence_and_impulse_delay_and_invalid_settings() {
                 true,
                 0.0,
                 algorithm,
-                rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+                mofu_voice::pitch::SpectralWindows::default(),
                 Default::default(),
             )
             .is_err());
@@ -403,7 +403,7 @@ fn silence_and_impulse_delay_and_invalid_settings() {
                 true,
                 value,
                 algorithm,
-                rust_low_latency_voice_changer::pitch::SpectralWindows::default(),
+                mofu_voice::pitch::SpectralWindows::default(),
                 Default::default(),
             )
             .is_err());
@@ -412,7 +412,7 @@ fn silence_and_impulse_delay_and_invalid_settings() {
 }
 
 fn configured_windows_preserve_and_shift_formants(
-    windows: rust_low_latency_voice_changer::pitch::SpectralWindows,
+    windows: mofu_voice::pitch::SpectralWindows,
 ) {
     // Alternate time/frequency resolutions allow up to 250 Hz resonance error.
     // The default configuration retains its existing 200 Hz quality check.

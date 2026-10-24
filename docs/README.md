@@ -4,7 +4,7 @@
 
 ## 音声の接続ガイド
 
-[Rust Low-Latency Voice Changer](../README.md) を Voicemeeter または VB-Audio Matrix と組み合わせる手順です。いずれも **ASIO** で接続し、アプリ側は **入力1 → 出力1**（モノラル1本）だけを処理します。
+[もふボイス (MofuVoice)](../README.md) を Voicemeeter または VB-Audio Matrix と組み合わせる手順です。いずれも **ASIO** で接続し、アプリ側は **入力1 → 出力1**（モノラル1本）だけを処理します。
 
 | ガイド | 向いている構成 |
 | --- | --- |

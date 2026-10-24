@@ -1,6 +1,6 @@
 # VB-Audio Matrix 設定ガイド
 
-VB-Audio Matrix（以下 **Matrix**）の **Virtual ASIO（VASIO）** スロットを使い、マイクなどの音源を本アプリ（Rust Low-Latency Voice Changer）に通してから、ヘッドホン・仮想出力・別 ASIO へ送ります。
+VB-Audio Matrix（以下 **Matrix**）の **Virtual ASIO（VASIO）** スロットを使い、マイクなどの音源を本アプリ（もふボイス (MofuVoice)）に通してから、ヘッドホン・仮想出力・別 ASIO へ送ります。
 
 Voicemeeter の **Insert** に相当する「1本の処理ループ」は、Matrix では **ルーティンググリッド上の VASIO 入出力** で作ります。
 
@@ -24,7 +24,7 @@ Voicemeeter の **Insert** に相当する「1本の処理ループ」は、Matr
 
 1. [VB-Audio Matrix](https://vb-audio.com/Matrix/) をインストールし、指示に従って **再起動** します。
 2. 使用するオーディオインターフェース（または Windows マイク）を、Matrix の **ASIO** または **WINDOWS** スロットに割り当てられる状態にします。
-3. 本アプリの `rust-low-latency-voice-changer-gui.exe` を用意します。
+3. 本アプリの `MofuVoice.exe` を用意します。
 
 ## 1. Matrix のクロックとバッファ
 
