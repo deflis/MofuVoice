@@ -29,6 +29,6 @@
 }
 
 .routing-choices button[aria-pressed="true"] {
-  background: #00c4b4;
-  color: #0a1416;
+  background: var(--color-accent);
+  color: var(--color-on-accent);
 }

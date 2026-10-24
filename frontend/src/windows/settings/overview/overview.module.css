@@ -5,7 +5,7 @@
 }
 
 .filter-lifecycle {
-  border-left: 3px solid #00c4b4;
+  border-left: 3px solid var(--color-accent);
   padding-left: 10px;
 }
 
@@ -21,9 +21,9 @@
 }
 
 .filter-card {
-  border: 1px solid #53626d;
+  border: 1px solid var(--color-border-muted);
   border-radius: 8px;
-  background: #1b1e23;
+  background: var(--color-surface);
   padding: 14px;
 }
 
@@ -46,11 +46,11 @@
 
 .filter-state {
   font-size: 12px;
-  color: #cbd1db;
+  color: var(--color-text-tertiary);
 }
 
 .filter-card[data-enabled="true"] .filter-state {
-  color: #6ee7da;
+  color: var(--color-accent-soft);
 }
 
 .filter-card button {
@@ -59,7 +59,7 @@
 }
 
 .filter-card button:focus-visible {
-  outline: 3px solid #6ee7da;
+  outline: 3px solid var(--color-accent-soft);
   outline-offset: 3px;
 }
 
@@ -69,26 +69,26 @@
 }
 
 .filter-overview .filter-invalid {
-  color: #ffd092;
+  color: var(--color-warning);
 }
 
 .filter-arrow {
   display: block;
   text-align: center;
   font-size: 21px;
-  color: #cbd1db;
+  color: var(--color-text-tertiary);
   line-height: 30px;
 }
 
 .filter-overview .filter-endpoint {
   text-align: center;
-  color: #e6e8ec;
+  color: var(--color-text);
   font-weight: 600;
   margin: 6px 0;
 }
 
 .filter-overview .filter-divider {
-  color: #cbd1db;
+  color: var(--color-text-tertiary);
   margin: 0 0 6px;
   font-size: 12px;
 }
@@ -103,49 +103,49 @@
 
 .filter-plot text {
   font-size: 9px;
-  fill: #bbc5d0;
+  fill: var(--color-plot-label);
 }
 
 .filter-axis {
   fill: none;
-  stroke: #66727e;
+  stroke: var(--color-plot-axis);
   stroke-width: 1;
 }
 
 .filter-reference {
   fill: none;
-  stroke: #84909d;
+  stroke: var(--color-plot-reference);
   stroke-width: 1;
   stroke-dasharray: 3 4;
 }
 
 .filter-curve {
   fill: none;
-  stroke: #63ded1;
+  stroke: var(--color-accent-plot);
   stroke-width: 2;
 }
 
 .filter-retained {
   fill: none;
-  stroke: #e8c483;
+  stroke: var(--color-warning-muted);
   stroke-width: 1.5;
   stroke-dasharray: 6 4;
 }
 
 .filter-point {
-  fill: #eafbf7;
-  stroke: #273c3c;
+  fill: var(--color-plot-point);
+  stroke: var(--color-plot-point-stroke);
   stroke-width: 1;
 }
 
 .filter-area {
-  fill: #63ded1;
+  fill: var(--color-accent-plot);
   fill-opacity: 0.18;
 }
 
 @media (prefers-contrast: more) {
   .filter-card {
-    border-color: white;
+    border-color: var(--color-high-contrast);
   }
   .filter-curve {
     stroke-width: 3;

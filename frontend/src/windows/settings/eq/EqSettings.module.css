@@ -16,7 +16,7 @@
 }
 
 .eq-pro-band {
-  border: 1px solid #373c46;
+  border: 1px solid var(--color-border);
   border-radius: 6px;
   margin: 12px 0;
   min-width: 0;

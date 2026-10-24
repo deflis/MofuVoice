@@ -6,7 +6,7 @@ main:has(.log-window) {
 
 .settings-window header,
 .log-window header {
-  border-bottom: 1px solid #373c46;
+  border-bottom: 1px solid var(--color-border);
   padding-bottom: 12px;
 }
 

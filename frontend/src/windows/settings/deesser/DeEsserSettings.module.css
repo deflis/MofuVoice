@@ -28,7 +28,7 @@
 }
 
 .deesser-scale {
-  color: #abb3c0;
+  color: var(--color-text-secondary);
   font-size: 12px;
 }
 

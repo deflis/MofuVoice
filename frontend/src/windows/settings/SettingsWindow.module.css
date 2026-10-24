@@ -2,7 +2,7 @@
 
 .settings-window header,
 .log-window header {
-  border-bottom: 1px solid #373c46;
+  border-bottom: 1px solid var(--color-border);
   padding-bottom: 12px;
 }
 
@@ -18,7 +18,7 @@ main:has(.settings-window) {
 .settings-window footer {
   position: sticky;
   bottom: 0;
-  background: #16181c;
-  border-top: 1px solid #373c46;
+  background: var(--color-bg);
+  border-top: 1px solid var(--color-border);
   padding: 12px 0;
 }

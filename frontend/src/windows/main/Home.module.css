@@ -28,10 +28,10 @@ main:has(.home-layout) {
 }
 
 .home-secondary-action {
-  color: #abb3c0;
+  color: var(--color-text-secondary);
 }
 
 .setup-guidance {
-  border-top: 1px solid #373c46;
+  border-top: 1px solid var(--color-border);
   padding-top: 8px;
 }
