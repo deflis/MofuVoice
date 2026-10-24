@@ -210,8 +210,8 @@ impl AutoLevel {
                 let above_level_floor = self.power > self.floor_power;
                 if update_target && above_level_floor {
                     let rms_db = amplitude_db(self.power.sqrt(), 1e-12);
-                    self.cached_level_target_db = (self.settings.target_db - rms_db)
-                        .clamp(-18.0, self.settings.max_gain_db);
+                    self.cached_level_target_db =
+                        (self.settings.target_db - rms_db).clamp(-18.0, self.settings.max_gain_db);
                 }
                 if above_level_floor && input.abs() > self.floor_amplitude {
                     self.level_gain_db +=
@@ -685,9 +685,7 @@ mod tests {
             ..LevelSettings::default()
         };
         let mut samples: Vec<f32> = (0..RATE as usize * 2)
-            .map(|i| {
-                (0.5 * (std::f64::consts::TAU * 3000.0 * i as f64 / RATE as f64).sin()) as f32
-            })
+            .map(|i| (0.5 * (std::f64::consts::TAU * 3000.0 * i as f64 / RATE as f64).sin()) as f32)
             .collect();
         settings.build().unwrap().process_in_place(&mut samples);
 
