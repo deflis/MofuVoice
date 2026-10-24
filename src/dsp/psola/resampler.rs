@@ -104,7 +104,7 @@ impl Resampler {
     }
 }
 
-fn select_dot() -> Dot {
+pub(super) fn select_dot() -> Dot {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     if std::is_x86_feature_detected!("avx2") {
         return vector_dot;
