@@ -7,13 +7,6 @@
   gap: 8px;
 }
 
-@media (max-width: 500px) {
-  .eq-fields,
-  .level-fields {
-    grid-template-columns: 1fr;
-  }
-}
-
 .eq-simple-band {
   margin: 18px 0;
 }
@@ -33,6 +26,13 @@
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
+}
+
+@media (max-width: 500px) {
+  .eq-fields,
+  .level-fields {
+    grid-template-columns: 1fr;
+  }
 }
 
 .eq-controls {

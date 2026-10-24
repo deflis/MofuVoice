@@ -133,17 +133,17 @@ dt,
   font-size: 12px;
 }
 
+.level-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 12px;
+}
+
 @media (max-width: 500px) {
   .eq-fields,
   .level-fields {
     grid-template-columns: 1fr;
   }
-}
-
-.level-fields {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0 12px;
 }
 
 .semitones {
