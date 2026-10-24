@@ -1,3 +1,4 @@
+import { ThemeSelect } from "../../ThemeSelect";
 import styles from "./AppHeader.module.css";
 import { useMainStore } from "./store";
 import { headerLabel } from "./selectors";
@@ -7,7 +8,10 @@ export function AppHeader() {
   return (
     <header>
       <h1>もふボイス</h1>
-      <output className={styles["status-badge"]}>{status}</output>
+      <div className={styles["header-actions"]}>
+        <ThemeSelect id="main-theme-preference" />
+        <output className={styles["status-badge"]}>{status}</output>
+      </div>
     </header>
   );
 }

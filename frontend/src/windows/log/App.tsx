@@ -1,3 +1,4 @@
+import { ThemeSelect } from "../../ThemeSelect";
 import styles from "./App.module.css";
 import commonStyles from "./log.module.css";
 import { Notifications } from "./Notifications";
@@ -9,8 +10,11 @@ export function LogApp() {
       <Notifications />
       <div className={styles["log-window"]}>
         <header>
-          <h1>ログ</h1>
-          <span className={commonStyles.muted}>もふボイス</span>
+          <div>
+            <h1>ログ</h1>
+            <span className={commonStyles.muted}>もふボイス</span>
+          </div>
+          <ThemeSelect id="log-theme-preference" />
         </header>
         <StatusDetails />
       </div>

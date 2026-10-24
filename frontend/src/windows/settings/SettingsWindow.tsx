@@ -1,3 +1,4 @@
+import { ThemeSelect } from "../../ThemeSelect";
 import styles from "./SettingsWindow.module.css";
 import commonStyles from "./settings.module.css";
 import { SettingsPanel } from "./SettingsPanel";
@@ -15,8 +16,11 @@ export function SettingsWindow() {
   return (
     <div className={styles["settings-window"]}>
       <header>
-        <h1>設定</h1>
-        <span className={commonStyles.muted}>もふボイス</span>
+        <div>
+          <h1>設定</h1>
+          <span className={commonStyles.muted}>もふボイス</span>
+        </div>
+        <ThemeSelect id="settings-theme-preference" />
       </header>
       {busy && <output>音声を停止すると設定を変更できます。</output>}
       <SettingsPanel />

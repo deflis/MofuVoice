@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import "./styles.css";
+import { connectTheme } from "./theme";
 import { activeMainConnection, connectMainWindow } from "./windows/main/listener";
 import { activeSettingsConnection, connectSettingsWindow } from "./windows/settings/listener";
 import { activeLogConnection, connectLogWindow, setLogging } from "./windows/log/listener";
@@ -24,10 +25,12 @@ function activeConnection() {
   }
   return activeMainConnection();
 }
+const disconnectTheme = connectTheme();
 connectCurrentWindow();
 window.addEventListener(
   "pagehide",
   () => {
+    disconnectTheme();
     if (windowKind === "log") {
       void setLogging(false);
     }
