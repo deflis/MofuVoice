@@ -1,0 +1,10 @@
+/* Styles colocated with Notifications.tsx. */
+
+.error {
+  color: light-dark(#a80000, #ff9090);
+  overflow-wrap: anywhere;
+}
+
+.notice {
+  display: block;
+}

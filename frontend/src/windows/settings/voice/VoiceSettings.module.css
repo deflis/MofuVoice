@@ -1,0 +1,26 @@
+/* Styles colocated with VoiceSettings.tsx. */
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Settings window styles. */
+
+/* Component styles. */
+
+.settings {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.settings-content section > .check {
+  margin: 8px 0;
+}
+
+.settings-content .settings button + button {
+  margin-left: 8px;
+}

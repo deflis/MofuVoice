@@ -1,4 +1,4 @@
-import styles from "../../../styles.module.css";
+import styles from "./DeEsserSettings.module.css";
 import { NumberField } from "../NumberField";
 import { DetailsPopup } from "../DetailsPopup";
 import { useId } from "react";

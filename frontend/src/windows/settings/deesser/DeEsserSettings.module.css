@@ -1,0 +1,64 @@
+/* Styles colocated with DeEsserSettings.tsx. */
+
+.error {
+  color: light-dark(#a80000, #ff9090);
+  overflow-wrap: anywhere;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.notice {
+  display: block;
+}
+
+.deesser-controls {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+
+.deesser-simple {
+  margin: 18px 0;
+}
+
+.deesser-simple > label,
+.deesser-scale {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.deesser-simple input[type="range"] {
+  width: 100%;
+}
+
+.deesser-scale {
+  color: #abb3c0;
+  font-size: 12px;
+}
+
+.deesser-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+@media (max-width: 500px) {
+  .deesser-fields {
+    grid-template-columns: 1fr;
+  }
+}
+
+.settings-content section > .check {
+  margin: 8px 0;
+}
+
+.settings-content .eq-scale,
+.settings-content .deesser-scale {
+  margin-bottom: 8px;
+}

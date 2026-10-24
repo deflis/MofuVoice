@@ -1,4 +1,4 @@
-import styles from "../../../styles.module.css";
+import styles from "./ChannelRoutingSettings.module.css";
 import { NumberInput } from "../NumberInput";
 import { useState } from "react";
 import { useChannelRouting } from "./hooks";

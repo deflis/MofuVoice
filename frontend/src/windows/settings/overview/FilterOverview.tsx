@@ -1,4 +1,4 @@
-import styles from "../../../styles.module.css";
+import styles from "./overview.module.css";
 import type { ComponentType } from "react";
 import { useSettingsConnection } from "../listener";
 import type { CardProps } from "./Card";

@@ -1,4 +1,4 @@
-import styles from "../../../styles.module.css";
+import styles from "./overview.module.css";
 import type { ReactNode } from "react";
 
 export type CardProps = { onSelect: (id: string) => void };

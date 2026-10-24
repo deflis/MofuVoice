@@ -1,4 +1,4 @@
-import styles from "../../styles.module.css";
+import styles from "./Notifications.module.css";
 import { useSettingsConnection } from "./listener";
 
 export function Notifications() {

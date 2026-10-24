@@ -1,4 +1,4 @@
-import styles from "../../../styles.module.css";
+import styles from "./SampleRateSettings.module.css";
 import type { RateResult } from "./deviceSampleRates";
 import { useSampleRateSettings } from "./hooks";
 import { useSettingsLocked } from "../hooks";

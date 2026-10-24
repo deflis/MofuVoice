@@ -1,0 +1,91 @@
+/* Styles colocated with SettingsPanel.tsx. */
+
+/* Settings window styles. */
+
+/* Component styles. */
+
+.settings {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.settings-layout {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 24px;
+}
+
+.settings-layout nav {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-self: start;
+  position: sticky;
+  top: 16px;
+}
+
+.settings-layout nav button {
+  text-align: left;
+  padding: 10px 12px;
+}
+
+.settings-layout nav button[aria-current="page"] {
+  background: #00c4b4;
+  color: #0a1416;
+}
+
+.settings-content {
+  min-width: 0;
+}
+
+.settings-content section {
+  border: 1px solid #373c46;
+  border-radius: 8px;
+  padding: 16px;
+  background: #1b1e23;
+}
+
+.settings-content small,
+.settings-content p {
+  color: #abb3c0;
+  line-height: 1.6;
+}
+
+.settings-content h2 {
+  font-size: 15px;
+}
+
+@media (max-width: 620px) {
+  .settings-layout {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  .settings-layout nav {
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+}
+
+.settings-content section {
+  margin: 12px 0;
+}
+
+.settings-content section > p {
+  margin: 8px 0 14px;
+}
+
+.settings-content section > .check {
+  margin: 8px 0;
+}
+
+.settings-content .eq-scale,
+.settings-content .deesser-scale {
+  margin-bottom: 8px;
+}
+
+.settings-content .settings button + button {
+  margin-left: 8px;
+}

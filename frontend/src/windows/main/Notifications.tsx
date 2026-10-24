@@ -1,4 +1,4 @@
-import styles from "../../styles.module.css";
+import styles from "./Notifications.module.css";
 import { useMainStore } from "./store";
 
 export function Notifications() {

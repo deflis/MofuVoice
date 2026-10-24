@@ -1,4 +1,4 @@
-import styles from "../../../styles.module.css";
+import styles from "./ReverbSettings.module.css";
 import { useSettingsStore } from "../store";
 import { NumberField } from "../NumberField";
 export function ReverbSettings() {

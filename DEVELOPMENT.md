@@ -23,7 +23,7 @@ pnpm desktop:build
 
 ## CSS Modules
 
-画面のスタイルは `frontend/src/styles.module.css` にまとめています。要素の基本スタイルも CSS Module のグローバルセレクターとして同じファイルに置き、コンポーネントでは CSS Module を `styles` として import して `className={styles.check}` のように参照します。
+画面の基本要素スタイルは `frontend/src/styles.css` に置き、コンポーネント固有のスタイルは各コンポーネントの隣にある `*.module.css` に置きます。たとえば `Home.tsx` は `Home.module.css`、フィルタ概要のカード群は同じ `overview.module.css` を使います。コンポーネントでは CSS Module を `styles` として import して `className={styles.check}` のように参照します。
 
 [CSS Modules Kit](https://github.com/mizdra/css-modules-kit) でクラス名の型を生成します。`pnpm dev` は Vite と型生成の監視を同時に起動します。`pnpm typecheck` と `pnpm build` は実行前に型を生成します。手動で生成する場合は `pnpm generate:css` を実行してください。生成先の `frontend/generated/` は Git 管理対象外です。
 

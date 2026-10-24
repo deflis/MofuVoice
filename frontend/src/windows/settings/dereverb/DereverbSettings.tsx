@@ -1,4 +1,4 @@
-import styles from "../../../styles.module.css";
+import styles from "./DereverbSettings.module.css";
 import { useSettingsStore } from "../store";
 import { NumberField } from "../NumberField";
 export function DereverbSettings() {

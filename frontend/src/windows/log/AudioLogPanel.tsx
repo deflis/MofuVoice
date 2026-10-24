@@ -1,4 +1,4 @@
-import styles from "../../styles.module.css";
+import styles from "./AudioLogPanel.module.css";
 import { useLogStore } from "./store";
 
 export function AudioLogPanel() {

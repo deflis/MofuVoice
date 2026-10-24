@@ -1,4 +1,4 @@
-import styles from "../../../styles.module.css";
+import styles from "./overview.module.css";
 import { useId, type ReactNode } from "react";
 
 export function Plot({

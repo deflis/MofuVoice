@@ -1,0 +1,11 @@
+/* Styles colocated with RumbleSettings.tsx. */
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-content section > .check {
+  margin: 8px 0;
+}

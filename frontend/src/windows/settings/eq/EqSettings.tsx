@@ -1,4 +1,4 @@
-import styles from "../../../styles.module.css";
+import styles from "./EqSettings.module.css";
 import type { EqKey } from "./slice";
 import { NumberInput } from "../NumberInput";
 import { EqSimpleBand, EqBandDetails } from "./BandSettings";

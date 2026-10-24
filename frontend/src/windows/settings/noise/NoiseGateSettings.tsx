@@ -1,4 +1,4 @@
-import styles from "../../../styles.module.css";
+import styles from "./NoiseGateSettings.module.css";
 import { NumberInput } from "../NumberInput";
 import { DetailsPopup } from "../DetailsPopup";
 import { useNoiseGateSettings } from "./hooks";

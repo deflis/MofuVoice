@@ -1,4 +1,4 @@
-import styles from "../../../styles.module.css";
+import styles from "./BandSettings.module.css";
 import { useId } from "react";
 import { NumberField } from "../NumberField";
 import type { EqBand } from "../../../types";

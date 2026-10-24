@@ -1,4 +1,4 @@
-import styles from "../../../styles.module.css";
+import styles from "./overview.module.css";
 import * as v from "valibot";
 import { useSettingsStore } from "../store";
 import { eqSchema } from "../eq/schema";

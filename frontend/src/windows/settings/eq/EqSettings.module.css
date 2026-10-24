@@ -1,0 +1,23 @@
+/* Styles colocated with EqSettings.tsx. */
+
+.error {
+  color: light-dark(#a80000, #ff9090);
+  overflow-wrap: anywhere;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.eq-controls {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+
+.settings-content section > .check {
+  margin: 8px 0;
+}

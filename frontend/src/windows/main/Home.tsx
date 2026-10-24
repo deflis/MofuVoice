@@ -1,4 +1,4 @@
-import styles from "../../styles.module.css";
+import styles from "./Home.module.css";
 import type { SettingsSection } from "../settings/navigation";
 import { openSpectrum, openSettings, openLog } from "./listener";
 import { useMainStore } from "./store";
