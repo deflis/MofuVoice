@@ -6,12 +6,17 @@
 //! overlap-added, resetting the vocoder phases as described by Moinet & Dutoit.
 //! All storage is allocated at construction; the audio callback does no I/O.
 use crate::dsp::{complex::Complex, fft::Fft, phase, window::hann};
+use std::f64::consts::{PI, TAU};
 
 const FRAME: usize = 1024;
 const HOP: usize = FRAME / 4;
 const RESET_EVERY: usize = 4;
 const TOLERANCE: usize = 2 * HOP;
 const RESAMPLE_RADIUS: usize = 32;
+const RESAMPLE_TAPS: usize = 2 * RESAMPLE_RADIUS + 1;
+const RESAMPLE_PHASES: usize = 256;
+/// Quantize anti-alias cutoffs so smooth pitch ramps rebuild kernels sparsely.
+const CUTOFF_STEPS: f64 = 512.0;
 const CORRELATION_SIZE: usize = (2 * FRAME + 2 * TOLERANCE).next_power_of_two();
 const RING: usize = 16384;
 const CEPSTRUM_CUTOFF: usize = 48;
@@ -36,6 +41,10 @@ pub(crate) struct PvsOla {
     magnitude: Box<[f64; FRAME]>,
     current_phase: Box<[f64; FRAME]>,
     envelope: Box<[f64; FRAME]>,
+    /// Polyphase windowed-sinc kernels for pitch-rate reads. Built once per
+    /// quantized cutoff so the callback never recomputes sin/cos per sample.
+    kernels: Box<[f64]>,
+    kernel_cutoff: f64,
     preserve_formants: bool,
     formant_ratio: f64,
     polarity: f64,
@@ -59,6 +68,9 @@ impl PvsOla {
     pub fn new(ratio: f64, preserve_formants: bool, formant_ratio: f64) -> Self {
         assert!(ratio.is_finite() && (0.5..=2.0).contains(&ratio));
         let window = Box::new(std::array::from_fn(|i| hann(i, FRAME)));
+        let mut kernels = vec![0.0; (RESAMPLE_PHASES + 1) * RESAMPLE_TAPS].into_boxed_slice();
+        let kernel_cutoff = quantized_cutoff(ratio);
+        fill_resample_kernels(&mut kernels, kernel_cutoff);
         Self {
             fft: Fft::new(FRAME),
             vector_phase: {
@@ -92,6 +104,8 @@ impl PvsOla {
             magnitude: Box::new([0.0; FRAME]),
             current_phase: Box::new([0.0; FRAME]),
             envelope: Box::new([0.0; FRAME]),
+            kernels,
+            kernel_cutoff,
             preserve_formants,
             formant_ratio,
             polarity: 1.0,
@@ -153,6 +167,7 @@ impl PvsOla {
         self.ratio = ratio;
         self.preserve_formants = preserve_formants;
         self.formant_ratio = formant_ratio;
+        self.refresh_kernels(ratio);
         self.input[self.input_clock % RING] = sample;
         self.input_clock += 1;
         self.generate_available_frames();
@@ -172,6 +187,15 @@ impl PvsOla {
             self.clear_until += 1;
         }
         output
+    }
+
+    fn refresh_kernels(&mut self, ratio: f64) {
+        let cutoff = quantized_cutoff(ratio);
+        if cutoff == self.kernel_cutoff {
+            return;
+        }
+        fill_resample_kernels(&mut self.kernels, cutoff);
+        self.kernel_cutoff = cutoff;
     }
 
     fn generate_available_frames(&mut self) {
@@ -454,30 +478,24 @@ impl PvsOla {
 
     fn resample(&self, position: f64) -> f64 {
         let center = position.floor() as isize;
-        let fraction = position - center as f64;
+        let phase = (position - center as f64) * RESAMPLE_PHASES as f64;
+        let index = phase.floor() as usize;
+        let fraction = phase - index as f64;
+        let lower = &self.kernels[index * RESAMPLE_TAPS..(index + 1) * RESAMPLE_TAPS];
+        let upper = &self.kernels[(index + 1) * RESAMPLE_TAPS..(index + 2) * RESAMPLE_TAPS];
+        let first = center - RESAMPLE_RADIUS as isize;
         let mut value = 0.0;
         let mut weight = 0.0;
-        for offset in -(RESAMPLE_RADIUS as isize)..=RESAMPLE_RADIUS as isize {
-            let sample_position = center + offset;
+        for tap in 0..RESAMPLE_TAPS {
+            let sample_position = first + tap as isize;
             if sample_position < 0 {
                 continue;
             }
-            let distance = offset as f64 - fraction;
-            let normalized = distance / (RESAMPLE_RADIUS as f64 + 1.0);
-            let window = 0.42
-                + 0.5 * (std::f64::consts::PI * normalized).cos()
-                + 0.08 * (std::f64::consts::TAU * normalized).cos();
-            let cutoff = 0.45 / self.ratio.max(1.0);
-            let kernel = if distance.abs() < 1e-12 {
-                2.0 * cutoff
-            } else {
-                (std::f64::consts::TAU * cutoff * distance).sin()
-                    / (std::f64::consts::PI * distance)
-            } * window;
-            let index = sample_position as usize % RING;
-            let frame_weight = self.weight[index];
+            let ring = sample_position as usize % RING;
+            let frame_weight = self.weight[ring];
             if frame_weight > 1e-12 {
-                value += kernel * self.output[index] / frame_weight;
+                let kernel = lower[tap] + fraction * (upper[tap] - lower[tap]);
+                value += kernel * self.output[ring] / frame_weight;
                 weight += kernel;
             }
         }
@@ -489,8 +507,30 @@ impl PvsOla {
     }
 }
 
+fn quantized_cutoff(ratio: f64) -> f64 {
+    ((0.45 / ratio.max(1.0)) * CUTOFF_STEPS).round() / CUTOFF_STEPS
+}
+
+fn fill_resample_kernels(kernels: &mut [f64], cutoff: f64) {
+    for phase in 0..=RESAMPLE_PHASES {
+        let fraction = phase as f64 / RESAMPLE_PHASES as f64;
+        let kernel = &mut kernels[phase * RESAMPLE_TAPS..(phase + 1) * RESAMPLE_TAPS];
+        for (i, tap) in kernel.iter_mut().enumerate() {
+            let distance = i as f64 - RESAMPLE_RADIUS as f64 - fraction;
+            let normalized = distance / (RESAMPLE_RADIUS as f64 + 1.0);
+            let window = 0.42 + 0.5 * (PI * normalized).cos() + 0.08 * (TAU * normalized).cos();
+            let sinc = if distance.abs() < 1e-12 {
+                2.0 * cutoff
+            } else {
+                (TAU * cutoff * distance).sin() / (PI * distance)
+            };
+            *tap = window * sinc;
+        }
+    }
+}
+
 fn wrap(phase: f64) -> f64 {
-    (phase + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI
+    (phase + PI).rem_euclid(TAU) - PI
 }
 
 #[cfg(test)]
@@ -670,5 +710,64 @@ mod tests {
             assert_eq!(dsp.output[i], 0.25, "read audio rewritten at {i}");
             assert_eq!(dsp.weight[i], 1.0);
         }
+    }
+
+    #[test]
+    fn polyphase_resampler_matches_direct_windowed_sinc() {
+        for ratio in [0.5, 0.83, 1.0, 1.3, 2.0] {
+            let mut dsp = PvsOla::new(ratio, false, 1.0);
+            for i in 0..RING {
+                dsp.output[i] = (i as f64 * 0.137).sin() * 0.4;
+                dsp.weight[i] = if i % 23 == 0 { 0.0 } else { 0.7 + (i % 5) as f64 };
+            }
+            for position in [0.0, 12.31, 128.9, 2047.37, 4096.01, 8000.63] {
+                let actual = dsp.resample(position);
+                let center = position.floor() as isize;
+                let fraction = position - center as f64;
+                let cutoff = 0.45 / ratio.max(1.0);
+                let mut expected = 0.0;
+                let mut weight = 0.0;
+                for offset in -(RESAMPLE_RADIUS as isize)..=RESAMPLE_RADIUS as isize {
+                    let sample_position = center + offset;
+                    if sample_position < 0 {
+                        continue;
+                    }
+                    let distance = offset as f64 - fraction;
+                    let normalized = distance / (RESAMPLE_RADIUS as f64 + 1.0);
+                    let window =
+                        0.42 + 0.5 * (PI * normalized).cos() + 0.08 * (TAU * normalized).cos();
+                    let kernel = if distance.abs() < 1e-12 {
+                        2.0 * cutoff
+                    } else {
+                        (TAU * cutoff * distance).sin() / (PI * distance)
+                    } * window;
+                    let index = sample_position as usize % RING;
+                    let frame_weight = dsp.weight[index];
+                    if frame_weight > 1e-12 {
+                        expected += kernel * dsp.output[index] / frame_weight;
+                        weight += kernel;
+                    }
+                }
+                let expected = if weight.abs() > 1e-12 {
+                    expected / weight
+                } else {
+                    0.0
+                };
+                assert!(
+                    (actual - expected).abs() < 2e-4,
+                    "ratio={ratio}, position={position}, actual={actual}, expected={expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn kernel_rebuild_is_skipped_for_tiny_ratio_changes() {
+        let mut dsp = PvsOla::new(1.3, false, 1.0);
+        let cutoff = dsp.kernel_cutoff;
+        dsp.refresh_kernels(1.3 + 1.0 / CUTOFF_STEPS / 4.0);
+        assert_eq!(dsp.kernel_cutoff, cutoff);
+        dsp.refresh_kernels(1.6);
+        assert_ne!(dsp.kernel_cutoff, cutoff);
     }
 }
