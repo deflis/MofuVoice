@@ -1,4 +1,3 @@
-import styles from "../../styles.module.css";
 import { setLogging } from "./listener";
 import { useLogStore } from "./store";
 import { AudioLogPanel } from "./AudioLogPanel";
@@ -11,7 +10,7 @@ export function StatusDetails() {
   const logging = useLogStore((state) => state.logging);
   if (!info) {
     return (
-      <section className={styles["status-panel"]}>
+      <section className="status-panel">
         <h2>音声処理の状態</h2>
         <p>状態を読み込んでいます…</p>
       </section>
@@ -24,15 +23,15 @@ export function StatusDetails() {
     outputDevice = info.outputDevice || "システム既定";
   }
   return (
-    <section className={styles["status-panel"]}>
+    <section className="status-panel">
       <h2>音声処理の状態</h2>
       {info.error && (
-        <p className={styles.error} role="alert">
+        <p className="error" role="alert">
           {info.error}
         </p>
       )}
-      <p className={styles["device-name"]}>{info.device ?? "デバイス未接続"}</p>
-      <dl className={styles["status-grid"]}>
+      <p className="device-name">{info.device ?? "デバイス未接続"}</p>
+      <dl className="status-grid">
         <div>
           <dt>バックエンド</dt>
           <dd>{info.backend?.toUpperCase() ?? "—"}</dd>
@@ -80,12 +79,12 @@ export function StatusDetails() {
           <dd>{ms(info.dspMs)}</dd>
         </div>
       </dl>
-      <p className={styles.muted}>
+      <p className="muted">
         {info.backend === "cpal"
           ? "CPALではドライバー遅延を取得できません。往復遅延は未測定です。"
           : "ドライバー報告値です。実測の往復遅延とは異なります。"}
       </p>
-      <label className={styles.check}>
+      <label className="check">
         <input
           type="checkbox"
           checked={logging}

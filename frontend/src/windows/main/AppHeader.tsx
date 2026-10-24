@@ -1,4 +1,3 @@
-import styles from "../../styles.module.css";
 import { useMainStore } from "./store";
 import { headerLabel } from "./selectors";
 
@@ -7,7 +6,7 @@ export function AppHeader() {
   return (
     <header>
       <h1>Voice Changer</h1>
-      <output className={styles["status-badge"]}>{status}</output>
+      <output className="status-badge">{status}</output>
     </header>
   );
 }

@@ -80,7 +80,7 @@ jobs:
       - name: Lint frontend
         run: pnpm exec oxlint --deny-warnings frontend
       - name: Check frontend types
-        run: pnpm typecheck
+        run: pnpm exec tsc -p frontend/tsconfig.json
       - name: Frontend regression tests
         run: pnpm test:web
       - name: Build React frontend

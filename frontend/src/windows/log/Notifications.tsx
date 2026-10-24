@@ -1,4 +1,3 @@
-import styles from "../../styles.module.css";
 import { useLogStore } from "./store";
 
 export function Notifications() {
@@ -6,7 +5,7 @@ export function Notifications() {
   return (
     <>
       {error && (
-        <div className={styles.error} role="alert">
+        <div className="error" role="alert">
           {error}
         </div>
       )}

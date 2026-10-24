@@ -1,4 +1,3 @@
-import styles from "../../styles.module.css";
 import { useSettingsConnection } from "./listener";
 
 export function Notifications() {
@@ -7,11 +6,11 @@ export function Notifications() {
   return (
     <>
       {error && (
-        <div className={styles.error} role="alert">
+        <div className="error" role="alert">
           {error}
         </div>
       )}
-      {notice && <output className={styles.notice}>{notice}</output>}
+      {notice && <output className="notice">{notice}</output>}
     </>
   );
 }

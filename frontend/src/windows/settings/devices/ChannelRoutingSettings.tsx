@@ -1,4 +1,3 @@
-import styles from "../../../styles.module.css";
 import { NumberInput } from "../NumberInput";
 import { useState } from "react";
 import { useChannelRouting } from "./hooks";
@@ -12,9 +11,9 @@ export function ChannelRoutingPresets() {
     outputChannels.includes(1) &&
     outputChannels.includes(2);
   return (
-    <fieldset className={styles["routing-presets"]}>
+    <fieldset className="routing-presets">
       <legend>チャンネル</legend>
-      <div className={styles["routing-choices"]}>
+      <div className="routing-choices">
         <button type="button" aria-pressed={singleOutput} onClick={() => setRouting(1, [1])}>
           モノラル（1 → 1）
         </button>
@@ -23,7 +22,7 @@ export function ChannelRoutingPresets() {
         </button>
       </div>
       {!singleOutput && !dualOutput && (
-        <p className={styles.muted}>プロ向け設定の割り当てを使用中です。</p>
+        <p className="muted">プロ向け設定の割り当てを使用中です。</p>
       )}
     </fieldset>
   );
@@ -60,9 +59,9 @@ export function ChannelRoutingDetails() {
       </label>
       <fieldset>
         <legend>出力チャンネル（複数選択可）</legend>
-        <div className={styles["channel-choices"]}>
+        <div className="channel-choices">
           {channelChoices.map((channel) => (
-            <label className={styles.check} key={channel}>
+            <label className="check" key={channel}>
               <input
                 type="checkbox"
                 checked={outputChannels.includes(channel)}

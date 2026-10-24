@@ -1,4 +1,3 @@
-import styles from "../../styles.module.css";
 import type { SettingsSection } from "../settings/navigation";
 import { openSpectrum, openSettings, openLog } from "./listener";
 import { useMainStore } from "./store";
@@ -9,29 +8,25 @@ import { AppHeader } from "./AppHeader";
 export function Home() {
   const spectrumAvailable = useMainStore(canOpenSpectrum);
   return (
-    <div className={styles["home-layout"]}>
+    <div className="home-layout">
       <AppHeader />
       <AudioControls />
-      <div className={styles["home-settings-actions"]}>
-        <OpenSettingsButton className={styles["home-primary-action"]} section="voice">
+      <div className="home-settings-actions">
+        <OpenSettingsButton className="home-primary-action" section="voice">
           声を調整する
         </OpenSettingsButton>
-        <button
-          type="button"
-          className={styles["home-secondary-action"]}
-          onClick={() => void openLog()}
-        >
+        <button type="button" className="home-secondary-action" onClick={() => void openLog()}>
           ログ
         </button>
         <button
           type="button"
-          className={styles["home-secondary-action"]}
+          className="home-secondary-action"
           disabled={!spectrumAvailable}
           onClick={() => void openSpectrum()}
         >
           スペアナ
         </button>
-        <OpenSettingsButton className={styles["home-secondary-action"]} section="devices">
+        <OpenSettingsButton className="home-secondary-action" section="devices">
           設定
         </OpenSettingsButton>
       </div>
@@ -62,9 +57,9 @@ function DeviceSetupGuidance() {
     return null;
   }
   return (
-    <aside className={styles["setup-guidance"]}>
+    <aside className="setup-guidance">
       <p>{reason}</p>
-      <OpenSettingsButton className={styles["home-secondary-action"]} section="devices">
+      <OpenSettingsButton className="home-secondary-action" section="devices">
         入力・出力デバイスを確認する
       </OpenSettingsButton>
     </aside>

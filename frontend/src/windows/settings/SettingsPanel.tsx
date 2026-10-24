@@ -1,4 +1,3 @@
-import styles from "../../styles.module.css";
 import { connectSettingsNavigation, readSettingsSection, type SettingsSection } from "./navigation";
 import { useEffect, useState } from "react";
 import { useSettingsLocked } from "./hooks";
@@ -22,7 +21,7 @@ export function SettingsPanel() {
   const [group, setGroup] = useState<SettingsSection>(readSettingsSection);
   useEffect(() => connectSettingsNavigation(setGroup), []);
   return (
-    <div className={styles["settings-layout"]}>
+    <div className="settings-layout">
       <nav aria-label="設定カテゴリ">
         {groups.map((item) => (
           <button
@@ -35,8 +34,8 @@ export function SettingsPanel() {
           </button>
         ))}
       </nav>
-      <div className={styles["settings-content"]}>
-        <fieldset className={styles.settings} disabled={locked}>
+      <div className="settings-content">
+        <fieldset className="settings" disabled={locked}>
           {group === "devices" && <DeviceSettings />}
           {group === "voice" && <VoiceSettings />}
           {group === "noise" && (

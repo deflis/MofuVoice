@@ -1,4 +1,3 @@
-import styles from "../../../styles.module.css";
 import { pitchLatency } from "./latency";
 import { DetailsPopup } from "../DetailsPopup";
 import { useSettingsStore } from "../store";
@@ -139,7 +138,7 @@ export function VoiceSettings() {
         value={pitch}
         onChange={(value) => setPitch(value)}
       />
-      <fieldset className={styles.settings} disabled={!preserveFormants}>
+      <fieldset className="settings" disabled={!preserveFormants}>
         <SemitonesInput
           label="声の響き（フォルマント）"
           lowerLabel="太く"
@@ -157,7 +156,7 @@ export function VoiceSettings() {
       >
         元の声に戻す
       </button>
-      <label className={styles.check}>
+      <label className="check">
         <input
           type="checkbox"
           checked={preserveFormants}
@@ -209,7 +208,7 @@ function WindowControls({
 }) {
   const sampleRate = useSettingsStore((state) => state.devices.sampleRate);
   return (
-    <fieldset className={styles.settings} disabled={disabled}>
+    <fieldset className="settings" disabled={disabled}>
       <legend>{title}</legend>
       <label>
         解析ウィンドウ長
