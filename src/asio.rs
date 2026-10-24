@@ -1,9 +1,8 @@
 //! Direct ASIO duplex processing via asio-sys public Driver APIs.
 use crate::{audio::DspChain, dsp::Sample, RATE};
 use asio_sys::{
-    AsioBufferInfo, AsioDriverEvent, AsioMessageSelectors, AsioSampleType, AsioStreams,
-    BufferCallbackId, BufferPreference, BufferSizeRange, CallbackInfo, Driver,
-    DriverEventCallbackId,
+    AsioBufferInfo, AsioDriverEvent, AsioMessageSelectors, AsioStreams, BufferCallbackId,
+    BufferPreference, BufferSizeRange, CallbackInfo, Driver, DriverEventCallbackId,
 };
 use std::{
     cell::UnsafeCell,
@@ -17,12 +16,40 @@ use std::{
 };
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
+const OK: i32 = 0;
+const SUCCESS: i32 = 0x3f4847a0;
 const RESET: u32 = 1;
 const RESYNC: u32 = 2;
 const RATE_CHANGE: u32 = 4;
 const INVALID_BUFFER: u32 = 8;
 const OVERLOAD: u32 = 16;
 const REENTRY: u32 = 32;
+
+fn check(code: i32, operation: &str) -> Result<()> {
+    if code == OK || code == SUCCESS {
+        Ok(())
+    } else {
+        Err(format!("{operation} failed: ASIO error {code}").into())
+    }
+}
+
+/// Matches the ASIO SDK `ASIOChannelInfo` layout used by asio-sys bindgen.
+#[repr(C)]
+struct ChannelInfo {
+    channel: i32,
+    is_input: i32,
+    is_active: i32,
+    channel_group: i32,
+    type_: i32,
+    name: [i8; 32],
+}
+
+// asio-sys keeps ASIOGetChannelInfo behind the private `asio_import` module; bind the
+// MSVC C++ export so every allocated channel's sample type can still be validated.
+unsafe extern "C" {
+    #[link_name = "\x01?ASIOGetChannelInfo@@YAJPEAUASIOChannelInfo@@@Z"]
+    fn asio_get_channel_info(info: *mut ChannelInfo) -> i32;
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Format {
@@ -31,13 +58,13 @@ enum Format {
     I16,
 }
 impl Format {
-    fn from_asio(value: AsioSampleType) -> Result<Self> {
+    fn from_raw(value: i32) -> Result<Self> {
         match value {
-            AsioSampleType::ASIOSTFloat32LSB => Ok(Self::F32),
-            AsioSampleType::ASIOSTInt32LSB => Ok(Self::I32),
-            AsioSampleType::ASIOSTInt16LSB => Ok(Self::I16),
-            other => Err(format!(
-                "Unsupported ASIO format {other:?}; expected little-endian f32/i32/i16"
+            19 => Ok(Self::F32), // ASIOSTFloat32LSB
+            18 => Ok(Self::I32), // ASIOSTInt32LSB
+            16 => Ok(Self::I16), // ASIOSTInt16LSB
+            _ => Err(format!(
+                "Unsupported ASIO format {value}; expected little-endian f32/i32/i16"
             )
             .into()),
         }
@@ -66,10 +93,32 @@ impl Configuration {
         if channels.ins < 1 || channels.outs < 1 || channels.ins > 512 || channels.outs > 512 {
             return Err("ASIO requires 1..512 input and output channels".into());
         }
-        let input = Format::from_asio(driver.input_data_type()?)?;
-        let output = Format::from_asio(driver.output_data_type()?)?;
-        if input != output {
-            return Err("All selected input/output channels must have the same format".into());
+        let mut format = None;
+        for input in [true, false] {
+            let count = if input { channels.ins } else { channels.outs };
+            for channel in 0..count {
+                // Zero is a valid initial representation for the SDK channel-info POD.
+                let mut info = ChannelInfo {
+                    channel,
+                    is_input: i32::from(input),
+                    is_active: 0,
+                    channel_group: 0,
+                    type_: 0,
+                    name: [0; 32],
+                };
+                // SAFETY: driver is initialized; info is writable and lives through the call.
+                check(
+                    unsafe { asio_get_channel_info(&mut info) },
+                    "ASIOGetChannelInfo",
+                )?;
+                let current = Format::from_raw(info.type_)?;
+                if format.is_some_and(|previous| previous != current) {
+                    return Err(
+                        "All selected input/output channels must have the same format".into(),
+                    );
+                }
+                format = Some(current);
+            }
         }
         let BufferSizeRange {
             min,
@@ -79,7 +128,7 @@ impl Configuration {
         Ok(Self {
             inputs: channels.ins as usize,
             outputs: channels.outs as usize,
-            format: input,
+            format: format.expect("channels validated"),
             rate: driver.sample_rate()?,
             min,
             max,
