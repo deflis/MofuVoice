@@ -57,34 +57,42 @@
 
   /* Light — 狐・柴犬のクリーム毛並みをイメージ */
   color-scheme: light;
+
+  /* Surfaces — 明るいクリームファー */
   --color-bg: #f7f1ea;
   --color-surface: #fffaf5;
   --color-surface-raised: #f3ebe3;
   --color-control: #ebe0d4;
   --color-control-hover: #dfd1c2;
 
+  /* Text — 焦げ茶寄りのインク */
   --color-text: #2a1f18;
   --color-text-secondary: #6b5848;
   --color-text-muted: #8a7464;
   --color-text-tertiary: #5c4a3c;
 
+  /* Borders */
   --color-border: #d4c4b4;
   --color-border-strong: #b8a090;
   --color-border-muted: #c4b4a4;
   --color-high-contrast: black;
 
+  /* Accent — 狐オレンジ / 柴犬コート */
   --color-accent: #d4652a;
   --color-on-accent: #fff8f0;
   --color-accent-soft: #b85420;
   --color-accent-plot: #d4652a;
 
+  /* Status */
   --color-danger: #a80000;
   --color-warning: #9a6a20;
   --color-warning-muted: #8a7040;
 
+  /* Overlay / shadow */
   --color-overlay: #0006;
   --color-shadow: #0004;
 
+  /* Plot / chart */
   --color-plot-label: #6b5848;
   --color-plot-axis: #c4b4a4;
   --color-plot-reference: #b8a090;
@@ -101,34 +109,42 @@
 @media (prefers-color-scheme: dark) {
   :root {
     color-scheme: dark;
+
+    /* Surfaces — 狐・柴犬の焦げ茶〜ダークファーをイメージした暖色ベース */
     --color-bg: #1a1512;
     --color-surface: #241e1a;
     --color-surface-raised: #2c241e;
     --color-control: #3a3028;
     --color-control-hover: #4a3c32;
 
+    /* Text — クリーム毛並み寄りのオフホワイト */
     --color-text: #f3e8dc;
     --color-text-secondary: #b8a898;
     --color-text-muted: #9a8a78;
     --color-text-tertiary: #d4c4b0;
 
+    /* Borders */
     --color-border: #43362c;
     --color-border-strong: #5a4a3c;
     --color-border-muted: #6a5848;
     --color-high-contrast: white;
 
+    /* Accent — 狐オレンジ / 柴犬コート */
     --color-accent: #e8783a;
     --color-on-accent: #1a120c;
     --color-accent-soft: #f0a070;
     --color-accent-plot: #e8783a;
 
+    /* Status */
     --color-danger: #ff9090;
     --color-warning: #ffd092;
     --color-warning-muted: #e8c9a0;
 
+    /* Overlay / shadow */
     --color-overlay: #0009;
     --color-shadow: #0008;
 
+    /* Plot / chart */
     --color-plot-label: #c4b4a0;
     --color-plot-axis: #6a5848;
     --color-plot-reference: #8a7868;
