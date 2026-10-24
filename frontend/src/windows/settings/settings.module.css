@@ -8,17 +8,17 @@
 .check {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
 }
 
 dt,
 .muted {
   color: var(--color-text-muted);
-  font-size: 12px;
+  font-size: var(--font-size-xs);
 }
 
 .settings-content section > .check {
-  margin: 8px 0;
+  margin: var(--space-3) 0;
 }
 
 .settings {
@@ -29,27 +29,27 @@ dt,
 }
 
 .settings-content .settings button + button {
-  margin-left: 8px;
+  margin-left: var(--space-3);
 }
 
 .settings-layout {
   display: grid;
-  grid-template-columns: 150px minmax(0, 1fr);
-  gap: 24px;
+  grid-template-columns: var(--width-nav) minmax(0, 1fr);
+  gap: var(--space-10);
 }
 
 .settings-layout nav {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-3);
   align-self: start;
   position: sticky;
-  top: 16px;
+  top: var(--space-7);
 }
 
 .settings-layout nav button {
   text-align: left;
-  padding: 10px 12px;
+  padding: var(--space-4) var(--space-5);
 }
 
 .settings-layout nav button[aria-current="page"] {
@@ -63,25 +63,25 @@ dt,
 
 .settings-content section {
   border: 1px solid var(--color-border);
-  border-radius: 8px;
-  padding: 16px;
+  border-radius: var(--radius-lg);
+  padding: var(--space-7);
   background: var(--color-surface);
 }
 
 .settings-content small,
 .settings-content p {
   color: var(--color-text-secondary);
-  line-height: 1.6;
+  line-height: var(--line-height-body);
 }
 
 .settings-content h2 {
-  font-size: 15px;
+  font-size: var(--font-size-md);
 }
 
 @media (max-width: 620px) {
   .settings-layout {
     grid-template-columns: 1fr;
-    gap: 8px;
+    gap: var(--space-3);
   }
   .settings-layout nav {
     position: static;
@@ -91,16 +91,16 @@ dt,
 }
 
 .settings-content section {
-  margin: 12px 0;
+  margin: var(--space-5) 0;
 }
 
 .settings-content section > p {
-  margin: 8px 0 14px;
+  margin: var(--space-3) 0 var(--space-6);
 }
 
 .settings-content .eq-scale,
 .settings-content .deesser-scale {
-  margin-bottom: 8px;
+  margin-bottom: var(--space-3);
 }
 
 .notice {
@@ -125,18 +125,18 @@ dt,
 .eq-scale {
   display: flex;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .eq-scale {
   color: var(--color-text-secondary);
-  font-size: 12px;
+  font-size: var(--font-size-xs);
 }
 
 .level-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0 12px;
+  gap: 0 var(--space-5);
 }
 
 @media (max-width: 500px) {
@@ -147,20 +147,20 @@ dt,
 }
 
 .semitones {
-  margin: 10px 0;
+  margin: var(--space-4) 0;
 }
 
 .semitones > label {
   display: flex;
-  margin: 0 0 4px;
-  gap: 8px;
+  margin: 0 0 var(--space-1);
+  gap: var(--space-3);
   align-items: baseline;
 }
 
 .slider-row {
   display: grid;
-  grid-template-columns: 1fr 80px;
-  column-gap: 12px;
+  grid-template-columns: 1fr var(--width-slider-value);
+  column-gap: var(--space-5);
 }
 
 .slider-row input[type="range"] {

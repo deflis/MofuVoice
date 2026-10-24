@@ -3,6 +3,6 @@
 .status-badge {
   color: var(--color-accent);
   background: var(--color-surface-raised);
-  border-radius: 12px;
-  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  padding: var(--space-1) var(--space-4);
 }

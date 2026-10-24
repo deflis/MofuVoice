@@ -3,29 +3,29 @@
 .channel-choices {
   display: flex;
   flex-wrap: wrap;
-  gap: 0 16px;
+  gap: 0 var(--space-7);
 }
 
 .routing-presets {
   border: 0;
-  margin: 18px 0;
+  margin: var(--space-8) 0;
   padding: 0;
   min-width: 0;
 }
 
 .routing-presets legend {
-  margin-bottom: 8px;
+  margin-bottom: var(--space-3);
 }
 
 .routing-choices {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .routing-choices button {
   flex: 1;
-  padding: 10px 12px;
+  padding: var(--space-4) var(--space-5);
 }
 
 .routing-choices button[aria-pressed="true"] {

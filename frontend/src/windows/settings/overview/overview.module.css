@@ -6,7 +6,7 @@
 
 .filter-lifecycle {
   border-left: 3px solid var(--color-accent);
-  padding-left: 10px;
+  padding-left: var(--space-4);
 }
 
 .filter-chain {
@@ -22,9 +22,9 @@
 
 .filter-card {
   border: 1px solid var(--color-border-muted);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--color-surface);
-  padding: 14px;
+  padding: var(--space-6);
 }
 
 .filter-card[data-enabled="false"] {
@@ -36,16 +36,16 @@
   flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
-  gap: 6px;
+  gap: var(--space-2);
 }
 
 .filter-card h3 {
-  font-size: 14px;
+  font-size: var(--font-size-sm);
   margin: 0;
 }
 
 .filter-state {
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
 
@@ -55,16 +55,16 @@
 
 .filter-card button {
   display: block;
-  margin-top: 12px;
+  margin-top: var(--space-5);
 }
 
 .filter-card button:focus-visible {
-  outline: 3px solid var(--color-accent-soft);
-  outline-offset: 3px;
+  outline: var(--focus-ring-width-strong) solid var(--color-accent-soft);
+  outline-offset: var(--focus-ring-offset-strong);
 }
 
 .filter-card .filter-values {
-  margin: 8px 0;
+  margin: var(--space-3) 0;
   overflow-wrap: anywhere;
 }
 
@@ -83,21 +83,21 @@
 .filter-overview .filter-endpoint {
   text-align: center;
   color: var(--color-text);
-  font-weight: 600;
-  margin: 6px 0;
+  font-weight: var(--font-weight-semibold);
+  margin: var(--space-2) 0;
 }
 
 .filter-overview .filter-divider {
   color: var(--color-text-tertiary);
-  margin: 0 0 6px;
-  font-size: 12px;
+  margin: 0 0 var(--space-2);
+  font-size: var(--font-size-xs);
 }
 
 .filter-plot {
   width: 100%;
   max-height: 160px;
   display: block;
-  margin: 10px 0;
+  margin: var(--space-4) 0;
   overflow: visible;
 }
 
@@ -155,5 +155,5 @@
 .filter-lifecycle,
 .filter-invalid {
   display: block;
-  margin: 12px 0;
+  margin: var(--space-5) 0;
 }
