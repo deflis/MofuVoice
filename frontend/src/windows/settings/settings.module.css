@@ -1,24 +1,24 @@
 /* Settings styles. */
 
 .error {
-  color: light-dark(#a80000, #ff9090);
+  color: var(--color-danger);
   overflow-wrap: anywhere;
 }
 
 .check {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
 }
 
 dt,
 .muted {
-  color: #8c94a0;
-  font-size: 12px;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
 }
 
 .settings-content section > .check {
-  margin: 8px 0;
+  margin: var(--space-3) 0;
 }
 
 .settings {
@@ -29,32 +29,32 @@ dt,
 }
 
 .settings-content .settings button + button {
-  margin-left: 8px;
+  margin-left: var(--space-3);
 }
 
 .settings-layout {
   display: grid;
-  grid-template-columns: 150px minmax(0, 1fr);
-  gap: 24px;
+  grid-template-columns: var(--width-nav) minmax(0, 1fr);
+  gap: var(--space-10);
 }
 
 .settings-layout nav {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-3);
   align-self: start;
   position: sticky;
-  top: 16px;
+  top: var(--space-7);
 }
 
 .settings-layout nav button {
   text-align: left;
-  padding: 10px 12px;
+  padding: var(--space-4) var(--space-5);
 }
 
 .settings-layout nav button[aria-current="page"] {
-  background: #00c4b4;
-  color: #0a1416;
+  background: var(--color-accent);
+  color: var(--color-on-accent);
 }
 
 .settings-content {
@@ -62,26 +62,26 @@ dt,
 }
 
 .settings-content section {
-  border: 1px solid #373c46;
-  border-radius: 8px;
-  padding: 16px;
-  background: #1b1e23;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-7);
+  background: var(--color-surface);
 }
 
 .settings-content small,
 .settings-content p {
-  color: #abb3c0;
-  line-height: 1.6;
+  color: var(--color-text-secondary);
+  line-height: var(--line-height-body);
 }
 
 .settings-content h2 {
-  font-size: 15px;
+  font-size: var(--font-size-md);
 }
 
 @media (max-width: 620px) {
   .settings-layout {
     grid-template-columns: 1fr;
-    gap: 8px;
+    gap: var(--space-3);
   }
   .settings-layout nav {
     position: static;
@@ -91,16 +91,16 @@ dt,
 }
 
 .settings-content section {
-  margin: 12px 0;
+  margin: var(--space-5) 0;
 }
 
 .settings-content section > p {
-  margin: 8px 0 14px;
+  margin: var(--space-3) 0 var(--space-6);
 }
 
 .settings-content .eq-scale,
 .settings-content .deesser-scale {
-  margin-bottom: 8px;
+  margin-bottom: var(--space-3);
 }
 
 .notice {
@@ -125,18 +125,18 @@ dt,
 .eq-scale {
   display: flex;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .eq-scale {
-  color: #abb3c0;
-  font-size: 12px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
 }
 
 .level-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0 12px;
+  gap: 0 var(--space-5);
 }
 
 @media (max-width: 500px) {
@@ -147,20 +147,20 @@ dt,
 }
 
 .semitones {
-  margin: 10px 0;
+  margin: var(--space-4) 0;
 }
 
 .semitones > label {
   display: flex;
-  margin: 0 0 4px;
-  gap: 8px;
+  margin: 0 0 var(--space-1);
+  gap: var(--space-3);
   align-items: baseline;
 }
 
 .slider-row {
   display: grid;
-  grid-template-columns: 1fr 80px;
-  column-gap: 12px;
+  grid-template-columns: 1fr var(--width-slider-value);
+  column-gap: var(--space-5);
 }
 
 .slider-row input[type="range"] {

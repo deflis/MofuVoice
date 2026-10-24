@@ -3,16 +3,16 @@
 .actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .actions button:first-child {
-  background: #00c4b4;
-  color: #0a1416;
+  background: var(--color-accent);
+  color: var(--color-on-accent);
 }
 
 .actions .audio-toggle {
   width: 100%;
-  padding: 14px;
-  font-weight: 600;
+  padding: var(--space-6);
+  font-weight: var(--font-weight-semibold);
 }

@@ -5,8 +5,8 @@
 }
 
 .filter-lifecycle {
-  border-left: 3px solid #00c4b4;
-  padding-left: 10px;
+  border-left: 3px solid var(--color-accent);
+  padding-left: var(--space-4);
 }
 
 .filter-chain {
@@ -21,10 +21,10 @@
 }
 
 .filter-card {
-  border: 1px solid #53626d;
-  border-radius: 8px;
-  background: #1b1e23;
-  padding: 14px;
+  border: 1px solid var(--color-border-muted);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  padding: var(--space-6);
 }
 
 .filter-card[data-enabled="false"] {
@@ -36,116 +36,116 @@
   flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
-  gap: 6px;
+  gap: var(--space-2);
 }
 
 .filter-card h3 {
-  font-size: 14px;
+  font-size: var(--font-size-sm);
   margin: 0;
 }
 
 .filter-state {
-  font-size: 12px;
-  color: #cbd1db;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
 }
 
 .filter-card[data-enabled="true"] .filter-state {
-  color: #6ee7da;
+  color: var(--color-accent-soft);
 }
 
 .filter-card button {
   display: block;
-  margin-top: 12px;
+  margin-top: var(--space-5);
 }
 
 .filter-card button:focus-visible {
-  outline: 3px solid #6ee7da;
-  outline-offset: 3px;
+  outline: var(--focus-ring-width-strong) solid var(--color-accent-soft);
+  outline-offset: var(--focus-ring-offset-strong);
 }
 
 .filter-card .filter-values {
-  margin: 8px 0;
+  margin: var(--space-3) 0;
   overflow-wrap: anywhere;
 }
 
 .filter-overview .filter-invalid {
-  color: #ffd092;
+  color: var(--color-warning);
 }
 
 .filter-arrow {
   display: block;
   text-align: center;
   font-size: 21px;
-  color: #cbd1db;
+  color: var(--color-text-tertiary);
   line-height: 30px;
 }
 
 .filter-overview .filter-endpoint {
   text-align: center;
-  color: #e6e8ec;
-  font-weight: 600;
-  margin: 6px 0;
+  color: var(--color-text);
+  font-weight: var(--font-weight-semibold);
+  margin: var(--space-2) 0;
 }
 
 .filter-overview .filter-divider {
-  color: #cbd1db;
-  margin: 0 0 6px;
-  font-size: 12px;
+  color: var(--color-text-tertiary);
+  margin: 0 0 var(--space-2);
+  font-size: var(--font-size-xs);
 }
 
 .filter-plot {
   width: 100%;
   max-height: 160px;
   display: block;
-  margin: 10px 0;
+  margin: var(--space-4) 0;
   overflow: visible;
 }
 
 .filter-plot text {
   font-size: 9px;
-  fill: #bbc5d0;
+  fill: var(--color-plot-label);
 }
 
 .filter-axis {
   fill: none;
-  stroke: #66727e;
+  stroke: var(--color-plot-axis);
   stroke-width: 1;
 }
 
 .filter-reference {
   fill: none;
-  stroke: #84909d;
+  stroke: var(--color-plot-reference);
   stroke-width: 1;
   stroke-dasharray: 3 4;
 }
 
 .filter-curve {
   fill: none;
-  stroke: #63ded1;
+  stroke: var(--color-accent-plot);
   stroke-width: 2;
 }
 
 .filter-retained {
   fill: none;
-  stroke: #e8c483;
+  stroke: var(--color-warning-muted);
   stroke-width: 1.5;
   stroke-dasharray: 6 4;
 }
 
 .filter-point {
-  fill: #eafbf7;
-  stroke: #273c3c;
+  fill: var(--color-plot-point);
+  stroke: var(--color-plot-point-stroke);
   stroke-width: 1;
 }
 
 .filter-area {
-  fill: #63ded1;
+  fill: var(--color-accent-plot);
   fill-opacity: 0.18;
 }
 
 @media (prefers-contrast: more) {
   .filter-card {
-    border-color: white;
+    border-color: var(--color-high-contrast);
   }
   .filter-curve {
     stroke-width: 3;
@@ -155,5 +155,5 @@
 .filter-lifecycle,
 .filter-invalid {
   display: block;
-  margin: 12px 0;
+  margin: var(--space-5) 0;
 }

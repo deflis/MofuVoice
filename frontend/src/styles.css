@@ -3,11 +3,105 @@
 /* Global document defaults. Component classes below are CSS Module exports. */
 
 :root {
-  font-family: system-ui, sans-serif;
-  font-size: 13px;
   color-scheme: dark;
-  color: #e6e8ec;
-  background: #16181c;
+
+  /* Typography */
+  --font-family: system-ui, sans-serif;
+  --font-size-base: 13px;
+  --font-size-xs: 12px;
+  --font-size-sm: 14px;
+  --font-size-md: 15px;
+  --font-size-lg: 18px;
+  --font-weight-semibold: 600;
+  --line-height-body: 1.6;
+
+  /* Spacing */
+  --space-1: 4px;
+  --space-2: 6px;
+  --space-3: 8px;
+  --space-4: 10px;
+  --space-5: 12px;
+  --space-6: 14px;
+  --space-7: 16px;
+  --space-8: 18px;
+  --space-9: 20px;
+  --space-10: 24px;
+
+  /* Radius */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 10px;
+  --radius-pill: 12px;
+
+  /* Controls */
+  --control-padding-block: 5px;
+  --control-padding-inline: 12px;
+  --opacity-disabled: 0.5;
+
+  /* Focus */
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+  --focus-ring-width-strong: 3px;
+  --focus-ring-offset-strong: 3px;
+
+  /* Layout */
+  --width-main: 560px;
+  --width-log: 720px;
+  --width-settings: 1000px;
+  --width-popup: 600px;
+  --width-nav: 150px;
+  --width-slider-value: 80px;
+  --page-gutter: 32px;
+
+  /* Elevation */
+  --shadow-popup: 0 16px 64px var(--color-shadow);
+
+  /* Surfaces */
+  --color-bg: #16181c;
+  --color-surface: #1b1e23;
+  --color-surface-raised: #20242a;
+  --color-control: #2a2e36;
+  --color-control-hover: #343a44;
+
+  /* Text */
+  --color-text: #e6e8ec;
+  --color-text-secondary: #abb3c0;
+  --color-text-muted: #8c94a0;
+  --color-text-tertiary: #cbd1db;
+
+  /* Borders */
+  --color-border: #373c46;
+  --color-border-strong: #4c5563;
+  --color-border-muted: #53626d;
+  --color-high-contrast: white;
+
+  /* Accent */
+  --color-accent: #00c4b4;
+  --color-on-accent: #0a1416;
+  --color-accent-soft: #6ee7da;
+  --color-accent-plot: #63ded1;
+
+  /* Status */
+  --color-danger: light-dark(#a80000, #ff9090);
+  --color-warning: #ffd092;
+  --color-warning-muted: #e8c483;
+
+  /* Overlay / shadow */
+  --color-overlay: #0009;
+  --color-shadow: #0008;
+
+  /* Plot / chart */
+  --color-plot-label: #bbc5d0;
+  --color-plot-axis: #66727e;
+  --color-plot-reference: #84909d;
+  --color-plot-point: #eafbf7;
+  --color-plot-point-stroke: #273c3c;
+
+  font-family: var(--font-family);
+  font-size: var(--font-size-base);
+  color: var(--color-text);
+  background: var(--color-bg);
 }
 
 body {
@@ -15,8 +109,8 @@ body {
 }
 
 main {
-  max-width: 560px;
-  padding: 16px;
+  max-width: var(--width-main);
+  padding: var(--space-7);
   margin: auto;
 }
 
@@ -27,23 +121,23 @@ header {
 }
 
 h1 {
-  font-size: 18px;
-  margin: 0 0 12px;
+  font-size: var(--font-size-lg);
+  margin: 0 0 var(--space-5);
 }
 
 h2 {
-  font-size: 13px;
-  margin: 0 0 10px;
+  font-size: var(--font-size-base);
+  margin: 0 0 var(--space-4);
 }
 
 section {
-  margin: 18px 0;
+  margin: var(--space-8) 0;
 }
 
 label {
   display: grid;
-  gap: 4px;
-  margin: 10px 0;
+  gap: var(--space-1);
+  margin: var(--space-4) 0;
 }
 
 input,
@@ -54,12 +148,12 @@ button {
 
 input:not([type="range"]):not([type="checkbox"]),
 select {
-  padding: 5px;
+  padding: var(--control-padding-block);
   min-width: 0;
 }
 
 button {
-  padding: 5px 12px;
+  padding: var(--control-padding-block) var(--control-padding-inline);
 }
 
 p,
@@ -68,7 +162,7 @@ pre {
 }
 
 details {
-  margin-top: 16px;
+  margin-top: var(--space-7);
 }
 
 summary {
@@ -77,45 +171,45 @@ summary {
 
 pre {
   white-space: pre-wrap;
-  font-size: 12px;
+  font-size: var(--font-size-xs);
 }
 
 button {
-  border: 1px solid #373c46;
-  border-radius: 6px;
-  background: #2a2e36;
-  color: #e6e8ec;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-control);
+  color: var(--color-text);
   cursor: pointer;
 }
 
 button:hover:not(:disabled) {
-  background: #343a44;
+  background: var(--color-control-hover);
 }
 
 button:disabled {
-  opacity: 0.5;
+  opacity: var(--opacity-disabled);
   cursor: default;
 }
 
 input:not([type="range"]):not([type="checkbox"]),
 select {
-  background: #20242a;
-  color: #e6e8ec;
-  border: 1px solid #373c46;
-  border-radius: 4px;
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
 }
 
 input {
-  accent-color: #00c4b4;
+  accent-color: var(--color-accent);
 }
 
 :focus-visible {
-  outline: 2px solid #00c4b4;
-  outline-offset: 2px;
+  outline: var(--focus-ring-width) solid var(--color-accent);
+  outline-offset: var(--focus-ring-offset);
 }
 
 dd {
-  margin: 4px 0 0;
+  margin: var(--space-1) 0 0;
   font-variant-numeric: tabular-nums;
 }
 

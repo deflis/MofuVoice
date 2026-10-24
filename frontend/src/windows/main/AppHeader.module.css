@@ -1,8 +1,8 @@
 /* Header styles. */
 
 .status-badge {
-  color: #00c4b4;
-  background: #20242a;
-  border-radius: 12px;
-  padding: 4px 10px;
+  color: var(--color-accent);
+  background: var(--color-surface-raised);
+  border-radius: var(--radius-pill);
+  padding: var(--space-1) var(--space-4);
 }

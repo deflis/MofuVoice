@@ -11,27 +11,27 @@ main:has(.home-layout) {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--space-5);
   min-height: 0;
 }
 
 .home-settings-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: var(--space-4);
 }
 
 .home-primary-action {
   flex: 1;
   min-width: 8rem;
-  padding: 12px;
+  padding: var(--space-5);
 }
 
 .home-secondary-action {
-  color: #abb3c0;
+  color: var(--color-text-secondary);
 }
 
 .setup-guidance {
-  border-top: 1px solid #373c46;
-  padding-top: 8px;
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--space-3);
 }

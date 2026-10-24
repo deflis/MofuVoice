@@ -1,13 +1,13 @@
 /* Log App styles. */
 
 main:has(.log-window) {
-  max-width: 720px;
+  max-width: var(--width-log);
 }
 
 .settings-window header,
 .log-window header {
-  border-bottom: 1px solid #373c46;
-  padding-bottom: 12px;
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: var(--space-5);
 }
 
 .settings-window h1,
