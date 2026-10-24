@@ -13,7 +13,7 @@ pub(crate) struct Fft {
 
 impl Fft {
     pub(crate) fn new(size: usize) -> Self {
-        assert!(size.is_power_of_two() && size >= 4 && size <= 8192);
+        assert!(size.is_power_of_two() && (4..=8192).contains(&size));
         let bits = size.ilog2();
         let roots: Vec<_> = (0..size / 2)
             .map(|i| Complex::polar(1.0, -std::f64::consts::TAU * i as f64 / size as f64))
