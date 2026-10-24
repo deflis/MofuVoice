@@ -14,6 +14,7 @@ export const settings = {
     sampleRate: 48000,
   },
   voice: {
+    enabled: true,
     pitchUnit: "semitones",
     pitchAlgorithm: "phase-locked",
     psolaPitchEstimator: "yin",
@@ -77,6 +78,12 @@ export const settings = {
     releaseMs: 100,
   },
 };
+settings.inputEq = structuredClone(settings.eq);
+settings.preConversionEq = structuredClone(settings.eq);
+settings.compressor = { enabled: false, thresholdDb: -12, ratio: 3, attackMs: 5, releaseMs: 150 };
+settings.limiter = { enabled: false, ceilingDb: -1, releaseMs: 80 };
+settings.dereverb = { enabled: false, amount: 0.5, decayMs: 250 };
+settings.reverb = { enabled: false, mix: 0.15, preDelayMs: 20, decayMs: 1200 };
 export const mainView = {
   canStart: true,
   spectrumAvailable: true,
@@ -91,6 +98,19 @@ export const mainView = {
 };
 
 export const settingsView = {
+  chainStages: [
+    "inputEq",
+    "limiter",
+    "noiseGate",
+    "dereverb",
+    "deesser",
+    "compressor",
+    "preConversionEq",
+    "voice",
+    "postConversionEq",
+    "level",
+    "reverb",
+  ],
   settings,
   devices: ["ASIO"],
   outputDevices: [],

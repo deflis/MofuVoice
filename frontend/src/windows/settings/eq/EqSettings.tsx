@@ -1,3 +1,4 @@
+import type { EqKey } from "./slice";
 import { NumberInput } from "../NumberInput";
 import { EqSimpleBand, EqBandDetails } from "./BandSettings";
 import { DetailsPopup } from "../DetailsPopup";
@@ -10,8 +11,14 @@ const simpleBands = [
   { title: "明るさ", left: "落ち着いた", right: "明るい" },
 ] as const;
 
-export function EqSettings() {
-  const eq = useEqSettings();
+export function EqSettings({
+  filter = "eq",
+  title = "変換後EQ",
+}: {
+  filter?: EqKey;
+  title?: string;
+}) {
+  const eq = useEqSettings(filter);
   const id = useId();
   const headroom = eq.bands.reduce((sum, band) => sum + Math.max(0, band.gainDb), 0);
   const validGain = eq.bands.every(
@@ -19,7 +26,7 @@ export function EqSettings() {
   );
   return (
     <section aria-labelledby={`${id}-title`} className="eq-section">
-      <h2 id={`${id}-title`}>声の音色（EQ）</h2>
+      <h2 id={`${id}-title`}>{title}</h2>
       <label className="check">
         <input
           type="checkbox"

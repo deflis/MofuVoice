@@ -109,6 +109,7 @@ fn arguments(options: &Options) -> Vec<String> {
     {
         args.extend([flag.clone(), value]);
     }
+    args.extend(crate::filter_settings::arguments(options));
     args
 }
 
@@ -156,6 +157,8 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
             "gate_release_ms",
         ]
         .contains(&key)
+            && key != "settings_version"
+            && !crate::filter_settings::is_key(key)
             && !crate::eq::is_key(key)
             && key != "auto_level"
             && key != "compressor"
@@ -166,7 +169,12 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
             return Err(format!("Unknown or repeated GUI setting '{key}'").into());
         }
     }
-    let value = |key| {
+    // Unversioned files are v1: retain all legacy fields and default only newly introduced filters.
+    let version = values.get("settings_version").copied().unwrap_or("1");
+    if !["1", "2"].contains(&version) {
+        return Err("Unsupported settings version".into());
+    }
+    let value = |key: &str| {
         values
             .get(key)
             .copied()
@@ -302,6 +310,38 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
     }
     let mut options = Options::parse_gui(args.into_iter().map(String::from))?;
     options.eq.bands.truncate(band_count);
+    // Apply additions after legacy parsing; malformed supplied values always fail.
+    let defaults = crate::filter_settings::arguments(&Options::default());
+    for pair in defaults.as_chunks::<2>().0 {
+        let key = pair[0].trim_start_matches("--").replace('-', "_");
+        if let Some(value) = values.get(key.as_str()) {
+            crate::filter_settings::set(&mut options, &pair[0], value)?;
+        } else if version == "2" && !key.contains("_band") {
+            return Err(format!("Missing GUI setting {key}").into());
+        }
+    }
+    for prefix in ["input", "pre_conversion"] {
+        let band_prefix = format!("{prefix}_eq_band");
+        let count = values
+            .keys()
+            .filter(|key| key.starts_with(&band_prefix))
+            .count();
+        if count > 0 {
+            let eq = if prefix == "input" {
+                &mut options.input_eq
+            } else {
+                &mut options.pre_conversion_eq
+            };
+            eq.bands.clear();
+            for index in 1..=count {
+                eq.bands.push(crate::eq::Band::parse(value(
+                    format!("{band_prefix}{index}").as_str(),
+                )?)?);
+            }
+        } else if version == "2" {
+            return Err("EQ requires at least one band".into());
+        }
+    }
     options.pitch_unit = values
         .get("pitch_unit")
         .copied()
@@ -354,6 +394,7 @@ pub(crate) fn merge(saved: &Options, args: Vec<String>) -> Result<Options, Box<d
             "--gate-release",
         ]
         .contains(&flag.as_str())
+            && !crate::filter_settings::is_flag(&flag)
             && !crate::eq::is_flag(&flag)
             && flag != "--auto-level"
             && flag != "--compressor"
@@ -380,7 +421,27 @@ pub(crate) fn merge(saved: &Options, args: Vec<String>) -> Result<Options, Box<d
     if indices.len() != band_count {
         return Err("EQ bands must be contiguous".into());
     }
+    let added_band_counts: Vec<_> = ["--input-eq-band", "--pre-conversion-eq-band"]
+        .iter()
+        .map(|prefix| {
+            let indices: std::collections::BTreeSet<usize> = base
+                .iter()
+                .filter_map(|flag| flag.strip_prefix(prefix).and_then(|n| n.parse().ok()))
+                .collect();
+            let count = indices.last().copied().unwrap_or(0);
+            if count == 0 || indices.len() != count {
+                Err("EQ bands must be contiguous")
+            } else {
+                Ok(count)
+            }
+        })
+        .collect::<Result<_, _>>()?;
     let mut options = Options::parse_gui(base)?;
+    options.input_eq.bands.truncate(added_band_counts[0]);
+    options
+        .pre_conversion_eq
+        .bands
+        .truncate(added_band_counts[1]);
     options.pitch_unit = saved.pitch_unit.clone();
     options.validate()?;
     options.eq.bands.truncate(band_count);
@@ -465,6 +526,17 @@ pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>>
     {
         text.push_str(&format!("{key}={value}\n"));
     }
+    text.push_str("settings_version=2\n");
+    for pair in crate::filter_settings::arguments(options)
+        .as_chunks::<2>()
+        .0
+    {
+        text.push_str(&format!(
+            "{}={}\n",
+            pair[0].trim_start_matches("--").replace('-', "_"),
+            pair[1]
+        ));
+    }
     let temporary = path.with_extension(format!("{}.tmp", std::process::id()));
     let result = (|| -> std::io::Result<()> {
         fs::create_dir_all(
@@ -483,6 +555,131 @@ pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>>
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn new_eq_variable_bands_preserve_count_and_reject_gaps() {
+        let path = std::env::temp_dir().join(format!("new-eq-bands-{}.ini", std::process::id()));
+        for count in [1, 5] {
+            let mut options = Options::default();
+            options.input_eq.bands = vec![
+                crate::eq::Band {
+                    frequency: 200.0,
+                    gain_db: -2.0,
+                    q: 1.0
+                };
+                count
+            ];
+            options.pre_conversion_eq.bands = vec![
+                crate::eq::Band {
+                    frequency: 900.0,
+                    gain_db: 3.0,
+                    q: 0.8
+                };
+                count
+            ];
+            save(&path, &options).unwrap();
+            assert_eq!(load(&path).unwrap(), options);
+            assert_eq!(merge(&options, vec![]).unwrap(), options);
+            let text = fs::read_to_string(&path).unwrap();
+            assert!(decode(&text.replace("input_eq_band1=200,-2,1\n", "")).is_err());
+        }
+        let options = Options::parse_gui(
+            ["--input-eq-band5", "500,2,1", "--input-eq-band4", "400,1,1"].map(String::from),
+        )
+        .unwrap();
+        assert_eq!(options.input_eq.bands.len(), 5);
+        assert!(
+            Options::parse_gui(["--pre-conversion-eq-band5", "500,2,1"].map(String::from)).is_err()
+        );
+        fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn independent_filters_round_trip_migrate_and_reject_corruption() {
+        let path = std::env::temp_dir().join(format!("filters-v2-{}.ini", std::process::id()));
+        let mut options = Options::parse_gui(
+            [
+                "--voice",
+                "off",
+                "--pitch",
+                "5",
+                "--input-eq",
+                "on",
+                "--input-eq-band1",
+                "180,-3,1",
+                "--pre-conversion-eq",
+                "on",
+                "--pre-conversion-eq-band1",
+                "500,2,0.8",
+                "--eq-band1",
+                "900,4,1.2",
+                "--limiter",
+                "on",
+                "--limiter-ceiling",
+                "-3",
+                "--dereverb",
+                "on",
+                "--dereverb-amount",
+                "0.3",
+                "--pre-compressor",
+                "on",
+                "--pre-compress-ratio",
+                "4",
+                "--compressor",
+                "on",
+                "--compress-ratio",
+                "6",
+                "--reverb",
+                "on",
+                "--reverb-pre-delay",
+                "50",
+                "--reverb-mix",
+                "0.2",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        options.input_eq.bands.truncate(1);
+        options.pre_conversion_eq.bands.truncate(2);
+        save(&path, &options).unwrap();
+        assert_eq!(load(&path).unwrap(), options);
+        let merged = merge(&options, vec!["--pitch".into(), "6".into()]).unwrap();
+        assert_eq!(merged.input_eq, options.input_eq);
+        assert_eq!(merged.pre_conversion_eq, options.pre_conversion_eq);
+        assert_eq!(merged.compressor, options.compressor);
+        assert!(!merged.voice_enabled);
+        let text = fs::read_to_string(&path).unwrap();
+        for invalid in [
+            text.replace("settings_version=2", "settings_version=99"),
+            text.replace("limiter_ceiling=-3", "limiter_ceiling=NaN"),
+            text.replace("reverb_mix=0.2", "reverb_mix=2"),
+            text.replace("voice=off", "voice=invalid"),
+            text.replace("input_eq_band1=180,-3,1\n", ""),
+            text.replace("pre_compress_ratio=4\n", ""),
+            format!("{text}limiter=off\n"),
+        ] {
+            assert!(decode(&invalid).is_err(), "{invalid}");
+        }
+        let legacy: String = text
+            .lines()
+            .filter(|line| {
+                let key = line.split('=').next().unwrap();
+                key != "settings_version" && !crate::filter_settings::is_key(key)
+            })
+            .map(|line| format!("{line}\n"))
+            .collect();
+        let migrated = decode(&legacy).unwrap();
+        assert!(migrated.voice_enabled);
+        assert_eq!(migrated.eq, options.eq);
+        assert_eq!(migrated.level, options.level);
+        assert_eq!(migrated.pitch, options.pitch);
+        assert!(!migrated.input_eq.enabled && !migrated.pre_conversion_eq.enabled);
+        assert!(
+            !migrated.limiter.enabled
+                && !migrated.dereverb.enabled
+                && !migrated.reverb.enabled
+                && !migrated.compressor.enabled
+        );
+        fs::remove_file(path).unwrap();
+    }
     #[test]
     fn pitch_display_unit_persists_defaults_and_survives_cli_overrides() {
         let path = std::env::temp_dir().join(format!("pitch-unit-{}.ini", std::process::id()));

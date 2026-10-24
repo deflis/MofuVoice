@@ -504,7 +504,11 @@ impl Engine {
         let input_channel = routing.input_channel;
         let mut output_channels = routing.output_channels.clone();
         output_channels.sort_unstable();
-        let pitch_latency = dsp.pitch.latency();
+        let pitch_latency = if dsp.voice_enabled {
+            dsp.pitch.latency()
+        } else {
+            0
+        };
         let dsp = DspChain::with_sample_rate(dsp, rate)?;
         let mut buffers = Vec::with_capacity(config.inputs + config.outputs);
         for (input, channels) in [(true, config.inputs), (false, config.outputs)] {

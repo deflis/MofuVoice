@@ -6,20 +6,25 @@ pub mod audio;
 mod audio_queue;
 pub mod backend;
 pub mod cli;
+pub mod compressor;
 #[cfg(feature = "cpal-backend")]
 mod cpal_backend;
 pub mod deesser;
+pub mod dereverb;
 pub mod dsp;
 pub mod eq;
+mod filter_settings;
 pub mod gate;
 #[cfg(feature = "desktop")]
 pub mod gui;
 #[cfg(any(feature = "desktop", test))]
 mod gui_settings;
 pub mod level;
+pub mod limiter;
 #[cfg(windows)]
 pub mod native_spectrum;
 pub mod pitch;
+pub mod reverb;
 pub mod rumble;
 pub mod session;
 pub mod spectrum;

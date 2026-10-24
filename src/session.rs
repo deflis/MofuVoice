@@ -268,7 +268,9 @@ fn run_audio(
         let mut info = info.lock().unwrap();
         info.phase = "running";
         info.dsp_ms = Some(
-            if options.pitch.semitones == 0.0 && options.pitch.formant_shift == 0.0 {
+            if !options.voice_enabled
+                || (options.pitch.semitones == 0.0 && options.pitch.formant_shift == 0.0)
+            {
                 0.0
             } else {
                 options.pitch.latency() as f64 * 1000.0 / configuration.sample_rate

@@ -98,7 +98,7 @@ fn auto_gate_rejects_quiet_clicks_across_callback_boundaries() {
 }
 
 #[test]
-fn pipeline_matches_rumble_gate_pitch_eq_level_deesser_order_across_variable_blocks() {
+fn pipeline_matches_rumble_gate_deesser_pitch_eq_level_order_across_variable_blocks() {
     let args = [
         "--deesser",
         "on",
@@ -133,10 +133,10 @@ fn pipeline_matches_rumble_gate_pitch_eq_level_deesser_order_across_variable_blo
     let mut filtered = input.clone();
     rumble.process_in_place(&mut filtered);
     gate.process_block(&filtered, &mut gated);
+    deesser.process_in_place(&mut gated);
     pitch.process_block(&gated, &mut expected);
     eq.process_in_place(&mut expected);
     level.process_in_place(&mut expected);
-    deesser.process_in_place(&mut expected);
     let mut actual = vec![0.0; input.len()];
     let mut offset = 0;
     for frames in [1, 64, 511, 128, 3, 512].into_iter().cycle() {
