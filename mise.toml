@@ -42,7 +42,7 @@ depends = ["build:web"]
 run = "cargo clippy --all-targets --all-features --locked -- -D warnings"
 
 [tasks."lint:web"]
-run = "pnpm exec oxlint --deny-warnings --ignore-pattern 'frontend/src/**/*.module.css.d.ts' frontend"
+run = "pnpm exec oxlint --deny-warnings frontend"
 
 [tasks.typecheck]
 run = "pnpm typecheck"

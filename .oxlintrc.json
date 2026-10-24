@@ -11,6 +11,7 @@
     "node",
     "jsdoc"
   ],
+  "ignorePatterns": ["frontend/src/**/*.module.css.d.ts"],
   "options": {
     "typeAware": true
   },
