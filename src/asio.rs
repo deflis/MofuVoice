@@ -16,6 +16,27 @@ use std::{
 };
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
+/// ASIO and asio-sys share one process-global buffer set; only one Engine may own it.
+static ENGINE_OWNED: AtomicBool = AtomicBool::new(false);
+
+struct EngineOwner;
+impl EngineOwner {
+    fn try_acquire() -> Result<Self> {
+        if ENGINE_OWNED
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return Err("Another ASIO engine is already active".into());
+        }
+        Ok(Self)
+    }
+}
+impl Drop for EngineOwner {
+    fn drop(&mut self) {
+        ENGINE_OWNED.store(false, Ordering::SeqCst);
+    }
+}
+
 const OK: i32 = 0;
 const SUCCESS: i32 = 0x3f4847a0;
 const RESET: u32 = 1;
@@ -389,6 +410,8 @@ pub struct Engine {
     event_id: Option<DriverEventCallbackId>,
     prepared: bool,
     running: bool,
+    /// Released after Drop disposes buffers so a rejected second open never tears down the first.
+    _owner: EngineOwner,
 }
 impl Engine {
     pub fn set_device_name(&mut self, name: &str) {
@@ -414,6 +437,8 @@ impl Engine {
     ) -> Result<Self> {
         config.validate_rate(frames, rate)?;
         routing.validate(config.inputs, config.outputs)?;
+        // Claim exclusive ownership before prepare: asio-sys replaces shared buffers in place.
+        let owner = EngineOwner::try_acquire()?;
         let input_channel = routing.input_channel;
         let mut output_channels = routing.output_channels.clone();
         output_channels.sort_unstable();
@@ -468,6 +493,7 @@ impl Engine {
             Ok(())
         })();
         if let Err(error) = prepared {
+            // Only the owning open may dispose; a rejected second open never reaches here.
             let _ = driver.dispose_buffers();
             if let Ok(mut streams) = streams_slot.lock() {
                 *streams = AsioStreams {
@@ -543,6 +569,7 @@ impl Engine {
             event_id: Some(event_id),
             prepared: true,
             running: false,
+            _owner: owner,
         })
     }
     pub fn start(&mut self) -> Result<()> {
@@ -691,6 +718,13 @@ impl Drop for Engine {
 mod tests {
     use super::*;
     use crate::{gate::GateSettings, pitch::PitchShifter};
+    #[test]
+    fn exclusive_engine_owner_rejects_a_second_acquire() {
+        let first = EngineOwner::try_acquire().unwrap();
+        assert!(EngineOwner::try_acquire().is_err());
+        drop(first);
+        assert!(EngineOwner::try_acquire().is_ok());
+    }
     #[test]
     fn validates_selected_rate_without_reinterpreting_driver_samples() {
         for rate in crate::SAMPLE_RATES {
