@@ -718,7 +718,11 @@ mod tests {
             let mut dsp = PvsOla::new(ratio, false, 1.0);
             for i in 0..RING {
                 dsp.output[i] = (i as f64 * 0.137).sin() * 0.4;
-                dsp.weight[i] = if i % 23 == 0 { 0.0 } else { 0.7 + (i % 5) as f64 };
+                dsp.weight[i] = if i % 23 == 0 {
+                    0.0
+                } else {
+                    0.7 + (i % 5) as f64
+                };
             }
             for position in [0.0, 12.31, 128.9, 2047.37, 4096.01, 8000.63] {
                 let actual = dsp.resample(position);
