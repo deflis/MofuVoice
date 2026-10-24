@@ -1,0 +1,10 @@
+{
+  "name": "voice-changer-css-modules-tooling",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@css-modules-kit/codegen": "1.4.0",
+    "@css-modules-kit/ts-plugin": "1.4.0",
+    "typescript": "6.0.3"
+  }
+}

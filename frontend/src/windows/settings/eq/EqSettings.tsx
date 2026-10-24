@@ -1,3 +1,4 @@
+import styles from "../../../styles.module.css";
 import { NumberInput } from "../NumberInput";
 import { EqSimpleBand, EqBandDetails } from "./BandSettings";
 import { DetailsPopup } from "../DetailsPopup";
@@ -18,9 +19,9 @@ export function EqSettings() {
     (band) => Number.isFinite(band.gainDb) && Math.abs(band.gainDb) <= 12,
   );
   return (
-    <section aria-labelledby={`${id}-title`} className="eq-section">
+    <section aria-labelledby={`${id}-title`}>
       <h2 id={`${id}-title`}>声の音色（EQ）</h2>
-      <label className="check">
+      <label className={styles.check}>
         <input
           type="checkbox"
           checked={eq.enabled}
@@ -28,7 +29,7 @@ export function EqSettings() {
         />
         有効
       </label>
-      <fieldset className="eq-controls" disabled={!eq.enabled} hidden={!eq.enabled}>
+      <fieldset className={styles["eq-controls"]} disabled={!eq.enabled} hidden={!eq.enabled}>
         <>
           {eq.bands.map((band, index) => (
             <EqSimpleBand
@@ -41,7 +42,7 @@ export function EqSettings() {
             />
           ))}
           {!validGain && (
-            <p className="error">
+            <p className={styles.error}>
               詳細設定でゲインを−12〜12 dBの数値に直すか、EQをリセットしてください。
             </p>
           )}

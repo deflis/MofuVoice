@@ -1,3 +1,4 @@
+import styles from "../../styles.module.css";
 import { Notifications } from "./Notifications";
 import { createPortal } from "react-dom";
 import { useSettingsLocked } from "./hooks";
@@ -30,14 +31,14 @@ export function DetailsPopup({
         {buttonLabel}
       </button>
       {createPortal(
-        <dialog ref={dialog} className="details-popup" aria-labelledby={titleId}>
+        <dialog ref={dialog} className={styles["details-popup"]} aria-labelledby={titleId}>
           <header>
             <h2 id={titleId}>
               {title}の{buttonLabel}
             </h2>
           </header>
           <Notifications />
-          <fieldset className="settings details-popup-content" disabled={locked}>
+          <fieldset className={styles.settings} disabled={locked}>
             {children}
           </fieldset>
           <footer>

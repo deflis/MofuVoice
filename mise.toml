@@ -45,7 +45,7 @@ run = "cargo clippy --all-targets --all-features --locked -- -D warnings"
 run = "pnpm exec oxlint --deny-warnings frontend"
 
 [tasks.typecheck]
-run = "pnpm exec tsc -p frontend/tsconfig.json"
+run = "pnpm typecheck"
 
 [tasks."build:web"]
 depends = ["typecheck"]
