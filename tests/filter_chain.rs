@@ -90,18 +90,14 @@ fn complete_chain_matches_independent_processors_in_all_formats() {
             })
             .collect();
         let mut before = input.clone();
-        mofu_voice::rumble::RumbleFilter::new(s.rumble_filter)
-            .process_in_place(&mut before);
+        mofu_voice::rumble::RumbleFilter::new(s.rumble_filter).process_in_place(&mut before);
         s.input_eq.build().unwrap().process_in_place(&mut before);
         s.limiter.build().unwrap().process_in_place(&mut before);
         s.gate.build().unwrap().process_in_place(&mut before);
         s.dereverb.build().unwrap().process_in_place(&mut before);
-        mofu_voice::deesser::DeEsser::with_parameters(
-            s.deesser,
-            s.deesser_parameters,
-        )
-        .unwrap()
-        .process_in_place(&mut before);
+        mofu_voice::deesser::DeEsser::with_parameters(s.deesser, s.deesser_parameters)
+            .unwrap()
+            .process_in_place(&mut before);
         s.compressor.build().unwrap().process_in_place(&mut before);
         s.pre_conversion_eq
             .build()

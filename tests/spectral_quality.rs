@@ -411,9 +411,7 @@ fn silence_and_impulse_delay_and_invalid_settings() {
     }
 }
 
-fn configured_windows_preserve_and_shift_formants(
-    windows: mofu_voice::pitch::SpectralWindows,
-) {
+fn configured_windows_preserve_and_shift_formants(windows: mofu_voice::pitch::SpectralWindows) {
     // Alternate time/frequency resolutions allow up to 250 Hz resonance error.
     // The default configuration retains its existing 200 Hz quality check.
     for algorithm in PitchAlgorithm::SPECTRAL {
