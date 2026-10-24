@@ -1,6 +1,6 @@
 # Voicemeeter シリーズ 設定ガイド
 
-Voicemeeter **Banana** または **Potato** の **Insert Virtual ASIO** を使い、マイク入力に本アプリ（もふボイス (MofuVoice)）を差し込みます。
+Voicemeeter **Banana** または **Potato** の **Insert Virtual ASIO** を使い、マイク入力に本アプリ（もふボイス）を差し込みます。
 
 > **VoiceMeeter（無料版）** には Insert ドライバがありません。Banana または Potato が必要です。
 
