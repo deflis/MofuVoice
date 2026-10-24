@@ -31,7 +31,7 @@
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.1.2",
     "babel-plugin-react-compiler": "1.0.0",
-    "oxfmt": "0.72.0",
+    "oxfmt": "0.74.0",
     "oxlint": "1.87.0",
     "oxlint-tsgolint": "7.0.2004",
     "typescript": "7.0.2",
