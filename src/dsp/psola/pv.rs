@@ -8,6 +8,8 @@
 use crate::dsp::{complex::Complex, fft::Fft, phase, window::hann};
 use std::f64::consts::{PI, TAU};
 
+type ResampleDot = fn(&[f64], &[f64], &[f64], f64) -> f64;
+
 const FRAME: usize = 1024;
 const HOP: usize = FRAME / 4;
 const RESET_EVERY: usize = 4;
@@ -36,6 +38,9 @@ pub(crate) struct PvsOla {
     input: Box<[f64; RING]>,
     output: Box<[f64; RING]>,
     weight: Box<[f64; RING]>,
+    /// `output / weight` for samples with coverage; zeros elsewhere. Lets the
+    /// pitch-rate read avoid a division on every sinc tap.
+    normalized: Box<[f64; RING]>,
     window: Box<[f64; FRAME]>,
     frame: Box<[Complex; FRAME]>,
     previous_phase: Box<[f64; FRAME]>,
@@ -47,6 +52,7 @@ pub(crate) struct PvsOla {
     /// construction; the callback only swaps the active table index.
     kernels: Box<[f64]>,
     kernel_table: usize,
+    resample_dot: ResampleDot,
     preserve_formants: bool,
     formant_ratio: f64,
     polarity: f64,
@@ -103,6 +109,7 @@ impl PvsOla {
             input: Box::new([0.0; RING]),
             output: Box::new([0.0; RING]),
             weight: Box::new([0.0; RING]),
+            normalized: Box::new([0.0; RING]),
             window,
             frame: Box::new([Complex::default(); FRAME]),
             previous_phase: Box::new([0.0; FRAME]),
@@ -112,6 +119,7 @@ impl PvsOla {
             envelope: Box::new([0.0; FRAME]),
             kernels,
             kernel_table: cutoff_table_index(ratio),
+            resample_dot: super::resampler::select_dot(),
             preserve_formants,
             formant_ratio,
             polarity: 1.0,
@@ -141,6 +149,7 @@ impl PvsOla {
         self.input.fill(0.0);
         self.output.fill(0.0);
         self.weight.fill(0.0);
+        self.normalized.fill(0.0);
         self.polarity = 1.0;
         self.previous_valid = false;
         self.previous_analysis_position = 0.0;
@@ -190,9 +199,20 @@ impl PvsOla {
             let index = self.clear_until % RING;
             self.output[index] = 0.0;
             self.weight[index] = 0.0;
+            self.normalized[index] = 0.0;
             self.clear_until += 1;
         }
         output
+    }
+
+    #[inline(always)]
+    fn refresh_normalized(&mut self, index: usize) {
+        let weight = self.weight[index];
+        self.normalized[index] = if weight > 1e-12 {
+            self.output[index] / weight
+        } else {
+            0.0
+        };
     }
 
     fn generate_available_frames(&mut self) {
@@ -228,9 +248,7 @@ impl PvsOla {
             &mut self.current_phase[..],
             self.vector_phase,
         );
-        for (value, magnitude) in self.frame.iter().zip(self.magnitude.iter_mut()) {
-            *magnitude = value.re.hypot(value.im);
-        }
+        Complex::magnitudes(&self.frame[..], &mut self.magnitude[..]);
     }
 
     fn vocode_frame(&mut self, output_start: usize) {
@@ -318,6 +336,7 @@ impl PvsOla {
             let window = self.window[i];
             self.output[index] += self.frame[i].re * window;
             self.weight[index] += window * window;
+            self.refresh_normalized(index);
         }
     }
 
@@ -332,9 +351,7 @@ impl PvsOla {
             let absolute = first + i as isize;
             if absolute >= 0 {
                 let index = absolute as usize % RING;
-                if self.weight[index] > 1e-12 {
-                    self.correlation_output[i].re = self.output[index] / self.weight[index];
-                }
+                self.correlation_output[i].re = self.normalized[index];
             }
         }
         for i in (0..FRAME).step_by(2) {
@@ -405,6 +422,7 @@ impl PvsOla {
             let index = absolute % RING;
             self.output[index] = 0.0;
             self.weight[index] = 0.0;
+            self.normalized[index] = 0.0;
         }
         self.polarity *= sign;
         for i in 0..FRAME {
@@ -458,6 +476,7 @@ impl PvsOla {
             // corresponding weight blend keeps the output level normalized.
             self.output[index] = self.output[index] * (1.0 - window) + input;
             self.weight[index] = self.weight[index] * (1.0 - window) + window;
+            self.refresh_normalized(index);
         }
         self.previous_analysis_position = input_start as f64;
         self.analysis_position = input_start as f64 + HOP as f64 / self.ratio;
@@ -483,25 +502,39 @@ impl PvsOla {
         let upper =
             &self.kernels[base + (index + 1) * RESAMPLE_TAPS..base + (index + 2) * RESAMPLE_TAPS];
         let first = center - RESAMPLE_RADIUS as isize;
-        let mut value = 0.0;
-        let mut weight = 0.0;
-        for tap in 0..RESAMPLE_TAPS {
-            let sample_position = first + tap as isize;
-            if sample_position < 0 {
-                continue;
-            }
-            let ring = sample_position as usize % RING;
-            let frame_weight = self.weight[ring];
-            if frame_weight > 1e-12 {
+        if first < 0 {
+            let mut value = 0.0;
+            for tap in 0..RESAMPLE_TAPS {
+                let sample_position = first + tap as isize;
+                if sample_position < 0 {
+                    continue;
+                }
                 let kernel = lower[tap] + fraction * (upper[tap] - lower[tap]);
-                value += kernel * self.output[ring] / frame_weight;
-                weight += kernel;
+                value += kernel * self.normalized[sample_position as usize % RING];
             }
+            return value;
         }
-        if weight.abs() > 1e-12 {
-            value / weight
+        let start = first as usize % RING;
+        if start + RESAMPLE_TAPS <= RING {
+            (self.resample_dot)(
+                &self.normalized[start..start + RESAMPLE_TAPS],
+                lower,
+                upper,
+                fraction,
+            )
         } else {
-            0.0
+            let head = RING - start;
+            (self.resample_dot)(
+                &self.normalized[start..],
+                &lower[..head],
+                &upper[..head],
+                fraction,
+            ) + (self.resample_dot)(
+                &self.normalized[..RESAMPLE_TAPS - head],
+                &lower[head..],
+                &upper[head..],
+                fraction,
+            )
         }
     }
 }
@@ -534,6 +567,12 @@ fn fill_resample_kernels(kernels: &mut [f64], cutoff: f64) {
                 (TAU * cutoff * distance).sin() / (PI * distance)
             };
             *tap = window * sinc;
+        }
+        let sum: f64 = kernel.iter().sum();
+        if sum.abs() > 1e-12 {
+            for tap in kernel {
+                *tap /= sum;
+            }
         }
     }
 }
@@ -633,6 +672,7 @@ mod tests {
             } else {
                 0.5 + (i % 9) as f64
             };
+            dsp.refresh_normalized(i);
         }
         for target in [256, 2048, RING + 256] {
             let input_start = target + 701;
@@ -667,6 +707,7 @@ mod tests {
             let mut dsp = PvsOla::new(1.0, false, 1.0);
             dsp.output.fill(0.25);
             dsp.weight.fill(1.0);
+            dsp.normalized.fill(0.25);
             dsp.reset_target = Some(target);
             dsp.reset_nominal_position = target as f64;
             dsp.reset_input_position = target as f64;
@@ -708,6 +749,7 @@ mod tests {
         let mut dsp = PvsOla::new(0.5, false, 1.0);
         dsp.output.fill(0.25);
         dsp.weight.fill(1.0);
+        dsp.normalized.fill(0.25);
         dsp.reset_target = Some(1024);
         dsp.reset_nominal_position = 1024.0;
         dsp.reset_input_position = 2048.0;
@@ -727,45 +769,38 @@ mod tests {
             let mut dsp = PvsOla::new(ratio, false, 1.0);
             for i in 0..RING {
                 dsp.output[i] = (i as f64 * 0.137).sin() * 0.4;
-                dsp.weight[i] = if i % 23 == 0 {
-                    0.0
-                } else {
-                    0.7 + (i % 5) as f64
-                };
+                dsp.weight[i] = 0.7 + (i % 5) as f64;
+                dsp.refresh_normalized(i);
             }
             for position in [0.0, 12.31, 128.9, 2047.37, 4096.01, 8000.63] {
                 let actual = dsp.resample(position);
                 let center = position.floor() as isize;
                 let fraction = position - center as f64;
                 let cutoff = cutoff_for_table(cutoff_table_index(ratio));
-                let mut expected = 0.0;
-                let mut weight = 0.0;
-                for offset in -(RESAMPLE_RADIUS as isize)..=RESAMPLE_RADIUS as isize {
-                    let sample_position = center + offset;
-                    if sample_position < 0 {
-                        continue;
-                    }
-                    let distance = offset as f64 - fraction;
+                let mut raw = [0.0; RESAMPLE_TAPS];
+                for (i, tap) in raw.iter_mut().enumerate() {
+                    let distance = i as f64 - RESAMPLE_RADIUS as f64 - fraction;
                     let normalized = distance / (RESAMPLE_RADIUS as f64 + 1.0);
                     let window =
                         0.42 + 0.5 * (PI * normalized).cos() + 0.08 * (TAU * normalized).cos();
-                    let kernel = if distance.abs() < 1e-12 {
+                    let sinc = if distance.abs() < 1e-12 {
                         2.0 * cutoff
                     } else {
                         (TAU * cutoff * distance).sin() / (PI * distance)
-                    } * window;
-                    let index = sample_position as usize % RING;
-                    let frame_weight = dsp.weight[index];
-                    if frame_weight > 1e-12 {
-                        expected += kernel * dsp.output[index] / frame_weight;
-                        weight += kernel;
+                    };
+                    *tap = window * sinc;
+                }
+                let sum: f64 = raw.iter().sum();
+                for tap in &mut raw {
+                    *tap /= sum;
+                }
+                let mut expected = 0.0;
+                for (tap, &kernel) in raw.iter().enumerate() {
+                    let sample_position = center - RESAMPLE_RADIUS as isize + tap as isize;
+                    if sample_position >= 0 {
+                        expected += kernel * dsp.normalized[sample_position as usize % RING];
                     }
                 }
-                let expected = if weight.abs() > 1e-12 {
-                    expected / weight
-                } else {
-                    0.0
-                };
                 assert!(
                     (actual - expected).abs() < 2e-4,
                     "ratio={ratio}, position={position}, actual={actual}, expected={expected}"

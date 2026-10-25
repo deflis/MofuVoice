@@ -17,6 +17,8 @@ impl FftKernel {
         Self::stage::<N, 512>(roots, data);
         Self::stage::<N, 1024>(roots, data);
         Self::stage::<N, 2048>(roots, data);
+        Self::stage::<N, 4096>(roots, data);
+        Self::stage::<N, 8192>(roots, data);
     }
 
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -35,6 +37,8 @@ impl FftKernel {
             Self::stage_avx2::<N, 512>(roots, data);
             Self::stage_avx2::<N, 1024>(roots, data);
             Self::stage_avx2::<N, 2048>(roots, data);
+            Self::stage_avx2::<N, 4096>(roots, data);
+            Self::stage_avx2::<N, 8192>(roots, data);
         }
     }
 
@@ -95,6 +99,8 @@ impl FftKernel {
             Self::stage_neon::<N, 512>(roots, data);
             Self::stage_neon::<N, 1024>(roots, data);
             Self::stage_neon::<N, 2048>(roots, data);
+            Self::stage_neon::<N, 4096>(roots, data);
+            Self::stage_neon::<N, 8192>(roots, data);
         }
     }
 
@@ -161,7 +167,31 @@ impl FftKernel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dsp::fft::Fft;
+
+    fn scalar_reference_forward<const N: usize>(data: &mut [Complex; N]) {
+        let roots: Vec<_> = (0..N / 2)
+            .map(|i| Complex::polar(1.0, -std::f64::consts::TAU * i as f64 / N as f64))
+            .collect();
+        let bits = N.ilog2();
+        for i in 0..N {
+            let j = i.reverse_bits() >> (usize::BITS - bits);
+            if i < j {
+                data.swap(i, j);
+            }
+        }
+        let mut size = 2;
+        while size <= N {
+            let half = size / 2;
+            for start in (0..N).step_by(size) {
+                for j in 0..half {
+                    let root = roots[j * N / size];
+                    (data[start + j], data[start + j + half]) =
+                        data[start + j].butterfly(data[start + j + half], root);
+                }
+            }
+            size *= 2;
+        }
+    }
 
     fn check<const N: usize>() {
         // Build stage tables from the ordinary FFT table; prepare the bit-reversed
@@ -185,7 +215,7 @@ mod tests {
             }
         });
         let mut expected = input;
-        Fft::new(N).forward(&mut expected);
+        scalar_reference_forward(&mut expected);
         let reversed: [Complex; N] =
             std::array::from_fn(|i: usize| input[i.reverse_bits() >> (usize::BITS - N.ilog2())]);
         let mut scalar = reversed;
@@ -224,5 +254,6 @@ mod tests {
         check::<256>();
         check::<1024>();
         check::<2048>();
+        check::<4096>();
     }
 }

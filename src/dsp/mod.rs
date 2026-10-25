@@ -4,7 +4,6 @@ pub(crate) mod biquad;
 pub(crate) mod complex;
 pub(crate) mod envelope;
 pub(crate) mod fft;
-#[cfg(test)]
 pub(crate) mod fft_kernel;
 pub(crate) mod fft_split;
 pub(crate) mod gain;
