@@ -52,7 +52,8 @@ unsafe fn assert_button_labels_visible() {
                 for x in 8..width - 8 {
                     let color = GetPixel(dc, x, y).0;
                     // Exact text colors for selected and unselected buttons (COLORREF).
-                    if color == 0x0016140a || color == 0x00ece8e6 {
+                    // ON_ACCENT rgb(26,18,12) and TEXT rgb(243,232,220) from native theme.
+                    if color == 0x000c121a || color == 0x00dce8f3 {
                         ink += 1;
                     }
                 }

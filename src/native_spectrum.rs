@@ -52,14 +52,19 @@ const fn rgb(r: u8, g: u8, b: u8) -> COLORREF {
 mod theme {
     use super::rgb;
     use windows::Win32::Foundation::COLORREF;
-    pub const BG: COLORREF = rgb(22, 24, 28);
-    pub const BORDER: COLORREF = rgb(55, 60, 70);
-    pub const TEXT: COLORREF = rgb(230, 232, 236);
-    pub const MUTED: COLORREF = rgb(140, 148, 160);
-    pub const ACCENT: COLORREF = rgb(0, 196, 180);
-    pub const ACCENT_DIM: COLORREF = rgb(0, 140, 130);
-    pub const BUTTON: COLORREF = rgb(42, 46, 54);
-    pub const BUTTON_HOT: COLORREF = rgb(52, 58, 68);
+    // Fox / Shiba dark palette (matches frontend --color-* dark tokens).
+    pub const BG: COLORREF = rgb(26, 21, 18);
+    pub const BORDER: COLORREF = rgb(67, 54, 44);
+    pub const TEXT: COLORREF = rgb(243, 232, 220);
+    pub const MUTED: COLORREF = rgb(154, 138, 120);
+    pub const ACCENT: COLORREF = rgb(232, 120, 58);
+    pub const ACCENT_DIM: COLORREF = rgb(180, 90, 40);
+    pub const ACCENT_HOT: COLORREF = rgb(240, 160, 112);
+    pub const ON_ACCENT: COLORREF = rgb(26, 18, 12);
+    pub const ON_ACCENT_DISABLED: COLORREF = rgb(220, 190, 170);
+    pub const BUTTON: COLORREF = rgb(58, 48, 40);
+    pub const BUTTON_HOT: COLORREF = rgb(74, 60, 50);
+    pub const BUTTON_DISABLED: COLORREF = rgb(36, 30, 26);
 }
 
 struct State {
@@ -129,12 +134,12 @@ unsafe fn draw_button(item: &DRAWITEMSTRUCT, state: &State, primary: bool) {
         if disabled {
             theme::ACCENT_DIM
         } else if hot {
-            rgb(0, 214, 196)
+            theme::ACCENT_HOT
         } else {
             theme::ACCENT
         }
     } else if disabled {
-        rgb(36, 40, 46)
+        theme::BUTTON_DISABLED
     } else if hot {
         theme::BUTTON_HOT
     } else {
@@ -142,9 +147,9 @@ unsafe fn draw_button(item: &DRAWITEMSTRUCT, state: &State, primary: bool) {
     };
     let text = if primary {
         if disabled {
-            rgb(180, 220, 215)
+            theme::ON_ACCENT_DISABLED
         } else {
-            rgb(10, 20, 22)
+            theme::ON_ACCENT
         }
     } else if disabled {
         theme::MUTED
