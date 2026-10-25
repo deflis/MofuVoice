@@ -23,11 +23,11 @@ jobs:
         include:
           - os: windows-latest
             artifact: windows-x64
-            binary: MofuVoice.exe
+            platform: windows
             setup_llvm: true
           - os: macos-latest
             artifact: macos-arm64
-            binary: MofuVoice
+            platform: macos
             setup_llvm: false
     runs-on: ${{ matrix.os }}
     steps:
@@ -62,22 +62,45 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build React frontend
-        run: mise run build:web
-
       - name: Cache Cargo
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: release-${{ matrix.artifact }}
 
-      - name: Build GUI
-        run: cargo build --release --features desktop,custom-protocol,asio --locked --bin MofuVoice
+      - name: Build Windows GUI
+        if: matrix.platform == 'windows'
+        run: |
+          mise run build:web
+          cargo build --release --features desktop,custom-protocol,asio --locked --bin MofuVoice
 
-      - name: Stage portable package
+      - name: Package Windows portable
+        if: matrix.platform == 'windows'
         shell: bash
         run: |
           mkdir -p dist
-          cp "target/release/${{ matrix.binary }}" dist/
+          cp target/release/MofuVoice.exe dist/
+          cp LICENSE dist/
+
+      - name: Build macOS app and DMG
+        if: matrix.platform == 'macos'
+        run: pnpm exec tauri build --features desktop,custom-protocol --bundles app,dmg -- --locked
+
+      - name: Package macOS app bundle
+        if: matrix.platform == 'macos'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          app_path="$(find target/release/bundle/macos -maxdepth 1 -name '*.app' -print -quit)"
+          dmg_path="$(find target/release/bundle/dmg -maxdepth 1 -name '*.dmg' -print -quit)"
+          if [[ -z "$app_path" || -z "$dmg_path" ]]; then
+            echo "Expected .app and .dmg under target/release/bundle" >&2
+            find target/release/bundle -maxdepth 3 -print >&2 || true
+            exit 1
+          fi
+          # upload-artifact flattens modes to 644; keep .app inside tar.gz / DMG.
+          tar -czf "dist/$(basename "$app_path").tar.gz" -C "$(dirname "$app_path")" "$(basename "$app_path")"
+          cp "$dmg_path" dist/
           cp LICENSE dist/
 
       - name: Upload package
