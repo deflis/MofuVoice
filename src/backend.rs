@@ -261,8 +261,8 @@ fn load_driver(name: &str) -> Result<asio_sys::Driver> {
 #[cfg(all(windows, feature = "asio"))]
 impl AudioBackend for AsioBackend {
     fn supported_sample_rates(&self, name: &str) -> Result<DeviceSampleRates> {
-        let _driver = load_driver(name)?;
-        let rates = crate::asio::supported_sample_rates()?;
+        let driver = load_driver(name)?;
+        let rates = crate::asio::supported_sample_rates(&driver)?;
         Ok(DeviceSampleRates {
             input: rates.clone(),
             output: rates.clone(),
