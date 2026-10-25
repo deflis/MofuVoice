@@ -1,26 +1,58 @@
 //! Radix-2 complex FFT with tables allocated at construction.
-use super::complex::Complex;
+//! Stage twiddles are packed contiguously so the shared SIMD butterflies can
+//! stream them without strided loads.
+use super::{complex::Complex, fft_kernel::FftKernel};
 
 pub(crate) struct Fft {
     size: usize,
     reverse: Vec<usize>,
-    roots: Vec<Complex>,
+    /// Contiguous stage table of length `size - 1` for [`FftKernel`].
+    stages: Vec<Complex>,
+    vector: bool,
 }
 
 impl Fft {
     pub(crate) fn new(size: usize) -> Self {
-        assert!(size.is_power_of_two() && size >= 4);
+        assert!(size.is_power_of_two() && (4..=8192).contains(&size));
         let bits = size.ilog2();
+        let roots: Vec<_> = (0..size / 2)
+            .map(|i| Complex::polar(1.0, -std::f64::consts::TAU * i as f64 / size as f64))
+            .collect();
+        let mut stages = Vec::with_capacity(size - 1);
+        let mut width = 2;
+        while width <= size {
+            for j in 0..width / 2 {
+                stages.push(roots[j * size / width]);
+            }
+            width *= 2;
+        }
         Self {
             size,
             reverse: (0..size)
                 .map(|i| i.reverse_bits() >> (usize::BITS - bits))
                 .collect(),
-            roots: (0..size / 2)
-                .map(|i| Complex::polar(1.0, -std::f64::consts::TAU * i as f64 / size as f64))
-                .collect(),
+            stages,
+            vector: {
+                #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+                {
+                    std::is_x86_feature_detected!("avx2")
+                }
+                #[cfg(target_arch = "aarch64")]
+                {
+                    std::arch::is_aarch64_feature_detected!("neon")
+                }
+                #[cfg(not(any(
+                    target_arch = "x86",
+                    target_arch = "x86_64",
+                    target_arch = "aarch64"
+                )))]
+                {
+                    false
+                }
+            },
         }
     }
+
     pub(crate) fn forward(&self, data: &mut [Complex]) {
         assert_eq!(data.len(), self.size);
         for i in 0..self.size {
@@ -28,18 +60,38 @@ impl Fft {
                 data.swap(i, self.reverse[i]);
             }
         }
-        let mut size = 2;
-        while size <= self.size {
-            let half = size / 2;
-            for start in (0..self.size).step_by(size) {
-                for j in 0..half {
-                    let root = self.roots[j * self.size / size];
-                    (data[start + j], data[start + j + half]) =
-                        data[start + j].butterfly(data[start + j + half], root);
-                }
-            }
-            size *= 2;
+        match self.size {
+            4 => self.stages_n::<4>(data),
+            8 => self.stages_n::<8>(data),
+            16 => self.stages_n::<16>(data),
+            32 => self.stages_n::<32>(data),
+            64 => self.stages_n::<64>(data),
+            128 => self.stages_n::<128>(data),
+            256 => self.stages_n::<256>(data),
+            512 => self.stages_n::<512>(data),
+            1024 => self.stages_n::<1024>(data),
+            2048 => self.stages_n::<2048>(data),
+            4096 => self.stages_n::<4096>(data),
+            8192 => self.stages_n::<8192>(data),
+            _ => unreachable!("Fft::new rejects unsupported sizes"),
         }
+    }
+
+    fn stages_n<const N: usize>(&self, data: &mut [Complex]) {
+        let data: &mut [Complex; N] = data.try_into().expect("buffer length matches plan");
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        if self.vector {
+            // SAFETY: AVX2 was detected at construction; N matches the plan size.
+            unsafe { FftKernel::stages_avx2(&self.stages, data) };
+            return;
+        }
+        #[cfg(target_arch = "aarch64")]
+        if self.vector {
+            // SAFETY: NEON was detected at construction; N matches the plan size.
+            unsafe { FftKernel::stages_neon(&self.stages, data) };
+            return;
+        }
+        FftKernel::stages(&self.stages, data);
     }
 
     /// In-place inverse transform. The forward transform is unscaled, so the
@@ -184,5 +236,49 @@ mod tests {
     #[should_panic]
     fn rejects_wrong_buffer_size() {
         Fft::new(8).forward(&mut [Complex::default(); 4]);
+    }
+
+    #[test]
+    fn vector_and_scalar_plans_match_bits() {
+        for size in [4, 32, 256, 1024, 4096] {
+            let mut vector = Fft::new(size);
+            let mut scalar = Fft::new(size);
+            scalar.vector = false;
+            vector.vector = {
+                #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+                {
+                    std::is_x86_feature_detected!("avx2")
+                }
+                #[cfg(target_arch = "aarch64")]
+                {
+                    std::arch::is_aarch64_feature_detected!("neon")
+                }
+                #[cfg(not(any(
+                    target_arch = "x86",
+                    target_arch = "x86_64",
+                    target_arch = "aarch64"
+                )))]
+                {
+                    false
+                }
+            };
+            if !vector.vector {
+                continue;
+            }
+            let input: Vec<_> = (0..size)
+                .map(|i| Complex {
+                    re: (i as f64 * 0.31).sin(),
+                    im: (i as f64 * 0.17).cos(),
+                })
+                .collect();
+            let mut a = input.clone();
+            let mut b = input;
+            vector.forward(&mut a);
+            scalar.forward(&mut b);
+            for (actual, expected) in a.iter().zip(&b) {
+                assert_eq!(actual.re.to_bits(), expected.re.to_bits());
+                assert_eq!(actual.im.to_bits(), expected.im.to_bits());
+            }
+        }
     }
 }
