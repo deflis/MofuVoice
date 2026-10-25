@@ -1,8 +1,12 @@
 name: Release
 
+# Pre-release style portable GUI builds for master.
+# Not a tagged/formal release — artifacts only (Windows / macOS).
+
 on:
   push:
     branches: [master]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,19 +17,33 @@ concurrency:
 
 jobs:
   build:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: windows-x64
+            binary: MofuVoice.exe
+            setup_llvm: true
+          - os: macos-latest
+            artifact: macos-arm64
+            binary: MofuVoice
+            setup_llvm: false
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: jdx/mise-action@8418fedb1110381a0d3ba51a7a415d7c1b884550 # v5.2.2
 
       - name: Cache LLVM
+        if: matrix.setup_llvm
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .tools/llvm
           key: llvm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise.toml') }}
 
       - name: Set up LLVM
+        if: matrix.setup_llvm
         run: mise run setup:ci
 
       - name: Get pnpm store directory
@@ -44,23 +62,27 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Check frontend
-        run: mise run check:web
-
       - name: Build React frontend
         run: mise run build:web
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: release-${{ matrix.artifact }}
 
-      - name: Build release
-        run: cargo build --release --features desktop,custom-protocol,asio --locked
+      - name: Build GUI
+        run: cargo build --release --features desktop,custom-protocol,asio --locked --bin MofuVoice
 
-      - name: Upload binaries
+      - name: Stage portable package
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "target/release/${{ matrix.binary }}" dist/
+          cp LICENSE dist/
+
+      - name: Upload package
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: windows-x64-release
-          path: |
-            target/release/MofuVoice.exe
-            target/release/mofu-voice-cli.exe
+          name: ${{ matrix.artifact }}
+          path: dist/
           if-no-files-found: error
