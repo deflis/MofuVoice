@@ -13,6 +13,7 @@ export function EqCard({
   id,
   title,
   onSelect,
+  locked,
 }: CardProps & {
   slot: "eq" | "inputEq" | "preConversionEq";
   id: string;
@@ -21,82 +22,87 @@ export function EqCard({
   const settings = useSettingsStore((state) => state[slot]);
   const rate = useSettingsStore((state) => state.devices.sampleRate);
   const rumble = useSettingsStore((state) => slot === "inputEq" && state.noise.rumbleFilter);
+  const setEnabled = useSettingsStore((state) => state[slot].setEnabled);
+  const setRumbleFilter = useSettingsStore((state) => state.noise.setRumbleFilter);
   const isInput = slot === "inputEq";
-  const valid = v.safeParse(eqSchema, settings).success && [44100, 48000].includes(rate);
+  const rateSupported = [44100, 48000].includes(rate);
+  const validEq = v.safeParse(eqSchema, settings).success && rateSupported;
+  const valid = (settings.enabled ? validEq : true) && (!rumble || rateSupported);
   const frequencies = Array.from({ length: 121 }, (_, i) => 20 * 1000 ** (i / 120));
   const response = (frequency: number) =>
     isInput
       ? (settings.enabled ? eqResponseDb(settings, rate, frequency) : 0) +
         (rumble ? rumbleResponseDb(rate, frequency) : 0)
       : eqResponseDb(settings, rate, frequency);
-  const retained = valid
-    ? frequencies.map((frequency) => eqResponseDb(settings, rate, frequency))
-    : [];
   const values = valid ? frequencies.map(response) : [];
-  const minimum = Math.floor(Math.min(-12, ...values, ...retained) / 6) * 6;
-  const maximum = Math.ceil(Math.max(6, ...values, ...retained) / 6) * 6;
+  const minimum = Math.floor(Math.min(-12, ...values) / 6) * 6;
+  const maximum = Math.ceil(Math.max(6, ...values) / 6) * 6;
   const y = (db: number) => 86 - ((db - minimum) / (maximum - minimum)) * 64;
   return (
     <Card
       id={id}
       title={title}
-      enabled={settings.enabled || (isInput && rumble)}
       onSelect={onSelect}
+      locked={locked}
+      toggles={
+        isInput
+          ? [
+              { label: "EQ", enabled: settings.enabled, onChange: setEnabled },
+              { label: "80 Hz HPF", enabled: rumble, onChange: setRumbleFilter },
+            ]
+          : [{ label: "有効", enabled: settings.enabled, onChange: setEnabled }]
+      }
     >
-      {isInput && (
-        <Value>
-          低域ノイズ対策（80 Hz HPF）: {rumble ? "有効" : "無効"} · EQ:{" "}
-          {settings.enabled ? "有効" : "無効・設定保持"}
-        </Value>
-      )}
-      {valid ? (
-        <>
-          <Plot
-            description={`${title}の設定周波数応答。${rate} Hz。出力調整と正のゲインに対するヘッドルームを含む。${isInput ? "実線は有効なHPFとEQの合成特性。破線は保持中のEQ単体特性。" : "無効時も設定特性を表示。"}`}
-            xLabel="20 Hz → 20 kHz（対数）"
-            yLabel={`${minimum}〜${maximum} dB`}
-          >
-            <path className={styles["filter-reference"]} d={`M36 ${y(0)}H308`} />
-            {isInput && (
+      {(settings.enabled || (isInput && rumble)) &&
+        (valid ? (
+          <>
+            <Plot
+              description={`${title}の有効な処理の周波数応答。${rate} Hz。${settings.enabled ? "EQの出力調整と正のゲインに対するヘッドルームを含みます。" : "80 Hz HPFの設定応答です。"}`}
+              xLabel="20 Hz → 20 kHz（対数）"
+              yLabel={`${minimum}〜${maximum} dB`}
+            >
+              <path className={styles["filter-reference"]} d={`M36 ${y(0)}H308`} />
               <path
-                className={styles["filter-retained"]}
-                d={curvePath(frequencies.map((frequency, i) => [x(frequency), y(retained[i])]))}
+                className={styles["filter-curve"]}
+                d={curvePath(frequencies.map((frequency, i) => [x(frequency), y(values[i])]))}
               />
+              {settings.enabled &&
+                settings.bands.map((band, i) => (
+                  <circle
+                    key={i}
+                    className={styles["filter-point"]}
+                    cx={x(band.frequency)}
+                    cy={y(response(band.frequency))}
+                    r="3"
+                  />
+                ))}
+            </Plot>
+            {isInput && rumble && <Value>低域ノイズ対策: 80 Hz HPF</Value>}
+            {settings.enabled && (
+              <>
+                <Value>
+                  {settings.bands
+                    .map(
+                      (band) =>
+                        `${num(band.frequency)} Hz: ${num(band.gainDb)} dB / Q ${num(band.q)}`,
+                    )
+                    .join(" · ")}
+                </Value>
+                <Value>
+                  出力調整 {num(settings.outputDb)} dB · ヘッドルーム{" "}
+                  {num(settings.bands.reduce((sum, band) => sum + Math.max(0, band.gainDb), 0))} dB
+                  · {rate.toLocaleString()} Hz
+                </Value>
+              </>
             )}
-            <path
-              className={styles["filter-curve"]}
-              d={curvePath(frequencies.map((frequency, i) => [x(frequency), y(values[i])]))}
-            />
-            {settings.bands.map((band, i) => (
-              <circle
-                key={i}
-                className={styles["filter-point"]}
-                cx={x(band.frequency)}
-                cy={y(response(band.frequency))}
-                r="3"
-              />
-            ))}
-          </Plot>
-          <Value>
-            {settings.bands
-              .map((band) => `${num(band.frequency)} Hz: ${num(band.gainDb)} dB / Q ${num(band.q)}`)
-              .join(" · ")}
-          </Value>
-          <Value>
-            出力調整 {num(settings.outputDb)} dB · ヘッドルーム{" "}
-            {num(settings.bands.reduce((sum, band) => sum + Math.max(0, band.gainDb), 0))} dB ·{" "}
-            {rate.toLocaleString()} Hz
-          </Value>
-          <small>
-            {isInput
-              ? "実線: 有効なHPFとEQの合成。破線: 保持中のEQ単体設定。"
-              : "設定特性（無効時も保持）。"}
-            出力調整と内部ヘッドルームを含みます。
-          </small>
-        </>
-      ) : (
-        <InvalidGraph />
-      )}
+            <small>
+              {isInput ? "図は有効なHPFとEQの合成特性です。" : "図はEQの設定周波数応答です。"}
+              {settings.enabled && "出力調整と内部ヘッドルームを含みます。"}
+            </small>
+          </>
+        ) : (
+          <InvalidGraph />
+        ))}
     </Card>
   );
 }

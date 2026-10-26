@@ -5,6 +5,7 @@ import type { CardProps } from "./Card";
 import { EqCard } from "./EqCard";
 import { NoiseGateCard, DeesserCard, VoiceCard, LevelCard } from "./ExistingCards";
 import { LimiterCard, DereverbCard, ReverbCard, CompressorCard } from "./NewCards";
+import { useSettingsLocked } from "../hooks";
 
 const cards: Record<string, ComponentType<CardProps>> = {
   inputEq: (props) => (
@@ -26,8 +27,9 @@ const cards: Record<string, ComponentType<CardProps>> = {
   reverb: ReverbCard,
 };
 
-export function FilterOverview({ onSelect }: CardProps) {
+export function FilterOverview({ onSelect }: Pick<CardProps, "onSelect">) {
   const stages = useSettingsConnection((state) => state.chainStages);
+  const locked = useSettingsLocked();
   const dirty = useSettingsConnection((state) => state.dirty);
   const busy = useSettingsConnection((state) => state.audioBusy);
   const status = useSettingsConnection((state) => state.status);
@@ -45,7 +47,9 @@ export function FilterOverview({ onSelect }: CardProps) {
     <div className={styles["filter-overview"]}>
       <h2>フィルタ構成</h2>
       <output className={styles["filter-lifecycle"]}>{lifecycle}</output>
-      <p>上から下が音声の処理順です。図と値は個別設定と共通で、実測メーターではありません。</p>
+      <p>
+        上から下が音声の処理順です。各チェックボックスで個別に切り替えられ、無効中は詳細を表示しません。図と値は個別設定と共通で、実測メーターではありません。
+      </p>
       {!stages.length ? (
         <p>処理順の情報を取得できていません。</p>
       ) : (
@@ -65,7 +69,7 @@ export function FilterOverview({ onSelect }: CardProps) {
                     <p className={styles["filter-divider"]}>変換後の処理</p>
                   )}
                   {StageCard ? (
-                    <StageCard onSelect={onSelect} />
+                    <StageCard onSelect={onSelect} locked={locked} />
                   ) : (
                     <p>表示に対応していない処理: {id}</p>
                   )}

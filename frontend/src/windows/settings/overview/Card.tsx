@@ -1,19 +1,26 @@
 import styles from "./overview.module.css";
 import type { ReactNode } from "react";
 
-export type CardProps = { onSelect: (id: string) => void };
+export type CardProps = { onSelect: (id: string) => void; locked: boolean };
+export type FilterToggle = {
+  label: string;
+  enabled: boolean;
+  onChange: (enabled: boolean) => void;
+};
 export function Card({
   id,
   title,
-  enabled,
+  toggles,
+  locked,
   onSelect,
   children,
 }: CardProps & {
   id: string;
   title: string;
-  enabled: boolean;
+  toggles: FilterToggle[];
   children: ReactNode;
 }) {
+  const enabled = toggles.some((toggle) => toggle.enabled);
   return (
     <article
       className={styles["filter-card"]}
@@ -22,9 +29,22 @@ export function Card({
     >
       <div className={styles["filter-card-heading"]}>
         <h3 id={`filter-${id}`}>{title}</h3>
-        <span className={styles["filter-state"]}>{enabled ? "有効" : "無効 · バイパス中"}</span>
+        <div className={styles["filter-card-controls"]}>
+          {toggles.map((toggle) => (
+            <label key={toggle.label}>
+              <input
+                type="checkbox"
+                checked={toggle.enabled}
+                disabled={locked}
+                aria-label={`${title}: ${toggle.label}`}
+                onChange={(event) => toggle.onChange(event.target.checked)}
+              />
+              {toggle.label}
+            </label>
+          ))}
+        </div>
       </div>
-      {children}
+      {enabled && children}
       <button type="button" onClick={() => onSelect(id)} aria-label={`${title}の個別設定を開く`}>
         個別設定を開く →
       </button>

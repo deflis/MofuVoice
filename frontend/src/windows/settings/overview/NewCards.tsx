@@ -8,14 +8,16 @@ import { compressorSchema } from "../compressor/schema";
 import { Card, InvalidGraph, Value, num, type CardProps } from "./Card";
 import { Plot, TransferPlot, curvePath } from "./Plot";
 
-export function CompressorCard({ onSelect }: CardProps) {
+export function CompressorCard({ onSelect, locked }: CardProps) {
   const settings = useSettingsStore((state) => state.compressor);
+  const setEnabled = useSettingsStore((state) => state.compressor.setEnabled);
   return (
     <Card
       id="compressor"
       title="変換前コンプレッサー"
-      enabled={settings.enabled}
       onSelect={onSelect}
+      locked={locked}
+      toggles={[{ label: "有効", enabled: settings.enabled, onChange: setEnabled }]}
     >
       {v.safeParse(compressorSchema, settings).success ? (
         <>
@@ -39,10 +41,17 @@ export function CompressorCard({ onSelect }: CardProps) {
   );
 }
 
-export function LimiterCard({ onSelect }: CardProps) {
+export function LimiterCard({ onSelect, locked }: CardProps) {
   const settings = useSettingsStore((state) => state.limiter);
+  const setEnabled = useSettingsStore((state) => state.limiter.setEnabled);
   return (
-    <Card id="limiter" title="リミッター" enabled={settings.enabled} onSelect={onSelect}>
+    <Card
+      id="limiter"
+      title="リミッター"
+      toggles={[{ label: "有効", enabled: settings.enabled, onChange: setEnabled }]}
+      onSelect={onSelect}
+      locked={locked}
+    >
       {v.safeParse(limiterSchema, settings).success ? (
         <>
           <TransferPlot
@@ -64,10 +73,17 @@ export function LimiterCard({ onSelect }: CardProps) {
   );
 }
 
-export function DereverbCard({ onSelect }: CardProps) {
+export function DereverbCard({ onSelect, locked }: CardProps) {
   const settings = useSettingsStore((state) => state.dereverb);
+  const setEnabled = useSettingsStore((state) => state.dereverb.setEnabled);
   return (
-    <Card id="dereverb" title="反響低減" enabled={settings.enabled} onSelect={onSelect}>
+    <Card
+      id="dereverb"
+      title="反響低減"
+      toggles={[{ label: "有効", enabled: settings.enabled, onChange: setEnabled }]}
+      onSelect={onSelect}
+      locked={locked}
+    >
       {v.safeParse(dereverbSchema, settings).success ? (
         <>
           <Plot
@@ -98,8 +114,9 @@ export function DereverbCard({ onSelect }: CardProps) {
   );
 }
 
-export function ReverbCard({ onSelect }: CardProps) {
+export function ReverbCard({ onSelect, locked }: CardProps) {
   const settings = useSettingsStore((state) => state.reverb);
+  const setEnabled = useSettingsStore((state) => state.reverb.setEnabled);
   const valid = v.safeParse(reverbSchema, settings).success;
   const duration = settings.preDelayMs + settings.decayMs;
   const x = (time: number) => 36 + (time / duration) * 272;
@@ -110,7 +127,13 @@ export function ReverbCard({ onSelect }: CardProps) {
       ])
     : [];
   return (
-    <Card id="reverb" title="リバーブ" enabled={settings.enabled} onSelect={onSelect}>
+    <Card
+      id="reverb"
+      title="リバーブ"
+      toggles={[{ label: "有効", enabled: settings.enabled, onChange: setEnabled }]}
+      onSelect={onSelect}
+      locked={locked}
+    >
       {valid ? (
         <>
           <Plot
