@@ -9,13 +9,20 @@ import { Card, InvalidGraph, Value, num, type CardProps } from "./Card";
 import { Plot, curvePath } from "./Plot";
 import { compressorOutputDb } from "./transfer";
 
-export function NoiseGateCard({ onSelect }: CardProps) {
+export function NoiseGateCard({ onSelect, locked }: CardProps) {
   const settings = useSettingsStore((state) => state.noise);
+  const setEnabled = useSettingsStore((state) => state.noise.setEnabled);
   const valid = v.safeParse(noiseSchema, settings).success;
   const total = settings.attackMs + settings.releaseMs;
   const attackX = 68 + (settings.attackMs / total) * 150;
   return (
-    <Card id="noiseGate" title="ノイズゲート" enabled={settings.enabled} onSelect={onSelect}>
+    <Card
+      id="noiseGate"
+      title="ノイズゲート"
+      toggles={[{ label: "有効", enabled: settings.enabled, onChange: setEnabled }]}
+      onSelect={onSelect}
+      locked={locked}
+    >
       {valid ? (
         <>
           <Plot
@@ -50,12 +57,19 @@ export function NoiseGateCard({ onSelect }: CardProps) {
   );
 }
 
-export function DeesserCard({ onSelect }: CardProps) {
+export function DeesserCard({ onSelect, locked }: CardProps) {
   const settings = useSettingsStore((state) => state.deesser);
+  const setEnabled = useSettingsStore((state) => state.deesser.setEnabled);
   const valid = v.safeParse(deesserSchema, settings).success;
   const frequencyX = 36 + (Math.log10(settings.frequencyHz / 1000) / Math.log10(20)) * 272;
   return (
-    <Card id="deesser" title="ディエッサー" enabled={settings.enabled} onSelect={onSelect}>
+    <Card
+      id="deesser"
+      title="ディエッサー"
+      toggles={[{ label: "有効", enabled: settings.enabled, onChange: setEnabled }]}
+      onSelect={onSelect}
+      locked={locked}
+    >
       {valid ? (
         <>
           <Plot
@@ -92,15 +106,17 @@ export function DeesserCard({ onSelect }: CardProps) {
 
 const x = (shift: number) => 36 + ((shift + 12) / 24) * 272;
 
-export function VoiceCard({ onSelect }: CardProps) {
+export function VoiceCard({ onSelect, locked }: CardProps) {
   const settings = useSettingsStore((state) => state.voice);
+  const setEnabled = useSettingsStore((state) => state.voice.setEnabled);
   const valid = v.safeParse(voiceSchema, settings).success;
   return (
     <Card
       id="voice"
       title="ピッチ／フォルマント変換"
-      enabled={settings.enabled}
       onSelect={onSelect}
+      locked={locked}
+      toggles={[{ label: "有効", enabled: settings.enabled, onChange: setEnabled }]}
     >
       {valid ? (
         <>
@@ -144,51 +160,64 @@ export function VoiceCard({ onSelect }: CardProps) {
   );
 }
 
-export function LevelCard({ onSelect }: CardProps) {
+export function LevelCard({ onSelect, locked }: CardProps) {
   const settings = useSettingsStore((state) => state.level);
+  const setAutoLevelEnabled = useSettingsStore((state) => state.level.setEnabled);
+  const setCompressorEnabled = useSettingsStore((state) => state.level.setCompressorEnabled);
   const valid = v.safeParse(levelSchema, settings).success;
-  const points: [number, number][] = valid
-    ? Array.from({ length: 121 }, (_, i) => {
-        const input = -60 + i / 2;
-        return [
-          36 + (i / 120) * 272,
-          86 - ((compressorOutputDb(input, settings.thresholdDb, settings.ratio) + 60) / 60) * 64,
-        ];
-      })
-    : [];
+  const points: [number, number][] =
+    valid && settings.compressorEnabled
+      ? Array.from({ length: 121 }, (_, i) => {
+          const input = -60 + i / 2;
+          return [
+            36 + (i / 120) * 272,
+            86 - ((compressorOutputDb(input, settings.thresholdDb, settings.ratio) + 60) / 60) * 64,
+          ];
+        })
+      : [];
   return (
     <Card
       id="level"
       title="後処理の音量調整・コンプレッサー"
-      enabled={settings.enabled || settings.compressorEnabled}
       onSelect={onSelect}
+      locked={locked}
+      toggles={[
+        { label: "自動音量調整", enabled: settings.enabled, onChange: setAutoLevelEnabled },
+        {
+          label: "コンプレッサー",
+          enabled: settings.compressorEnabled,
+          onChange: setCompressorEnabled,
+        },
+      ]}
     >
-      <Value>
-        自動音量調整: {settings.enabled ? "有効" : "無効・バイパス中"} · コンプレッサー:{" "}
-        {settings.compressorEnabled ? "有効" : "無効・バイパス中"}
-      </Value>
       {valid ? (
         <>
-          <Plot
-            description="コンプレッサー単体の設定静特性。6 dBソフトニーを含みます。時間応答、自動音量調整と内部ピークガードの効果は含みません。"
-            xLabel="入力 −60 → 0 dBFS"
-            yLabel="出力 dBFS"
-          >
-            <path className={styles["filter-reference"]} d="M36 86L308 22" />
-            <path className={styles["filter-curve"]} d={curvePath(points)} />
-          </Plot>
-          <Value>
-            目標 {num(settings.targetDb)} dBFS · 増幅上限 {num(settings.maxGainDb)} dB · 応答{" "}
-            {num(settings.responseMs)} ms
-          </Value>
-          <Value>
-            圧縮しきい値 {num(settings.thresholdDb)} dBFS · 比率 {num(settings.ratio)}:1 · アタック{" "}
-            {num(settings.attackMs)} ms · リリース {num(settings.releaseMs)} ms
-          </Value>
-          <small>
-            図は圧縮の設定静特性です。両機能は内部ピークガード（−1
-            dBFS）を共有し、どちらかが有効な場合に動作します。
-          </small>
+          {settings.enabled && (
+            <Value>
+              目標 {num(settings.targetDb)} dBFS · 増幅上限 {num(settings.maxGainDb)} dB · 応答{" "}
+              {num(settings.responseMs)} ms
+            </Value>
+          )}
+          {settings.compressorEnabled && (
+            <>
+              <Plot
+                description="コンプレッサー単体の設定静特性。6 dBソフトニーを含みます。時間応答と内部ピークガードの効果は含みません。"
+                xLabel="入力 −60 → 0 dBFS"
+                yLabel="出力 dBFS"
+              >
+                <path className={styles["filter-reference"]} d="M36 86L308 22" />
+                <path className={styles["filter-curve"]} d={curvePath(points)} />
+              </Plot>
+              <Value>
+                圧縮しきい値 {num(settings.thresholdDb)} dBFS · 比率 {num(settings.ratio)}:1 ·
+                アタック {num(settings.attackMs)} ms · リリース {num(settings.releaseMs)} ms
+              </Value>
+              <small>
+                図は圧縮の設定静特性です。有効な音量処理が動作する場合、内部ピークガード（−1
+                dBFS）を適用します。
+              </small>
+            </>
+          )}
         </>
       ) : (
         <InvalidGraph />

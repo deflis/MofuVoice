@@ -34,7 +34,7 @@
 .filter-card-heading {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
 }
@@ -44,13 +44,18 @@
   margin: 0;
 }
 
-.filter-state {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
+.filter-card-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
 }
 
-.filter-card[data-enabled="true"] .filter-state {
-  color: var(--color-accent-soft);
+.filter-card-controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
 }
 
 .filter-card button {
@@ -123,13 +128,6 @@
   fill: none;
   stroke: var(--color-accent-plot);
   stroke-width: 2;
-}
-
-.filter-retained {
-  fill: none;
-  stroke: var(--color-warning-muted);
-  stroke-width: 1.5;
-  stroke-dasharray: 6 4;
 }
 
 .filter-point {
