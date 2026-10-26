@@ -90,61 +90,66 @@ export function VoiceSettings() {
             同じピッチとフォルマントの設定で聞き比べてください。変更は保存後、次の音声開始時に反映します。
           </p>
           <p>{algorithmDescription(pitchAlgorithm)}</p>
-          <WindowControls
-            title="ボコーダーのウィンドウ"
-            analysis={analysisWindow}
-            synthesis={synthesisWindow}
-            setAnalysis={setAnalysisWindow}
-            setSynthesis={setSynthesisWindow}
-            disabled={!vocoder}
-          />
-          <p>
-            位相ロック（標準）・スペクトル位相同期と、TD-PSOLA＋フェーズボコーダー／FD-PSOLAのフォルマント補正に使います。
-          </p>
-          <label>
-            <span id={pitchEstimatorId}>PSOLAのピッチ推定</span>
-            <select
-              aria-labelledby={pitchEstimatorId}
-              value={psolaPitchEstimator}
-              disabled={!psola}
-              onChange={(event) =>
-                setPsolaPitchEstimator(
-                  v.parse(voiceSchema.entries.psolaPitchEstimator, event.target.value),
-                )
-              }
-            >
-              <optgroup label="YIN">
-                <option value="yin">YIN（標準）</option>
-              </optgroup>
-              <optgroup label="MPM">
-                <option value="mpm">MPM</option>
-                <option value="mpm-fft">MPM＋FFT</option>
-              </optgroup>
-              <optgroup label="NCCF">
-                <option value="nccf">NCCF</option>
-              </optgroup>
-            </select>
-          </label>
-          <p>
-            声によって推定精度が変わります。低音や息の多い声で聞き比べてください。追加の解析待ちはありません。MPMは正規化相関、MPM＋FFTはFFT自己相関で、ウィンドウ長によって計算負荷が変わります。NCCFは過去の周期も参考にします。
-          </p>
-          <WindowControls
-            title="PSOLAのウィンドウ"
-            analysis={psolaAnalysisWindow}
-            synthesis={psolaSynthesisWindow}
-            setAnalysis={setPsolaAnalysisWindow}
-            setSynthesis={setPsolaSynthesisWindow}
-            disabled={!psola}
-          />
-          <p>
-            TD-PSOLA＋フェーズボコーダーとTD-PSOLA＋リサンプリングはピッチ周期（波形単位）を基準にウィンドウを適用し、FD-PSOLAは解析ウィンドウと合成ウィンドウのサイズを設定します。設定値によって遅延時間や音質が変化します。
-          </p>
+          {vocoder && (
+            <>
+              <WindowControls
+                title="ボコーダーのウィンドウ"
+                analysis={analysisWindow}
+                synthesis={synthesisWindow}
+                setAnalysis={setAnalysisWindow}
+                setSynthesis={setSynthesisWindow}
+              />
+              <p>
+                位相ロック（標準）・スペクトル位相同期と、TD-PSOLA＋フェーズボコーダー／FD-PSOLAのフォルマント補正に使います。
+              </p>
+            </>
+          )}
+          {psola && (
+            <>
+              <label>
+                <span id={pitchEstimatorId}>PSOLAのピッチ推定</span>
+                <select
+                  aria-labelledby={pitchEstimatorId}
+                  value={psolaPitchEstimator}
+                  onChange={(event) =>
+                    setPsolaPitchEstimator(
+                      v.parse(voiceSchema.entries.psolaPitchEstimator, event.target.value),
+                    )
+                  }
+                >
+                  <optgroup label="YIN">
+                    <option value="yin">YIN（標準）</option>
+                  </optgroup>
+                  <optgroup label="MPM">
+                    <option value="mpm">MPM</option>
+                    <option value="mpm-fft">MPM＋FFT</option>
+                  </optgroup>
+                  <optgroup label="NCCF">
+                    <option value="nccf">NCCF</option>
+                  </optgroup>
+                </select>
+              </label>
+              <p>
+                声によって推定精度が変わります。低音や息の多い声で聞き比べてください。追加の解析待ちはありません。MPMは正規化相関、MPM＋FFTはFFT自己相関で、ウィンドウ長によって計算負荷が変わります。NCCFは過去の周期も参考にします。
+              </p>
+              <WindowControls
+                title="PSOLAのウィンドウ"
+                analysis={psolaAnalysisWindow}
+                synthesis={psolaSynthesisWindow}
+                setAnalysis={setPsolaAnalysisWindow}
+                setSynthesis={setPsolaSynthesisWindow}
+              />
+              <p>
+                TD-PSOLA＋フェーズボコーダーとTD-PSOLA＋リサンプリングはピッチ周期（波形単位）を基準にウィンドウを適用し、FD-PSOLAは解析ウィンドウと合成ウィンドウのサイズを設定します。設定値によって遅延時間や音質が変化します。
+              </p>
+            </>
+          )}
           <p>
             変換時のDSP遅延の合計：{((delay / sampleRate) * 1000).toFixed(1)}{" "}
             ms。高さとフォルマントがともに0の場合は0
             msです。入出力バッファーと機器の遅延は含みません。
           </p>
-          <p>変更は保存後、次の音声開始時に反映します。PVSOLAは固定長です。</p>
+          {pitchAlgorithm === "pvsola" && <p>PVSOLAのウィンドウ長は固定です。</p>}
         </DetailsPopup>
         <label>
           ピッチの表示単位
@@ -230,18 +235,16 @@ function WindowControls({
   synthesis,
   setAnalysis,
   setSynthesis,
-  disabled,
 }: {
   title: string;
   analysis: VoiceValues["analysisWindow"];
   synthesis: VoiceValues["synthesisWindow"];
   setAnalysis: (value: VoiceValues["analysisWindow"]) => void;
   setSynthesis: (value: VoiceValues["synthesisWindow"]) => void;
-  disabled: boolean;
 }) {
   const sampleRate = useSettingsStore((state) => state.devices.sampleRate);
   return (
-    <fieldset className={styles.settings} disabled={disabled}>
+    <fieldset className={styles.settings}>
       <legend>{title}</legend>
       <label>
         解析ウィンドウ長
