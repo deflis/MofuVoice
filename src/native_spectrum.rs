@@ -29,8 +29,8 @@ use windows::{
                 SendMessageW, SetForegroundWindow, SetTimer, SetWindowLongPtrW, ShowWindow,
                 CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, GWLP_USERDATA, HMENU,
                 IDC_ARROW, SW_RESTORE, SW_SHOW, WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_CREATE,
-                WM_DESTROY, WM_DRAWITEM, WM_ERASEBKGND, WM_NCCREATE, WM_SETFONT, WM_TIMER,
-                WNDCLASSW, WS_CAPTION, WS_CHILD, WS_GROUP, WS_MINIMIZEBOX, WS_OVERLAPPED,
+                WM_DESTROY, WM_DRAWITEM, WM_ERASEBKGND, WM_NCCREATE, WM_NCDESTROY, WM_SETFONT,
+                WM_TIMER, WNDCLASSW, WS_CAPTION, WS_CHILD, WS_GROUP, WS_MINIMIZEBOX, WS_OVERLAPPED,
                 WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
             },
         },
@@ -81,10 +81,25 @@ struct State {
     generation: u64,
     frozen: bool,
     wideband: bool,
-    started: bool,
+    owned_by_window: bool,
     font: HFONT,
     bg_brush: HBRUSH,
     error: u32,
+}
+
+impl Drop for State {
+    fn drop(&mut self) {
+        // State is owned by open() during creation, then by the window until WM_NCDESTROY.
+        unsafe {
+            destroy_dib(self);
+            if !self.font.is_invalid() {
+                let _ = DeleteObject(HGDIOBJ(self.font.0));
+            }
+            if !self.bg_brush.is_invalid() {
+                let _ = DeleteObject(HGDIOBJ(self.bg_brush.0));
+            }
+        }
+    }
 }
 
 static WINDOW: AtomicIsize = AtomicIsize::new(0);
@@ -343,10 +358,15 @@ unsafe fn ensure_dib(state: &mut State) -> bool {
         return false;
     };
     if bits.is_null() {
+        let _ = DeleteObject(HGDIOBJ(dib.0));
         return false;
     }
     state.dib = dib;
     state.bits = bits;
+    // SAFETY: CreateDIBSection succeeded and returned non-null storage owned by dib.
+    // A 32-bit BI_RGB row has IMAGE_WIDTH * 4 bytes (already DWORD-aligned),
+    // so the allocation contains exactly IMAGE_BYTES writable bytes. destroy_dib
+    // invalidates bits when releasing dib, and all access stays on the main thread.
     core::ptr::write_bytes(bits.cast::<u8>(), 0, IMAGE_BYTES);
     true
 }
@@ -485,7 +505,6 @@ unsafe extern "system" fn spectrum_proc(
                 state.error = windows::Win32::Foundation::GetLastError().0;
                 return LRESULT(-1);
             }
-            state.started = true;
             state.controller.set_wideband(true);
             if !ensure_dib(state) {
                 state.error = windows::Win32::Foundation::GetLastError().0;
@@ -572,19 +591,18 @@ unsafe extern "system" fn spectrum_proc(
         }
         WM_DESTROY => {
             let _ = KillTimer(Some(window), 1);
-            destroy_dib(state);
-            if !state.font.is_invalid() {
-                let _ = DeleteObject(HGDIOBJ(state.font.0));
-                state.font = HFONT::default();
-            }
-            if !state.bg_brush.is_invalid() {
-                let _ = DeleteObject(HGDIOBJ(state.bg_brush.0));
-                state.bg_brush = HBRUSH::default();
-            }
+            LRESULT(0)
+        }
+        WM_NCDESTROY => {
+            // No later messages may access this state. Creation failure still leaves
+            // ownership with open(), which must be able to inspect the error.
+            let owned_by_window = state.owned_by_window;
             SetWindowLongPtrW(window, GWLP_USERDATA, 0);
             set_window_handle(HWND::default());
-            drop(Box::from_raw(state_ptr));
-            LRESULT(0)
+            if owned_by_window {
+                drop(Box::from_raw(state_ptr));
+            }
+            DefWindowProcW(window, message, wparam, lparam)
         }
         _ => DefWindowProcW(window, message, wparam, lparam),
     }
@@ -615,10 +633,7 @@ pub unsafe fn open() -> Result<(), String> {
         w!("Segoe UI"),
     );
     let bg_brush = CreateSolidBrush(theme::BG);
-    if font.is_invalid() || bg_brush.is_invalid() {
-        return Err("Cannot open spectrum window: out of GDI resources".into());
-    }
-    let state = Box::into_raw(Box::new(State {
+    let mut state = Box::new(State {
         controller,
         wide_button: HWND::default(),
         narrow_button: HWND::default(),
@@ -632,11 +647,14 @@ pub unsafe fn open() -> Result<(), String> {
         generation: 0,
         frozen: false,
         wideband: true,
-        started: false,
+        owned_by_window: false,
         font,
         bg_brush,
         error: 0,
-    }));
+    });
+    if state.font.is_invalid() || state.bg_brush.is_invalid() {
+        return Err("Cannot open spectrum window: out of GDI resources".into());
+    }
     let instance = GetModuleHandleW(None).map_err(|error| error.to_string())?;
     let class_name = w!("RustLowLatencyVoiceChangerSpectrum");
     let class = WNDCLASSW {
@@ -651,7 +669,6 @@ pub unsafe fn open() -> Result<(), String> {
     if atom == 0 {
         let error = windows::Win32::Foundation::GetLastError();
         if error != ERROR_CLASS_ALREADY_EXISTS {
-            drop(Box::from_raw(state));
             return Err(format!(
                 "Cannot open spectrum window: Win32 error {}",
                 error.0
@@ -678,12 +695,13 @@ pub unsafe fn open() -> Result<(), String> {
         None,
         None,
         Some(instance.into()),
-        Some(state as *const _),
+        Some((&mut *state as *mut State).cast()),
     );
-    let error = (*state).error;
-    let started = (*state).started;
+    let error = state.error;
     match created {
         Ok(window) if !window.0.is_null() && error == 0 => {
+            state.owned_by_window = true;
+            let _ = Box::into_raw(state);
             let _ = ShowWindow(window, SW_SHOW);
             Ok(())
         }
@@ -693,8 +711,9 @@ pub unsafe fn open() -> Result<(), String> {
             } else {
                 windows::Win32::Foundation::GetLastError().0
             };
-            if !started && window_handle().0.is_null() {
-                drop(Box::from_raw(state));
+            if let Ok(window) = created {
+                // Detach the borrowed state before open() drops it.
+                let _ = DestroyWindow(window);
             }
             Err(format!("Cannot open spectrum window: Win32 error {code}"))
         }
