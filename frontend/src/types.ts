@@ -66,4 +66,9 @@ export type DeviceChoices = {
   deviceError: string;
   resolvedBackend: string;
 };
-export type DeviceSampleRates = { input: number[]; output: number[]; common: number[] };
+export type DeviceSampleRates = {
+  input: number[];
+  output: number[];
+  common: number[];
+  channels: { sampleRate: number; input: number; output: number }[];
+};

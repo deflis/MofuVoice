@@ -252,11 +252,32 @@ fn supported_rates(
             .collect()
     };
     let mut rates = crate::backend::DeviceSampleRates {
+        channels: Vec::new(),
         input: Vec::new(),
         output: Vec::new(),
         common: Vec::new(),
     };
     for rate in crate::SAMPLE_RATES {
+        let count = |ranges: &[SupportedStreamConfigRange]| {
+            ranges
+                .iter()
+                .filter(|c| {
+                    c.min_sample_rate() <= rate
+                        && c.max_sample_rate() >= rate
+                        && matches!(
+                            c.sample_format(),
+                            SampleFormat::F32 | SampleFormat::I32 | SampleFormat::I16
+                        )
+                })
+                .map(|c| c.channels() as usize)
+                .max()
+                .unwrap_or(0)
+        };
+        rates.channels.push(crate::backend::DeviceChannels {
+            sample_rate: rate,
+            input: count(input),
+            output: count(output),
+        });
         let input = formats_at(input, rate);
         let output = formats_at(output, rate);
         if !input.is_empty() {
@@ -929,6 +950,35 @@ mod tests {
     ) -> SupportedStreamConfigRange {
         SupportedStreamConfigRange::new(channels, rate, rate, buffer, format)
     }
+    #[test]
+    fn channel_choices_follow_rate_and_supported_formats() {
+        let buffer = SupportedBufferSize::Unknown;
+        let input = [
+            range(SampleFormat::F32, 8, 44100, buffer),
+            range(SampleFormat::I16, 2, 48000, buffer),
+            range(SampleFormat::U16, 16, 48000, buffer),
+        ];
+        let output = [range(SampleFormat::I16, 4, 48000, buffer)];
+        let rates = supported_rates(&input, &output);
+        assert_eq!(
+            rates.channels,
+            vec![
+                crate::backend::DeviceChannels {
+                    sample_rate: 44100,
+                    input: 8,
+                    output: 0
+                },
+                crate::backend::DeviceChannels {
+                    sample_rate: 48000,
+                    input: 2,
+                    output: 4
+                },
+            ]
+        );
+        let empty = supported_rates(&[], &[]);
+        assert!(empty.channels.iter().all(|c| c.input == 0 && c.output == 0));
+    }
+
     #[test]
     fn device_rates_include_only_engine_formats_and_require_a_common_format() {
         let buffer = SupportedBufferSize::Unknown;
