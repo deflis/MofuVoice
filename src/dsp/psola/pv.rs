@@ -8,7 +8,7 @@
 use crate::dsp::{complex::Complex, fft::Fft, phase, window::hann};
 use std::f64::consts::{PI, TAU};
 
-type ResampleDot = fn(&[f64], &[f64], &[f64], f64) -> f64;
+use crate::dsp::sinc::{fill_kernels, select_dot, Dot as ResampleDot, PHASES as RESAMPLE_PHASES};
 
 const FRAME: usize = 1024;
 const HOP: usize = FRAME / 4;
@@ -16,7 +16,6 @@ const RESET_EVERY: usize = 4;
 const TOLERANCE: usize = 2 * HOP;
 const RESAMPLE_RADIUS: usize = 32;
 const RESAMPLE_TAPS: usize = 2 * RESAMPLE_RADIUS + 1;
-const RESAMPLE_PHASES: usize = 256;
 const KERNEL_STRIDE: usize = (RESAMPLE_PHASES + 1) * RESAMPLE_TAPS;
 /// Precomputed anti-alias tables for ratio 1.0..=2.0. Pitch-down shares index 0.
 /// Built at construction so smooth pitch ramps never rebuild sincs in the callback.
@@ -119,7 +118,7 @@ impl PvsOla {
             envelope: Box::new([0.0; FRAME]),
             kernels,
             kernel_table: cutoff_table_index(ratio),
-            resample_dot: super::resampler::select_dot(),
+            resample_dot: select_dot(),
             preserve_formants,
             formant_ratio,
             polarity: 1.0,
@@ -554,27 +553,12 @@ fn cutoff_for_table(index: usize) -> f64 {
 }
 
 fn fill_resample_kernels(kernels: &mut [f64], cutoff: f64) {
-    for phase in 0..=RESAMPLE_PHASES {
-        let fraction = phase as f64 / RESAMPLE_PHASES as f64;
-        let kernel = &mut kernels[phase * RESAMPLE_TAPS..(phase + 1) * RESAMPLE_TAPS];
-        for (i, tap) in kernel.iter_mut().enumerate() {
-            let distance = i as f64 - RESAMPLE_RADIUS as f64 - fraction;
-            let normalized = distance / (RESAMPLE_RADIUS as f64 + 1.0);
-            let window = 0.42 + 0.5 * (PI * normalized).cos() + 0.08 * (TAU * normalized).cos();
-            let sinc = if distance.abs() < 1e-12 {
-                2.0 * cutoff
-            } else {
-                (TAU * cutoff * distance).sin() / (PI * distance)
-            };
-            *tap = window * sinc;
-        }
-        let sum: f64 = kernel.iter().sum();
-        if sum.abs() > 1e-12 {
-            for tap in kernel {
-                *tap /= sum;
-            }
-        }
-    }
+    fill_kernels(
+        kernels,
+        RESAMPLE_RADIUS,
+        RESAMPLE_RADIUS as f64 + 1.0,
+        cutoff,
+    );
 }
 
 fn wrap(phase: f64) -> f64 {
