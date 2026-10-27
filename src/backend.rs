@@ -81,7 +81,7 @@ pub struct DeviceSampleRates {
     pub channels: Vec<DeviceChannels>,
     pub input: Vec<u32>,
     pub output: Vec<u32>,
-    /// Requires a common sample format as well as the same rate.
+    /// Rates supported by both devices; CPAL may convert their sample formats.
     pub common: Vec<u32>,
 }
 

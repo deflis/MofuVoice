@@ -107,34 +107,31 @@ fn negotiate_at_rate(
     output: &[SupportedStreamConfigRange],
     frames: u32,
     rate: u32,
-) -> Result<(SampleFormat, StreamConfig, StreamConfig)> {
+) -> Result<(SampleFormat, SampleFormat, StreamConfig, StreamConfig)> {
     crate::validate_sample_rate(rate)?;
     if !(1..=8192).contains(&frames) {
         return Err("Frames must be 1..8192".into());
     }
-    // A common typed format preserves neutral samples without a lossy intermediate cast.
-    for format in [SampleFormat::F32, SampleFormat::I32, SampleFormat::I16] {
-        let best = |configs: &[SupportedStreamConfigRange]| {
-            configs
+    let select = |ranges: &[SupportedStreamConfigRange], direction: &str| {
+        for format in [SampleFormat::F32, SampleFormat::I32, SampleFormat::I16] {
+            if let Some(range) = ranges
                 .iter()
                 .filter(|c| usable(c, frames, format, rate))
                 .min_by_key(|c| c.channels())
-                .cloned()
-        };
-        if let (Some(input), Some(output)) = (best(input), best(output)) {
-            let convert = |range: SupportedStreamConfigRange| {
-                let buffer_size = match range.buffer_size() {
+            {
+                let mut config = (*range).with_sample_rate(rate).config();
+                config.buffer_size = match range.buffer_size() {
                     SupportedBufferSize::Range { .. } => cpal::BufferSize::Fixed(frames),
                     SupportedBufferSize::Unknown => cpal::BufferSize::Default,
                 };
-                let mut config = range.with_sample_rate(rate).config();
-                config.buffer_size = buffer_size;
-                config
-            };
-            return Ok((format, convert(input), convert(output)));
+                return Ok((format, config));
+            }
         }
-    }
-    Err(format!("Input and output need a common f32/i32/i16 format at {rate} Hz and a supported period. No implicit resampling or format conversion is performed.").into())
+        Err(format!("{direction} needs f32/i32/i16 at {rate} Hz and a supported period; sample-rate conversion is not performed."))
+    };
+    let (input_format, input_config) = select(input, "Input")?;
+    let (output_format, output_config) = select(output, "Output")?;
+    Ok((input_format, output_format, input_config, output_config))
 }
 
 #[cfg(test)]
@@ -142,7 +139,7 @@ fn negotiate(
     input: &[SupportedStreamConfigRange],
     output: &[SupportedStreamConfigRange],
     frames: u32,
-) -> Result<(SampleFormat, StreamConfig, StreamConfig)> {
+) -> Result<(SampleFormat, SampleFormat, StreamConfig, StreamConfig)> {
     negotiate_at_rate(input, output, frames, RATE)
 }
 fn negotiate_routing_at_rate(
@@ -151,7 +148,7 @@ fn negotiate_routing_at_rate(
     frames: u32,
     routing: &ChannelRouting,
     rate: u32,
-) -> Result<(SampleFormat, StreamConfig, StreamConfig)> {
+) -> Result<(SampleFormat, SampleFormat, StreamConfig, StreamConfig)> {
     routing.validate(
         input
             .iter()
@@ -188,14 +185,15 @@ fn negotiate_routing(
     output: &[SupportedStreamConfigRange],
     frames: u32,
     routing: &ChannelRouting,
-) -> Result<(SampleFormat, StreamConfig, StreamConfig)> {
+) -> Result<(SampleFormat, SampleFormat, StreamConfig, StreamConfig)> {
     negotiate_routing_at_rate(input, output, frames, routing, RATE)
 }
 struct Prepared {
     configuration: crate::backend::AudioConfiguration,
     input: cpal::Device,
     output: cpal::Device,
-    format: SampleFormat,
+    input_format: SampleFormat,
+    output_format: SampleFormat,
     input_config: StreamConfig,
     output_config: StreamConfig,
     details: String,
@@ -206,7 +204,7 @@ impl CpalBackend {
         let output = select_device(false, &self.output_device)?;
         let input_ranges: Vec<_> = input.supported_input_configs()?.collect();
         let output_ranges: Vec<_> = output.supported_output_configs()?.collect();
-        let (format, input_config, output_config) = negotiate_routing_at_rate(
+        let (input_format, output_format, input_config, output_config) = negotiate_routing_at_rate(
             &input_ranges,
             &output_ranges,
             frames,
@@ -216,7 +214,7 @@ impl CpalBackend {
         let input_channel = routing.input_channel;
         let output_channels = &routing.output_channels;
         let rate = self.sample_rate;
-        let details = format!("CPAL {:?}: input '{}' / {} channels / {:?}; output '{}' / {} channels / {:?}; {rate} Hz; format {format:?}. Selected input {input_channel} -> outputs {output_channels:?}, other outputs silent. Default periods are chosen by the host and observed during playback.",
+        let details = format!("CPAL {:?}: input '{}' / {} channels / {:?}; output '{}' / {} channels / {:?}; {rate} Hz; input format {input_format:?}, output format {output_format:?}. Selected input {input_channel} -> outputs {output_channels:?}, other outputs silent. Default periods are chosen by the host and observed during playback.",
             cpal::default_host().id(), input.description()?.name(), input_config.channels, input_config.buffer_size,
             output.description()?.name(), output_config.channels, output_config.buffer_size);
         let configuration = crate::backend::AudioConfiguration {
@@ -230,7 +228,8 @@ impl CpalBackend {
             configuration,
             input,
             output,
-            format,
+            input_format,
+            output_format,
             input_config,
             output_config,
             details,
@@ -258,28 +257,29 @@ fn supported_rates(
         common: Vec::new(),
     };
     for rate in crate::SAMPLE_RATES {
-        let count = |ranges: &[SupportedStreamConfigRange], format| {
+        let count = |ranges: &[SupportedStreamConfigRange]| {
             ranges
                 .iter()
                 .filter(|c| {
                     c.min_sample_rate() <= rate
                         && c.max_sample_rate() >= rate
-                        && c.sample_format() == format
+                        && matches!(
+                            c.sample_format(),
+                            SampleFormat::F32 | SampleFormat::I32 | SampleFormat::I16
+                        )
                 })
                 .map(|c| c.channels() as usize)
                 .max()
                 .unwrap_or(0)
         };
-        for format in [SampleFormat::F32, SampleFormat::I32, SampleFormat::I16] {
-            let input = count(input, format);
-            let output = count(output, format);
-            if input > 0 && output > 0 {
-                rates.channels.push(crate::backend::DeviceChannels {
-                    sample_rate: rate,
-                    input,
-                    output,
-                });
-            }
+        let input_channels = count(input);
+        let output_channels = count(output);
+        if input_channels > 0 && output_channels > 0 {
+            rates.channels.push(crate::backend::DeviceChannels {
+                sample_rate: rate,
+                input: input_channels,
+                output: output_channels,
+            });
         }
         let input = formats_at(input, rate);
         let output = formats_at(output, rate);
@@ -289,7 +289,7 @@ fn supported_rates(
         if !output.is_empty() {
             rates.output.push(rate);
         }
-        if input.iter().any(|format| output.contains(format)) {
+        if !input.is_empty() && !output.is_empty() {
             rates.common.push(rate);
         }
     }
@@ -330,11 +330,32 @@ impl AudioBackend for CpalBackend {
         dsp: DspSettings,
     ) -> Result<Box<dyn AudioStream>> {
         let prepared = self.prepare(name, frames, routing)?;
-        match prepared.format {
-            SampleFormat::F32 => build::<f32>(prepared, frames, routing, dsp),
-            SampleFormat::I32 => build::<i32>(prepared, frames, routing, dsp),
-            SampleFormat::I16 => build::<i16>(prepared, frames, routing, dsp),
-            _ => Err("Unsupported negotiated sample format".into()),
+        match (prepared.input_format, prepared.output_format) {
+            (SampleFormat::F32, SampleFormat::F32) => build::<f32, f32>(
+                prepared,
+                frames,
+                routing,
+                dsp,
+                AudioProcessor::process_block,
+            ),
+            (SampleFormat::I32, SampleFormat::I32) => build::<i32, i32>(
+                prepared,
+                frames,
+                routing,
+                dsp,
+                AudioProcessor::process_block,
+            ),
+            (SampleFormat::I16, SampleFormat::I16) => build::<i16, i16>(
+                prepared,
+                frames,
+                routing,
+                dsp,
+                AudioProcessor::process_block,
+            ),
+            (SampleFormat::F32, _) => build_converted::<f32>(prepared, frames, routing, dsp),
+            (SampleFormat::I32, _) => build_converted::<i32>(prepared, frames, routing, dsp),
+            (SampleFormat::I16, _) => build_converted::<i16>(prepared, frames, routing, dsp),
+            _ => Err("Unsupported negotiated input sample format".into()),
         }
     }
 }
@@ -398,17 +419,21 @@ impl Metrics {
     }
 }
 
-struct Capture<T: Sample> {
+type BlockProcessor<I, O> =
+    fn(&mut AudioProcessor<I>, &[I], &mut [O]) -> std::result::Result<u64, &'static str>;
+
+struct Capture<I: Sample, O> {
     input_channel: usize,
-    processor: AudioProcessor<T>,
-    mono: Vec<T>,
-    processed: Vec<T>,
+    processor: AudioProcessor<I>,
+    process_block: BlockProcessor<I, O>,
+    mono: Vec<I>,
+    processed: Vec<O>,
     channels: usize,
-    queue: Producer<T>,
+    queue: Producer<O>,
     metrics: Arc<Metrics>,
 }
-impl<T: Sample> Capture<T> {
-    fn process(&mut self, data: &[T]) {
+impl<I: Sample, O: Sample> Capture<I, O> {
+    fn process(&mut self, data: &[I]) {
         if !self.metrics.processing() || data.is_empty() {
             return;
         }
@@ -437,9 +462,11 @@ impl<T: Sample> Capture<T> {
             {
                 *sample = frame[self.input_channel - 1];
             }
-            let nonzero = self
-                .processor
-                .process_block(&self.mono[..count], &mut self.processed[..count]);
+            let nonzero = (self.process_block)(
+                &mut self.processor,
+                &self.mono[..count],
+                &mut self.processed[..count],
+            );
             let Ok(nonzero) = nonzero else {
                 self.metrics
                     .faults
@@ -545,11 +572,35 @@ impl<T: Sample> Playback<T> {
     }
 }
 
-fn build<T: Sample + cpal::SizedSample + Send + 'static>(
+fn build_converted<I: Sample + cpal::SizedSample + Send + 'static>(
     prepared: Prepared,
     frames: u32,
     routing: &ChannelRouting,
     dsp: DspSettings,
+) -> Result<Box<dyn AudioStream>> {
+    match prepared.output_format {
+        SampleFormat::F32 => {
+            build::<I, f32>(prepared, frames, routing, dsp, AudioProcessor::process_into)
+        }
+        SampleFormat::I32 => {
+            build::<I, i32>(prepared, frames, routing, dsp, AudioProcessor::process_into)
+        }
+        SampleFormat::I16 => {
+            build::<I, i16>(prepared, frames, routing, dsp, AudioProcessor::process_into)
+        }
+        _ => Err("Unsupported negotiated output sample format".into()),
+    }
+}
+
+fn build<
+    I: Sample + cpal::SizedSample + Send + 'static,
+    O: Sample + cpal::SizedSample + Send + 'static,
+>(
+    prepared: Prepared,
+    frames: u32,
+    routing: &ChannelRouting,
+    dsp: DspSettings,
+    process_block: BlockProcessor<I, O>,
 ) -> Result<Box<dyn AudioStream>> {
     let pitch_latency = if dsp.voice_enabled {
         dsp.pitch.latency()
@@ -557,15 +608,16 @@ fn build<T: Sample + cpal::SizedSample + Send + 'static>(
         0
     };
     let capacity = (frames as usize * 8).max(32768).next_power_of_two();
-    let (producer, consumer) = audio_queue::channel::<T>(capacity);
+    let (producer, consumer) = audio_queue::channel::<O>(capacity);
     let rate = prepared.input_config.sample_rate;
     let metrics = Arc::new(Metrics::with_sample_rate(frames as usize * 2, rate));
     let output_channels = routing.output_channels.clone();
     let mut capture = Capture {
         input_channel: routing.input_channel,
+        process_block,
         processor: AudioProcessor::new(rate, frames as usize, dsp)?,
-        mono: vec![T::default(); frames as usize],
-        processed: vec![T::default(); frames as usize],
+        mono: vec![I::default(); frames as usize],
+        processed: vec![O::default(); frames as usize],
         channels: prepared.input_config.channels as usize,
         queue: producer,
         metrics: metrics.clone(),
@@ -580,7 +632,7 @@ fn build<T: Sample + cpal::SizedSample + Send + 'static>(
     let errors = metrics.clone();
     let input = prepared.input.build_input_stream(
         prepared.input_config,
-        move |data: &[T], _| capture.process(data),
+        move |data: &[I], _| capture.process(data),
         move |_| {
             errors.faults.fetch_or(DEVICE_ERROR, Ordering::Relaxed);
         },
@@ -589,7 +641,7 @@ fn build<T: Sample + cpal::SizedSample + Send + 'static>(
     let errors = metrics.clone();
     let output = prepared.output.build_output_stream(
         prepared.output_config,
-        move |data: &mut [T], _| playback.process(data),
+        move |data: &mut [O], _| playback.process(data),
         move |_| {
             errors.faults.fetch_or(DEVICE_ERROR, Ordering::Relaxed);
         },
@@ -802,7 +854,16 @@ mod tests {
         max_frames: usize,
         channels: usize,
         args: &[&str],
-    ) -> (Capture<T>, Playback<T>, Arc<Metrics>) {
+    ) -> (Capture<T, T>, Playback<T>, Arc<Metrics>) {
+        callbacks_with_processor(max_frames, channels, args, AudioProcessor::process_block)
+    }
+
+    fn callbacks_with_processor<I: Sample + Send, O: Sample + Send>(
+        max_frames: usize,
+        channels: usize,
+        args: &[&str],
+        process_block: BlockProcessor<I, O>,
+    ) -> (Capture<I, O>, Playback<O>, Arc<Metrics>) {
         let options = Options::parse(args.iter().map(|s| s.to_string())).unwrap();
         let (producer, consumer) =
             audio_queue::channel((max_frames * 8).max(32).next_power_of_two());
@@ -811,10 +872,11 @@ mod tests {
         (
             Capture {
                 input_channel: options.input_channel,
+                process_block,
                 processor: AudioProcessor::new(RATE, max_frames, DspSettings::from(&options))
                     .unwrap(),
-                mono: vec![T::default(); max_frames],
-                processed: vec![T::default(); max_frames],
+                mono: vec![I::default(); max_frames],
+                processed: vec![O::default(); max_frames],
                 channels,
                 queue: producer,
                 metrics: metrics.clone(),
@@ -954,7 +1016,7 @@ mod tests {
         SupportedStreamConfigRange::new(channels, rate, rate, buffer, format)
     }
     #[test]
-    fn channel_layouts_exclude_incompatible_formats_and_preserve_duplex_pairs() {
+    fn channel_layouts_allow_independent_formats() {
         let buffer = SupportedBufferSize::Unknown;
         let input = [
             range(SampleFormat::F32, 8, 48000, buffer),
@@ -966,7 +1028,7 @@ mod tests {
             rates.channels,
             vec![crate::backend::DeviceChannels {
                 sample_rate: 48000,
-                input: 2,
+                input: 8,
                 output: 8
             }]
         );
@@ -975,7 +1037,7 @@ mod tests {
             range(SampleFormat::I16, 8, 48000, buffer),
         ];
         let rates = supported_rates(&input, &output);
-        assert_eq!(rates.channels.len(), 2);
+        assert_eq!(rates.channels.len(), 1);
         for layout in rates.channels {
             for input_channel in 1..=layout.input {
                 for output_channel in 1..=layout.output {
@@ -1004,7 +1066,7 @@ mod tests {
             },
             48000
         )
-        .is_err());
+        .is_ok());
     }
 
     #[test]
@@ -1030,7 +1092,7 @@ mod tests {
     }
 
     #[test]
-    fn device_rates_include_only_engine_formats_and_require_a_common_format() {
+    fn device_rates_require_a_common_rate_with_independent_formats() {
         let buffer = SupportedBufferSize::Unknown;
         let input = [
             SupportedStreamConfigRange::new(1, 44100, 96000, buffer, SampleFormat::F32),
@@ -1045,8 +1107,7 @@ mod tests {
         let rates = supported_rates(&input, &output);
         assert_eq!(rates.input, [44100, 48000]);
         assert_eq!(rates.output, [44100, 48000]);
-        assert_eq!(rates.common, [48000]);
-        // Rate overlap alone is insufficient: 44.1 kHz uses different sample formats.
+        assert_eq!(rates.common, [44100, 48000]);
         let empty = supported_rates(&[], &output);
         assert!(empty.input.is_empty() && empty.common.is_empty());
         assert_eq!(empty.output, rates.output);
@@ -1063,7 +1124,7 @@ mod tests {
         for rate in crate::SAMPLE_RATES {
             let input = [range(SampleFormat::F32, 2, rate, buffer)];
             let output = [range(SampleFormat::F32, 2, rate, buffer)];
-            let (_, input_config, output_config) =
+            let (_, _, input_config, output_config) =
                 negotiate_at_rate(&input, &output, 128, rate).unwrap();
             assert_eq!(input_config.sample_rate, rate);
             assert_eq!(output_config.sample_rate, rate);
@@ -1087,7 +1148,7 @@ mod tests {
         assert_eq!(
             negotiate_at_rate(&broad, &broad, 64, 44100)
                 .unwrap()
-                .1
+                .2
                 .sample_rate,
             44100
         );
@@ -1108,7 +1169,7 @@ mod tests {
             input_channel: 2,
             output_channels: vec![1, 3],
         };
-        let (_, input_config, output_config) =
+        let (_, _, input_config, output_config) =
             negotiate_routing(&input, &output, 128, &routing).unwrap();
         assert_eq!(input_config.channels, 2);
         assert_eq!(output_config.channels, 3);
@@ -1118,7 +1179,7 @@ mod tests {
             input_channel: 1,
             output_channels: vec![1],
         };
-        let (_, input_config, output_config) =
+        let (_, _, input_config, output_config) =
             negotiate_routing(&input, &output, 128, &mono).unwrap();
         assert_eq!(input_config.channels, 1);
         assert_eq!(output_config.channels, 1);
@@ -1136,9 +1197,11 @@ mod tests {
             RATE,
             SupportedBufferSize::Unknown,
         )];
-        let (format, input_config, output_config) = negotiate(&input, &output, 128).unwrap();
-        assert_eq!(format, SampleFormat::I16);
-        assert_eq!(input_config.channels, 1);
+        let (input_format, output_format, input_config, output_config) =
+            negotiate(&input, &output, 128).unwrap();
+        assert_eq!(input_format, SampleFormat::F32);
+        assert_eq!(output_format, SampleFormat::I16);
+        assert_eq!(input_config.channels, 2);
         assert_eq!(input_config.buffer_size, cpal::BufferSize::Fixed(128));
         assert_eq!(output_config.buffer_size, cpal::BufferSize::Default);
         assert!(negotiate(&input, &output, 32).is_err());
@@ -1219,6 +1282,95 @@ mod tests {
     }
     #[global_allocator]
     static ALLOCATOR: CountingAllocator = CountingAllocator;
+
+    #[test]
+    fn every_format_pair_matches_f64_dsp_through_channel_mapping_without_allocations() {
+        fn check<I: Sample + Send, O: Sample + Send + std::fmt::Debug>() {
+            for wet in [false, true] {
+                let mut args = vec!["--input-channel", "2", "--output-channels", "1,3"];
+                if wet {
+                    args.extend(["--pitch", "3", "--eq", "on", "--eq-band2", "3000,3,0.8"]);
+                }
+                let source: Vec<I> = (0..512)
+                    .map(|i| {
+                        I::from_normalized(
+                            0.3 * (i as f64 * 0.03).sin() + 0.1 * (i as f64 * 0.2).cos(),
+                        )
+                    })
+                    .collect();
+                let input: Vec<I> = source
+                    .iter()
+                    .flat_map(|s| [I::from_normalized(0.9), *s])
+                    .collect();
+                let normalized: Vec<f64> = source.iter().map(|s| s.normalized()).collect();
+                let mut reference = AudioProcessor::<f64>::new(
+                    RATE,
+                    512,
+                    DspSettings::from(&Options::parse(args.iter().map(|s| s.to_string())).unwrap()),
+                )
+                .unwrap();
+                let mut expected = vec![0.0; 512];
+                reference.process_block(&normalized, &mut expected).unwrap();
+                let (mut capture, mut playback, metrics) =
+                    callbacks_with_processor::<I, O>(64, 2, &args, AudioProcessor::process_into);
+                let mut actual = [O::default(); 512 * 3];
+                ALLOCATIONS.with(|n| n.set(0));
+                COUNTING.with(|c| c.set(true));
+                // Host blocks cross both DSP chunk and interleaved channel boundaries.
+                for chunk in input.chunks(2 * 73) {
+                    capture.process(chunk);
+                }
+                let mut offset = 0;
+                for frames in [17, 64, 31].into_iter().cycle() {
+                    let end = (offset + frames * 3).min(actual.len());
+                    playback.process(&mut actual[offset..end]);
+                    offset = end;
+                    if offset == actual.len() {
+                        break;
+                    }
+                }
+                COUNTING.with(|c| c.set(false));
+                assert_eq!(ALLOCATIONS.with(Cell::get), 0);
+                assert_eq!(metrics.faults.load(Ordering::Relaxed), 0);
+                assert_eq!(
+                    metrics.nonzero.load(Ordering::Relaxed),
+                    source.iter().filter(|s| **s != I::default()).count() as u64
+                );
+                for (frame, expected) in actual.as_chunks::<3>().0.iter().zip(expected) {
+                    let expected = O::from_normalized(expected);
+                    assert_eq!(*frame, [expected, O::default(), expected]);
+                }
+            }
+        }
+        check::<f32, f32>();
+        check::<f32, i32>();
+        check::<f32, i16>();
+        check::<i32, f32>();
+        check::<i32, i32>();
+        check::<i32, i16>();
+        check::<i16, f32>();
+        check::<i16, i32>();
+        check::<i16, i16>();
+    }
+
+    #[test]
+    fn negotiation_selects_input_and_output_formats_independently() {
+        let formats = [SampleFormat::F32, SampleFormat::I32, SampleFormat::I16];
+        for input_format in formats {
+            for output_format in formats {
+                let input = [range(input_format, 2, RATE, SupportedBufferSize::Unknown)];
+                let output = [range(output_format, 4, RATE, SupportedBufferSize::Unknown)];
+                let (selected_input, selected_output, input_config, output_config) =
+                    negotiate(&input, &output, 64).unwrap();
+                assert_eq!(
+                    (selected_input, selected_output),
+                    (input_format, output_format)
+                );
+                assert_eq!((input_config.channels, output_config.channels), (2, 4));
+                assert_eq!(supported_rates(&input, &output).common, [RATE]);
+            }
+        }
+    }
 
     #[test]
     fn capture_dsp_queue_and_playback_allocate_nothing() {
