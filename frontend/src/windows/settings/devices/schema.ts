@@ -5,6 +5,7 @@ export const devicesSchema = v.object({
   backend: v.picklist(["auto", "cpal", "asio"]),
   device: v.string(),
   outputDevice: v.string(),
+  previewDevice: v.string(),
   inputChannel: integerRange(1, 512, "入力チャンネル"),
   outputChannels: v.pipe(
     v.array(integerRange(1, 512, "出力チャンネル")),

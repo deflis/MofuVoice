@@ -101,6 +101,9 @@ fn arguments(options: &Options) -> Vec<String> {
     if !options.output_device.is_empty() {
         args.extend(["--output-device".into(), options.output_device.clone()]);
     }
+    if !options.preview_device.is_empty() {
+        args.extend(["--preview-device".into(), options.preview_device.clone()]);
+    }
     for (flag, value) in options
         .eq
         .flags()
@@ -134,6 +137,7 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
             "device",
             "backend",
             "output_device",
+            "preview_device",
             "input_channel",
             "output_channels",
             "frames",
@@ -292,6 +296,9 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
     }
     if let Some(output) = values.get("output_device").filter(|name| !name.is_empty()) {
         args.extend(["--output-device", output]);
+    }
+    if let Some(preview) = values.get("preview_device").filter(|name| !name.is_empty()) {
+        args.extend(["--preview-device", preview]);
     }
     for (flag, key) in crate::eq::FLAGS.iter().zip(crate::eq::KEYS) {
         args.extend([*flag, value(key)?]);
@@ -475,6 +482,7 @@ pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>>
         options.level.enabled,
         options.level.compressor_enabled
     ));
+    text.push_str(&format!("preview_device={}\n", options.preview_device));
     text.push_str(&format!(
         "input_channel={}\noutput_channels={}\n",
         options.input_channel,
@@ -555,6 +563,38 @@ pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>>
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn preview_device_round_trips_settings_and_cli() {
+        let path = std::env::temp_dir().join(format!("preview-device-{}.ini", std::process::id()));
+        let options = Options::parse_gui(
+            [
+                "--backend",
+                "cpal",
+                "--output-device",
+                "Virtual cable",
+                "--preview-device",
+                "Headphones",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        save(&path, &options).unwrap();
+        assert_eq!(load(&path).unwrap(), options);
+        assert_eq!(merge(&options, vec![]).unwrap(), options);
+        assert!(Options::parse_gui(
+            ["--backend", "asio", "--preview-device", "Headphones"].map(String::from)
+        )
+        .is_err());
+        for args in [
+            vec!["--preview-device"],
+            vec!["--preview-device", "--inspect"],
+            vec!["--preview-device", "A", "--preview-device", "B"],
+        ] {
+            assert!(Options::parse_gui(args.into_iter().map(String::from)).is_err());
+        }
+        fs::remove_file(path).unwrap();
+    }
+
     #[test]
     fn new_eq_variable_bands_preserve_count_and_reject_gaps() {
         let path = std::env::temp_dir().join(format!("new-eq-bands-{}.ini", std::process::id()));

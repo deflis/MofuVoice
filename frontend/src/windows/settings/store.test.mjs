@@ -214,3 +214,13 @@ test("routing and EQ setters do not retain caller-owned mutable arrays", () => {
   bands[0].gainDb = 12;
   assert.equal(settingsStore.getState().eq.bands[0].gainDb, 0);
 });
+
+test("preview output is saved separately and cleared when switching backends", async () => {
+  settingsStore.getState().devices.setPreviewDevice("Headphones");
+  await settingsStore.getState().save();
+  const saved = calls("save_settings").at(-1).arguments[1].settings;
+  assert.equal(saved.devices.previewDevice, "Headphones");
+  assert.equal(saved.devices.outputDevice, settingsStore.getState().devices.outputDevice);
+  await settingsListener.changeBackend("asio");
+  assert.equal(settingsStore.getState().devices.previewDevice, "");
+});

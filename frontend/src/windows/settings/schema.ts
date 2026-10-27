@@ -28,8 +28,10 @@ export const settingsSchema = v.pipe(
     level: levelSchema,
   }),
   v.check(
-    (settings) => settings.devices.backend !== "asio" || settings.devices.outputDevice === "",
-    "ASIO使用時は入力と出力で個別のデバイスを指定できません。同一デバイスを選択するか、出力デバイスの指定を解除してください。",
+    (settings) =>
+      settings.devices.backend !== "asio" ||
+      (settings.devices.outputDevice === "" && settings.devices.previewDevice === ""),
+    "ASIO使用時は入力と出力で個別のデバイスを指定できません。出力デバイスとプレビュー用出力デバイスの指定を解除してください。",
   ),
 );
 export type Settings = v.InferOutput<typeof settingsSchema>;

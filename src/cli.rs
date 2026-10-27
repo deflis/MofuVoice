@@ -17,6 +17,7 @@ pub struct Options {
     pub pitch_unit: String,
     pub device: String,
     pub output_device: String,
+    pub preview_device: String,
     pub input_channel: usize,
     pub output_channels: Vec<usize>,
     pub backend: crate::backend::BackendKind,
@@ -55,6 +56,7 @@ impl Default for Options {
             pitch_unit: "semitones".into(),
             device: String::new(),
             output_device: String::new(),
+            preview_device: String::new(),
             input_channel: 1,
             output_channels: vec![1],
             backend: crate::backend::BackendKind::default(),
@@ -355,6 +357,15 @@ impl Options {
                     )?;
                     backend_given = true;
                 }
+                "--preview-device" if options.preview_device.is_empty() => {
+                    options.preview_device = args
+                        .next()
+                        .ok_or("--preview-device requires a device name")?;
+                    if options.preview_device.is_empty() || options.preview_device.starts_with("--")
+                    {
+                        return Err("--preview-device requires a device name".into());
+                    }
+                }
                 "--output-device" if !output_given => {
                     options.output_device = args
                         .next()
@@ -515,6 +526,12 @@ impl Options {
             return Err(
                 "Select one input and at least one distinct output channel (1..512)".into(),
             );
+        }
+        if self.backend == crate::backend::BackendKind::Asio && !self.preview_device.is_empty() {
+            return Err("Preview device is only supported by CPAL".into());
+        }
+        if self.preview_device.contains(['\r', '\n', '\0']) {
+            return Err("Device name cannot contain line breaks or NUL".into());
         }
         if self.backend == crate::backend::BackendKind::Asio && !self.output_device.is_empty() {
             return Err("ASIO uses one duplex device; --output-device is for CPAL".into());

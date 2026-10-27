@@ -24,12 +24,14 @@ const DEVICE_ERROR: u32 = 8;
 
 pub(crate) struct CpalBackend {
     output_device: String,
+    preview_device: String,
     sample_rate: u32,
 }
 impl CpalBackend {
     pub(crate) fn new(output_device: &str, sample_rate: u32) -> Self {
         Self {
             output_device: output_device.into(),
+            preview_device: String::new(),
             sample_rate,
         }
     }
@@ -216,6 +218,7 @@ struct Prepared {
     input_config: StreamConfig,
     output_config: StreamConfig,
     details: String,
+    preview: Option<(cpal::Device, SampleFormat, StreamConfig)>,
 }
 impl CpalBackend {
     fn prepare(&self, input_name: &str, frames: u32, routing: &ChannelRouting) -> Result<Prepared> {
@@ -245,7 +248,27 @@ impl CpalBackend {
             inputs: input_config.channels as usize,
             outputs: output_config.channels as usize,
         };
+        let preview = if self.preview_device.is_empty() {
+            None
+        } else {
+            let device = select_device(false, &self.preview_device)?;
+            if device.id()? == output.id()? {
+                return Err("Preview device must differ from the main output device".into());
+            }
+            let ranges: Vec<_> = device.supported_output_configs()?.collect();
+            let (_, format, _, config) =
+                negotiate_at_rate(&ranges, &ranges, frames, self.sample_rate)?;
+            Some((device, format, config))
+        };
+        let details = if let Some((device, format, config)) = &preview {
+            format!("{details} Preview '{}' / {} Hz / {format:?}, mono to all {} channels; additional converter delay={:.3} ms. Preview queue and hardware delay are separate.",
+                device.description()?.name(), config.sample_rate, config.channels,
+                crate::dsp::resample::RateConverter::delay_ms(output_config.sample_rate, config.sample_rate))
+        } else {
+            details
+        };
         Ok(Prepared {
+            preview,
             configuration,
             input,
             output,
@@ -318,6 +341,10 @@ fn supported_rates(
 }
 
 impl AudioBackend for CpalBackend {
+    fn set_preview_device(&mut self, name: &str) -> Result<()> {
+        self.preview_device = name.into();
+        Ok(())
+    }
     fn supported_sample_rates(&self, name: &str) -> Result<crate::backend::DeviceSampleRates> {
         let input = select_device(true, name)?;
         let output = select_device(false, &self.output_device)?;
@@ -465,6 +492,7 @@ struct Capture<I: Sample, O> {
     processed: Vec<O>,
     channels: usize,
     queue: Producer<O>,
+    preview: Option<PreviewTap>,
     metrics: Arc<Metrics>,
 }
 impl<I: Sample, O: Sample> Capture<I, O> {
@@ -480,6 +508,16 @@ impl<I: Sample, O: Sample> Capture<I, O> {
             return;
         }
         let frames = data.len() / self.channels;
+        if let Some(preview) = &self.preview {
+            preview.metrics.prime_frames.fetch_max(
+                input_reserve(
+                    frames,
+                    self.metrics.sample_rate,
+                    preview.metrics.sample_rate,
+                ),
+                Ordering::Relaxed,
+            );
+        }
         self.metrics
             .max_input_frames
             .fetch_max(frames, Ordering::Relaxed);
@@ -511,6 +549,11 @@ impl<I: Sample, O: Sample> Capture<I, O> {
             self.metrics.nonzero.fetch_add(nonzero, Ordering::Relaxed);
             #[cfg(windows)]
             crate::spectrum::push_output_samples(&self.processed[..count]);
+            if let Some(preview) = &mut self.preview {
+                for sample in &self.processed[..count] {
+                    preview.push(sample.normalized());
+                }
+            }
             if !self.queue.push_block(&self.processed[..count]) {
                 self.metrics.faults.fetch_or(OVERRUN, Ordering::Relaxed);
                 return;
@@ -538,6 +581,7 @@ struct ResampledCapture<O> {
     output_converter: crate::dsp::resample::RateConverter,
     processor: AudioProcessor<f64>,
     queue: Producer<O>,
+    preview: Option<PreviewTap>,
     metrics: Arc<Metrics>,
 }
 
@@ -560,11 +604,18 @@ impl<O: Sample> ResampledCapture<O> {
         let Self {
             input_converter,
             output_converter,
+            preview,
             processor,
             queue,
             metrics,
             ..
         } = self;
+        if let Some(preview) = preview.as_ref() {
+            preview.metrics.prime_frames.fetch_max(
+                input_reserve(frames, self.input_rate, preview.metrics.sample_rate),
+                Ordering::Relaxed,
+            );
+        }
         // Publish the observed input-period requirement before publishing its samples.
         let reserve = input_reserve(frames, self.input_rate, metrics.sample_rate);
         metrics.prime_frames.fetch_max(reserve, Ordering::Relaxed);
@@ -585,6 +636,9 @@ impl<O: Sample> ResampledCapture<O> {
                 #[cfg(windows)]
                 crate::spectrum::push_output_samples(&output);
                 output_converter.push(output[0], |s| {
+                    if let Some(preview) = preview.as_mut() {
+                        preview.push(O::from_normalized(s).normalized());
+                    }
                     if metrics.faults.load(Ordering::Relaxed) == 0
                         && !queue.push_block(&[O::from_normalized(s)])
                     {
@@ -685,6 +739,87 @@ impl<T: Sample> Playback<T> {
     }
 }
 
+// Capture publishes the already processed mono signal to both outputs. Each output owns
+// its consumer and converter; no device handles or DSP state cross callbacks.
+struct PreviewTap {
+    converter: crate::dsp::resample::RateConverter,
+    queue: Producer<f32>,
+    metrics: Arc<Metrics>,
+}
+impl PreviewTap {
+    fn push(&mut self, sample: f64) {
+        if !self.metrics.processing() {
+            return;
+        }
+        let Self {
+            converter,
+            queue,
+            metrics,
+        } = self;
+        converter.push(sample, |sample| {
+            if !queue.push_block(&[sample as f32]) {
+                metrics.overruns.fetch_add(1, Ordering::Relaxed);
+                metrics.faults.fetch_or(OVERRUN, Ordering::Relaxed);
+            }
+        });
+    }
+}
+fn build_preview(
+    device: &cpal::Device,
+    format: SampleFormat,
+    config: StreamConfig,
+    source_rate: u32,
+    frames: u32,
+) -> Result<(cpal::Stream, PreviewTap, Arc<Metrics>)> {
+    let (reserve, capacity) = queue_layout(frames as usize, source_rate, config.sample_rate);
+    let (producer, consumer) = audio_queue::channel(capacity);
+    let metrics = Arc::new(Metrics::with_sample_rate(reserve, config.sample_rate));
+    let tap = PreviewTap {
+        converter: crate::dsp::resample::RateConverter::new(source_rate, config.sample_rate)?,
+        queue: producer,
+        metrics: metrics.clone(),
+    };
+    let playback = Playback {
+        output_channels: (1..=config.channels as usize).collect(),
+        channels: config.channels as usize,
+        queue: consumer,
+        metrics: metrics.clone(),
+        primed: false,
+    };
+    let stream = match format {
+        SampleFormat::F32 => preview_output::<f32>(device, config, playback)?,
+        SampleFormat::I32 => preview_output::<i32>(device, config, playback)?,
+        SampleFormat::I16 => preview_output::<i16>(device, config, playback)?,
+        _ => return Err("Unsupported preview sample format".into()),
+    };
+    Ok((stream, tap, metrics))
+}
+fn preview_output<T: Sample + cpal::SizedSample>(
+    device: &cpal::Device,
+    config: StreamConfig,
+    mut playback: Playback<f32>,
+) -> Result<cpal::Stream> {
+    // Fixed scratch space bounds callback work without allocations. Chunking also
+    // handles host-selected periods larger than the requested buffer size.
+    let mut scratch = vec![0.0; 8192 * config.channels as usize];
+    let errors = playback.metrics.clone();
+    Ok(device.build_output_stream(
+        config,
+        move |data: &mut [T], _| {
+            for chunk in data.chunks_mut(scratch.len()) {
+                playback.process(&mut scratch[..chunk.len()]);
+                for (out, &sample) in chunk.iter_mut().zip(&scratch) {
+                    *out = T::from_normalized(sample as f64);
+                }
+            }
+        },
+        move |_| {
+            errors.faults.fetch_or(DEVICE_ERROR, Ordering::Relaxed);
+        },
+        Some(Duration::from_secs(5)),
+    )?)
+}
+
 fn build_converted<I: Sample + cpal::SizedSample + Send + 'static>(
     prepared: Prepared,
     frames: u32,
@@ -731,6 +866,19 @@ fn build<
         reserve,
         prepared.output_config.sample_rate,
     ));
+    let (preview, preview_tap, preview_metrics) =
+        if let Some((device, format, config)) = prepared.preview {
+            let (stream, tap, metrics) = build_preview(
+                &device,
+                format,
+                config,
+                prepared.output_config.sample_rate,
+                frames,
+            )?;
+            (Some(stream), Some(tap), Some(metrics))
+        } else {
+            (None, None, None)
+        };
     let output_channels = routing.output_channels.clone();
     let mut capture: InputCallback<I> = if prepared.input_config.sample_rate != rate
         || prepared.output_config.sample_rate != rate
@@ -749,6 +897,7 @@ fn build<
             )?,
             processor: AudioProcessor::<f64>::new(rate, 1, dsp)?,
             queue: producer,
+            preview: preview_tap,
             metrics: metrics.clone(),
         };
         Box::new(move |data: &[I]| capture.process(data))
@@ -761,6 +910,7 @@ fn build<
             processed: vec![O::default(); frames as usize],
             channels: prepared.input_config.channels as usize,
             queue: producer,
+            preview: preview_tap,
             metrics: metrics.clone(),
         };
         Box::new(move |data: &[I]| capture.process(data))
@@ -792,6 +942,8 @@ fn build<
     )?;
     Ok(Box::new(CpalStream {
         pitch_latency,
+        preview,
+        preview_metrics,
         output: Some(output),
         input: Some(input),
         metrics,
@@ -808,6 +960,8 @@ struct CpalStream {
     pitch_latency: usize,
     configuration: crate::backend::AudioConfiguration,
     output: Option<cpal::Stream>,
+    preview: Option<cpal::Stream>,
+    preview_metrics: Option<Arc<Metrics>>,
     input: Option<cpal::Stream>,
     metrics: Arc<Metrics>,
     details: String,
@@ -832,7 +986,16 @@ impl AudioStream for CpalStream {
         };
         self.started = true;
         self.metrics.active.store(true, Ordering::Release);
-        if let Err(error) = output.play().and_then(|_| input.play()) {
+        if let Some(metrics) = &self.preview_metrics {
+            metrics.active.store(true, Ordering::Release);
+        }
+        let result = self
+            .preview
+            .as_ref()
+            .map_or(Ok(()), |stream| stream.play())
+            .and_then(|_| output.play())
+            .and_then(|_| input.play());
+        if let Err(error) = result {
             self.stop()?;
             return Err(error.into());
         }
@@ -845,6 +1008,10 @@ impl AudioStream for CpalStream {
         // Some ALSA devices cannot pause. Dropping both streams works on every
         // CPAL host and joins/releases callbacks before their storage is freed.
         self.running = false;
+        if let Some(metrics) = &self.preview_metrics {
+            metrics.active.store(false, Ordering::Release);
+        }
+        self.preview.take();
         self.input.take();
         self.output.take();
         Ok(())
@@ -891,12 +1058,19 @@ impl AudioStream for CpalStream {
     }
     fn summary(&self) -> String {
         let m = &self.metrics;
+        let preview = self.preview_metrics.as_ref().map(|p| format!(
+            "\nPreview callbacks={}; queue now/peak={}/{} frames ({:.3} ms queued); underruns={}; overruns={}; fault flags=0x{:x}",
+            p.output_blocks.load(Ordering::Relaxed), p.queue_depth.load(Ordering::Relaxed),
+            p.queue_peak.load(Ordering::Relaxed),
+            p.queue_depth.load(Ordering::Relaxed) as f64 * 1000.0 / p.sample_rate as f64,
+            p.underruns.load(Ordering::Relaxed), p.overruns.load(Ordering::Relaxed),
+            p.faults.load(Ordering::Relaxed))).unwrap_or_default();
         format!("CPAL input/output callbacks={}/{}; nonzero input samples={}; max input/output callback={:.3}/{:.3} us; deadline misses={}; observed max input/output period={}/{} frames; queue now/peak={}/{} frames; underruns={}; overruns={}; fault flags=0x{:x}\n{}",
             self.blocks(), m.output_blocks.load(Ordering::Relaxed), m.nonzero.load(Ordering::Relaxed),
             m.max_input_ns.load(Ordering::Relaxed) as f64 / 1000.0, m.max_output_ns.load(Ordering::Relaxed) as f64 / 1000.0, m.deadline_misses.load(Ordering::Relaxed),
             m.max_input_frames.load(Ordering::Relaxed), m.max_output_frames.load(Ordering::Relaxed),
             m.queue_depth.load(Ordering::Relaxed), m.queue_peak.load(Ordering::Relaxed),
-            m.underruns.load(Ordering::Relaxed), m.overruns.load(Ordering::Relaxed), m.faults.load(Ordering::Relaxed), self.details)
+            m.underruns.load(Ordering::Relaxed), m.overruns.load(Ordering::Relaxed), m.faults.load(Ordering::Relaxed), self.details.to_owned() + &preview)
     }
     fn latency_summary(&self) -> Result<String> {
         let target = self.metrics.prime_frames.load(Ordering::Relaxed);
@@ -907,6 +1081,23 @@ impl AudioStream for CpalStream {
             latency as f64 * 1000.0 / self.configuration.sample_rate))
     }
     fn check_events(&self) -> Result<()> {
+        if let Some(metrics) = &self.preview_metrics {
+            let faults = metrics.faults.load(Ordering::Relaxed);
+            if faults != 0 {
+                return Err(format!("CPAL preview stopped (flags 0x{faults:x}: underrun=1,overrun=2,invalid buffer=4,device error=8). Check preview device, buffer size and device clock drift.").into());
+            }
+            if self.running
+                && self
+                    .started_at
+                    .is_some_and(|time| time.elapsed() > Duration::from_secs(2))
+                && metrics
+                    .now_ns()
+                    .saturating_sub(metrics.last_output_ns.load(Ordering::Relaxed))
+                    > 2_000_000_000
+            {
+                return Err("No CPAL preview callbacks for 2 seconds".into());
+            }
+        }
         let faults = self.metrics.faults.load(Ordering::Relaxed);
         if faults != 0 {
             return Err(format!("CPAL audio stopped (flags 0x{faults:x}: underrun=1,overrun=2,invalid buffer=4,device error=8). Check device connection, period and input/output clock drift; restart after adjusting settings.").into());
@@ -954,6 +1145,119 @@ mod tests {
     use crate::cli::Options;
 
     #[test]
+    fn preview_tap_duplicates_mono_without_consuming_main_output() {
+        let (mut capture, mut main, _) = callbacks::<f32>(64, 1, &[]);
+        let (producer, consumer) = audio_queue::channel(512);
+        let metrics = Arc::new(Metrics::new(128));
+        metrics.active.store(true, Ordering::Release);
+        let tap = PreviewTap {
+            converter: crate::dsp::resample::RateConverter::new(RATE, RATE).unwrap(),
+            queue: producer,
+            metrics: metrics.clone(),
+        };
+        let mut preview = Playback {
+            output_channels: vec![1, 2],
+            channels: 2,
+            queue: consumer,
+            metrics: metrics.clone(),
+            primed: false,
+        };
+        capture.preview = Some(tap);
+        capture.process(&[0.25; 64]);
+        capture.process(&[-0.5; 64]);
+        let mut output = [0.0; 128 * 3];
+        for block in output.as_chunks_mut::<{ 64 * 3 }>().0 {
+            main.process(block);
+        }
+        assert!(main.primed);
+        let mut heard = [0.0; 128 * 2];
+        for block in heard.as_chunks_mut::<{ 64 * 2 }>().0 {
+            preview.process(block);
+        }
+        assert!(preview.primed);
+        assert_eq!(heard[0], 0.25);
+        assert_eq!(heard[128], -0.5);
+        for (expected, heard) in output
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .zip(heard.as_chunks::<2>().0)
+        {
+            assert_eq!(heard, &[expected[0], expected[0]]);
+            assert_eq!(&expected[1..], &[0.0, 0.0]);
+        }
+        assert_eq!(metrics.faults.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn resampled_capture_publishes_the_same_signal_to_preview() {
+        let (queue, mut main) = audio_queue::channel::<f32>(4096);
+        let (preview_queue, mut heard) = audio_queue::channel::<f32>(4096);
+        let metrics = Arc::new(Metrics::with_sample_rate(128, 48000));
+        let preview_metrics = Arc::new(Metrics::with_sample_rate(128, 44100));
+        metrics.active.store(true, Ordering::Release);
+        preview_metrics.active.store(true, Ordering::Release);
+        let options = Options::default();
+        let mut capture = ResampledCapture {
+            input_channel: 1,
+            channels: 1,
+            input_rate: 44100,
+            input_converter: crate::dsp::resample::RateConverter::new(44100, 48000).unwrap(),
+            output_converter: crate::dsp::resample::RateConverter::new(48000, 48000).unwrap(),
+            processor: AudioProcessor::new(48000, 1, DspSettings::from(&options)).unwrap(),
+            queue,
+            metrics,
+            preview: Some(PreviewTap {
+                converter: crate::dsp::resample::RateConverter::new(48000, 44100).unwrap(),
+                queue: preview_queue,
+                metrics: preview_metrics.clone(),
+            }),
+        };
+        capture.process(&[0.25f32; 441]);
+        capture.process(&[-0.5f32; 220]);
+        let mut reference = crate::dsp::resample::RateConverter::new(48000, 44100).unwrap();
+        let mut expected = Vec::new();
+        while let Some(sample) = main.pop() {
+            reference.push(sample as f64, |sample| expected.push(sample as f32));
+        }
+        assert!(!expected.is_empty());
+        for sample in expected {
+            assert_eq!(heard.pop(), Some(sample));
+        }
+        assert_eq!(heard.pop(), None);
+        assert_eq!(preview_metrics.prime_frames.load(Ordering::Relaxed), 882);
+        assert_eq!(preview_metrics.faults.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn preview_conversion_preserves_counts_across_blocks_and_reports_overflow() {
+        let (producer, mut consumer) = audio_queue::channel(1024);
+        let metrics = Arc::new(Metrics::new(128));
+        metrics.active.store(true, Ordering::Release);
+        let mut tap = PreviewTap {
+            converter: crate::dsp::resample::RateConverter::new(48000, 44100).unwrap(),
+            queue: producer,
+            metrics: metrics.clone(),
+        };
+        let mut count = 0;
+        for _ in 0..10 {
+            for _ in 0..480 {
+                tap.push(0.25);
+            }
+            while consumer.pop().is_some() {
+                count += 1;
+            }
+        }
+        assert_eq!(count, 4410);
+        assert_eq!(metrics.faults.load(Ordering::Relaxed), 0);
+        for _ in 0..2048 {
+            tap.push(0.5);
+        }
+        assert_eq!(metrics.faults.load(Ordering::Relaxed), OVERRUN);
+        assert!(metrics.overruns.load(Ordering::Relaxed) > 0);
+    }
+
+    #[test]
     fn structured_log_retains_observed_periods_and_queue_state() {
         let (mut capture, mut playback, metrics) = callbacks::<f32>(
             64,
@@ -974,6 +1278,8 @@ mod tests {
             },
             input: None,
             output: None,
+            preview: None,
+            preview_metrics: None,
             metrics,
             details: String::new(),
             capacity: 512,
@@ -1022,6 +1328,7 @@ mod tests {
                 processed: vec![O::default(); max_frames],
                 channels,
                 queue: producer,
+                preview: None,
                 metrics: metrics.clone(),
             },
             Playback {
@@ -1546,6 +1853,7 @@ mod tests {
             let options = Options::parse(["--pitch", "0"].map(String::from)).unwrap();
             let mut capture = ResampledCapture {
                 input_channel: 1,
+                preview: None,
                 channels: 1,
                 input_rate,
                 input_converter: crate::dsp::resample::RateConverter::new(input_rate, dsp_rate)
@@ -1632,6 +1940,7 @@ mod tests {
         metrics.active.store(true, Ordering::Release);
         let mut capture = ResampledCapture {
             input_channel: 2,
+            preview: None,
             channels: 2,
             input_rate: 96000,
             input_converter: crate::dsp::resample::RateConverter::new(96000, 48000).unwrap(),
@@ -1677,6 +1986,7 @@ mod tests {
                 metrics.active.store(true, Ordering::Release);
                 let mut capture = ResampledCapture {
                     input_channel: 2,
+                    preview: None,
                     channels: 2,
                     input_rate: 96000,
                     input_converter: crate::dsp::resample::RateConverter::new(96000, 48000)

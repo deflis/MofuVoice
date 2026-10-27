@@ -8,6 +8,7 @@ export const settings = {
     backend: "auto",
     device: "ASIO",
     outputDevice: "",
+    previewDevice: "",
     inputChannel: 1,
     outputChannels: [1],
     frames: 64,
