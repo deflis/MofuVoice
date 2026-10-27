@@ -4,6 +4,14 @@ pub trait Sample: Copy + Default + PartialEq {
     fn normalized(self) -> f64;
     fn from_normalized(value: f64) -> Self;
 }
+impl Sample for f64 {
+    fn normalized(self) -> f64 {
+        self
+    }
+    fn from_normalized(value: f64) -> Self {
+        value
+    }
+}
 impl Sample for f32 {
     fn normalized(self) -> f64 {
         self as f64

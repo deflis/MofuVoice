@@ -128,9 +128,9 @@ fn pipeline_matches_rumble_gate_deesser_pitch_eq_level_order_across_variable_blo
     let mut deesser = mofu_voice::deesser::DeEsser::new(dsp.deesser);
     let mut processor = AudioProcessor::<f32>::new(RATE, 512, dsp).unwrap();
     let input: Vec<_> = (0..12000).map(|i| (i as f32 * 0.03).sin() * 0.1).collect();
-    let mut gated = vec![0.0; input.len()];
+    let mut gated = vec![0.0_f64; input.len()];
     let mut expected = vec![0.0; input.len()];
-    let mut filtered = input.clone();
+    let mut filtered: Vec<f64> = input.iter().map(|s| *s as f64).collect();
     rumble.process_in_place(&mut filtered);
     gate.process_block(&filtered, &mut gated);
     deesser.process_in_place(&mut gated);
@@ -150,7 +150,10 @@ fn pipeline_matches_rumble_gate_deesser_pitch_eq_level_order_across_variable_blo
         }
     }
     assert_eq!(
-        expected.iter().map(|s| s.to_bits()).collect::<Vec<_>>(),
+        expected
+            .iter()
+            .map(|s| (*s as f32).to_bits())
+            .collect::<Vec<_>>(),
         actual.iter().map(|s| s.to_bits()).collect::<Vec<_>>()
     );
 }
@@ -407,4 +410,62 @@ fn selected_rates_keep_filter_frequencies_and_envelope_times() {
             "envelope changes across rates: {values:?}"
         );
     }
+}
+
+#[test]
+fn mixed_formats_quantize_only_after_the_complete_chain() {
+    let args = [
+        "--rumble-filter",
+        "on",
+        "--eq",
+        "on",
+        "--eq-band2",
+        "3000,3,0.8",
+        "--pitch",
+        "3",
+    ];
+    let input: Vec<i32> = (0..8192)
+        .map(|i| ((i as f64 * 0.07).sin() * 123456789.0) as i32)
+        .collect();
+    let normalized: Vec<f64> = input.iter().map(|s| s.normalized()).collect();
+    let mut reference = AudioProcessor::<f64>::new(RATE, 8192, settings(&args)).unwrap();
+    let mut expected = vec![0.0_f64; input.len()];
+    reference.process_block(&normalized, &mut expected).unwrap();
+    let mut processor = AudioProcessor::<i32>::new(RATE, 127, settings(&args)).unwrap();
+    let mut actual = vec![0_i16; input.len()];
+    for (source, dest) in input.chunks(127).zip(actual.chunks_mut(127)) {
+        processor.process_into(source, dest).unwrap();
+    }
+    assert_eq!(
+        actual,
+        expected
+            .iter()
+            .map(|s| i16::from_normalized(*s))
+            .collect::<Vec<_>>()
+    );
+    let mut processor = AudioProcessor::<i32>::new(RATE, 127, settings(&args)).unwrap();
+    let mut actual = vec![0.0_f64; input.len()];
+    for (source, dest) in input.chunks(127).zip(actual.chunks_mut(127)) {
+        processor.process_into(source, dest).unwrap();
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn f64_bypass_preserves_all_bits_and_mixed_invalid_blocks_leave_state_unchanged() {
+    let input = [
+        f64::from_bits(0x7ff0000000000123),
+        -0.0,
+        f64::from_bits(1),
+        f64::MAX,
+    ];
+    let mut p = AudioProcessor::<f64>::new(RATE, 4, settings(&[])).unwrap();
+    let mut out = [0.0_f64; 4];
+    p.process_block(&input, &mut out).unwrap();
+    assert_eq!(input.map(f64::to_bits), out.map(f64::to_bits));
+    let mut wrong = [1_i16; 5];
+    assert!(p.process_into(&input, &mut wrong).is_err());
+    assert_eq!(wrong, [0; 5]);
+    p.process_block(&input, &mut out).unwrap();
+    assert_eq!(input.map(f64::to_bits), out.map(f64::to_bits));
 }
