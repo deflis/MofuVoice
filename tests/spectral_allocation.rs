@@ -58,7 +58,7 @@ fn portable_processor_does_not_allocate_with_rumble_gate_pitch_eq_level_and_dees
         .map(String::from),
     )
     .unwrap();
-    let mut processor = AudioProcessor::<f32>::new(RATE, 512, DspSettings::from(&options)).unwrap();
+    let mut processor = AudioProcessor::<f64>::new(RATE, 512, DspSettings::from(&options)).unwrap();
     let input = [0.1; 512];
     let mut output = [0.0; 512];
     ALLOCATIONS.with(|n| n.set(0));
@@ -96,9 +96,9 @@ fn callback_does_not_allocate_including_first_frames_and_transitions() {
             .build()
             .unwrap();
             let input = std::array::from_fn::<_, 512, _>(|i| {
-                ((1..=8)
+                (1..=8)
                     .map(|h| 0.015 * (i as f64 * 0.017 * h as f64).cos())
-                    .sum::<f64>()) as f32
+                    .sum::<f64>()
             });
             let mut output = [0.0; 512];
             ALLOCATIONS.with(|n| n.set(0));
@@ -122,7 +122,7 @@ fn configured_windows_do_not_allocate_in_callbacks_or_pitch_transitions(
     for algorithm in PitchAlgorithm::ALL {
         let mut dsp = PitchShifter::new(7.0, true, 2.53, algorithm, windows, windows).unwrap();
         let input = std::array::from_fn::<_, 511, _>(|i| {
-            (0.1 * (std::f64::consts::TAU * i as f64 / 511.0).cos()) as f32
+            0.1 * (std::f64::consts::TAU * i as f64 / 511.0).cos()
         });
         let mut output = [0.0; 511];
         ALLOCATIONS.with(|n| n.set(0));

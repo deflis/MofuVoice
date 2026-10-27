@@ -6,7 +6,7 @@ use mofu_voice::{
 };
 use std::{error::Error, fs, path::Path};
 
-fn read_wav(path: &Path) -> Result<Vec<f32>, Box<dyn Error>> {
+fn read_wav(path: &Path) -> Result<Vec<f64>, Box<dyn Error>> {
     let bytes = fs::read(path)?;
     if bytes.len() < 12 || &bytes[..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
         return Err("Expected a RIFF WAV file".into());
@@ -54,7 +54,7 @@ fn read_wav(path: &Path) -> Result<Vec<f32>, Box<dyn Error>> {
                         .as_chunks::<2>()
                         .0
                         .iter()
-                        .map(|pair| i16::from_le_bytes([pair[0], pair[1]]) as f32 / 32768.0)
+                        .map(|pair| i16::from_le_bytes([pair[0], pair[1]]) as f64 / 32768.0)
                         .collect(),
                 );
             }
@@ -68,7 +68,7 @@ fn read_wav(path: &Path) -> Result<Vec<f32>, Box<dyn Error>> {
     samples.ok_or_else(|| "Missing WAV data chunk".into())
 }
 
-fn write_wav(path: &Path, samples: &[f32]) -> Result<(), Box<dyn Error>> {
+fn write_wav(path: &Path, samples: &[f64]) -> Result<(), Box<dyn Error>> {
     let size = u32::try_from(samples.len().checked_mul(2).ok_or("WAV too large")?)?;
     let riff_size = size.checked_add(36).ok_or("WAV too large")?;
     let mut bytes = Vec::with_capacity(44 + size as usize);
@@ -85,7 +85,7 @@ fn write_wav(path: &Path, samples: &[f32]) -> Result<(), Box<dyn Error>> {
     bytes.extend_from_slice(b"data");
     bytes.extend_from_slice(&size.to_le_bytes());
     for &sample in samples {
-        bytes.extend_from_slice(&((sample as f64 * 32768.0).round() as i16).to_le_bytes());
+        bytes.extend_from_slice(&((sample * 32768.0).round() as i16).to_le_bytes());
     }
     // Avoid overwriting listening material from an earlier comparison.
     use std::io::Write;
@@ -121,7 +121,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         args[3].clone(),
     ])?;
     let latency = options.pitch.latency();
-    let mut dsp = AudioProcessor::<f32>::new(RATE, 512, DspSettings::from(&options))?;
+    let mut dsp = AudioProcessor::<f64>::new(RATE, 512, DspSettings::from(&options))?;
     let directory = Path::new(&args[1]);
     for name in ["input.wav", "processed.wav"] {
         if directory.join(name).exists() {

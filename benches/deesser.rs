@@ -11,15 +11,14 @@ fn main() {
         ("transition", 8000.0, 0.08, 6.0),
         ("zero range", 8000.0, 0.4, 0.0),
     ] {
-        let input: Vec<f32> = (0..RATE as usize * 4)
+        let input: Vec<f64> = (0..RATE as usize * 4)
             .map(|i| {
                 let envelope = if name == "transition" {
                     1.0 + 0.95 * (i as f64 / RATE as f64 * 7.0).sin()
                 } else {
                     1.0
                 };
-                (amplitude * envelope * (std::f64::consts::TAU * hz * i as f64 / RATE as f64).sin())
-                    as f32
+                amplitude * envelope * (std::f64::consts::TAU * hz * i as f64 / RATE as f64).sin()
             })
             .collect();
         let mut times = Vec::new();
@@ -29,7 +28,7 @@ fn main() {
                 ..DeEsserParameters::default()
             };
             let mut dsp = DeEsser::with_parameters(true, parameters).unwrap();
-            let mut output = [0.0_f32; 64];
+            let mut output = [0.0_f64; 64];
             let start = Instant::now();
             for chunk in input.chunks(64) {
                 output[..chunk.len()].copy_from_slice(black_box(chunk));

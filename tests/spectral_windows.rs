@@ -66,14 +66,14 @@ fn windows_validate_and_report_only_the_selected_algorithms_delay() {
 }
 
 fn all_windows_preserve_neutral_bits_and_block_boundaries(windows: SpectralWindows) {
-    let input: Vec<f32> = (0..32768)
+    let input: Vec<f64> = (0..32768)
         .map(|i| {
             if i % 113 == 0 {
                 -0.0
             } else {
                 (1..=12)
                     .map(|h| (0.025 / h as f64) * (i as f64 * 0.017 * h as f64).cos())
-                    .sum::<f64>() as f32
+                    .sum::<f64>()
             }
         })
         .collect();
@@ -91,20 +91,6 @@ fn all_windows_preserve_neutral_bits_and_block_boundaries(windows: SpectralWindo
             .iter()
             .zip(&output)
             .all(|(a, b)| a.to_bits() == b.to_bits()));
-        let integers = [i32::MIN, -123456789, 0, 123456789, i32::MAX];
-        let mut integers_out = [0; 5];
-        settings
-            .build()
-            .unwrap()
-            .process_block(&integers, &mut integers_out);
-        assert_eq!(integers, integers_out);
-        let shorts = [i16::MIN, -123, 0, 123, i16::MAX];
-        let mut shorts_out = [0; 5];
-        settings
-            .build()
-            .unwrap()
-            .process_block(&shorts, &mut shorts_out);
-        assert_eq!(shorts, shorts_out);
         settings.semitones = 7.0;
         settings.formant_shift = 2.53;
         settings.build().unwrap().process_block(&input, &mut output);
@@ -129,8 +115,8 @@ fn all_windows_preserve_neutral_bits_and_block_boundaries(windows: SpectralWindo
 }
 
 fn configured_windows_keep_pitch_and_phase_continuous(windows: SpectralWindows) {
-    let input: Vec<f32> = (0..48000)
-        .map(|i| (0.2 * (std::f64::consts::TAU * 203.0 * i as f64 / 48000.0).sin()) as f32)
+    let input: Vec<f64> = (0..48000)
+        .map(|i| 0.2 * (std::f64::consts::TAU * 203.0 * i as f64 / 48000.0).sin())
         .collect();
     for algorithm in PitchAlgorithm::SPECTRAL {
         for semitones in [-12.0, -3.0, 3.0, 7.0, 12.0] {
@@ -151,12 +137,11 @@ fn configured_windows_keep_pitch_and_phase_continuous(windows: SpectralWindows) 
             let (mut re, mut im) = (0.0, 0.0);
             for (i, &x) in signal.iter().enumerate() {
                 let angle = std::f64::consts::TAU * frequency * i as f64 / 48000.0;
-                re += x as f64 * angle.cos();
-                im += x as f64 * angle.sin();
+                re += x * angle.cos();
+                im += x * angle.sin();
             }
             let amplitude = 2.0 * re.hypot(im) / signal.len() as f64;
-            let residual = signal.iter().map(|x| (*x as f64).powi(2)).sum::<f64>()
-                / signal.len() as f64
+            let residual = signal.iter().map(|x| (*x).powi(2)).sum::<f64>() / signal.len() as f64
                 - amplitude.powi(2) / 2.0;
             assert!(
                 (0.08..0.25).contains(&amplitude),

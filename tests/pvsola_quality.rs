@@ -13,12 +13,12 @@ fn voiced_glides_keep_the_fundamental_phase_continuous() {
             phase
         })
         .collect();
-    let input: Vec<f32> = phases
+    let input: Vec<f64> = phases
         .iter()
         .map(|&phase| {
             (1..=8)
                 .map(|h| 0.025 * (phase * h as f64).cos() / (h as f64).sqrt())
-                .sum::<f64>() as f32
+                .sum::<f64>()
         })
         .collect();
     for pitch in [3.0, 7.0, 12.0] {
@@ -68,18 +68,18 @@ fn voiced_glides_keep_the_fundamental_phase_continuous() {
     }
 }
 
-fn harmonic_phase(signal: &[f32], frequency: f64) -> f64 {
+fn harmonic_phase(signal: &[f64], frequency: f64) -> f64 {
     let (mut re, mut im) = (0.0, 0.0);
     for (i, &sample) in signal.iter().enumerate() {
         let angle = std::f64::consts::TAU * frequency * i as f64 / RATE as f64;
         let window = 0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / signal.len() as f64).cos();
-        re += sample as f64 * window * angle.cos();
-        im -= sample as f64 * window * angle.sin();
+        re += sample * window * angle.cos();
+        im -= sample * window * angle.sin();
     }
     im.atan2(re)
 }
 
-fn phase_curvature(signal: &[f32], fundamental: f64, shape: f64) -> f64 {
+fn phase_curvature(signal: &[f64], fundamental: f64, shape: f64) -> f64 {
     let phases: Vec<_> = (1..=8)
         .map(|h| harmonic_phase(signal, fundamental * h as f64))
         .collect();
@@ -101,12 +101,12 @@ fn voiced_harmonics_keep_their_relative_phase_shape() {
         for preserve in [false, true] {
             for frequency in [80.0, 100.0, 137.0, 203.0] {
                 for pitch in [-12.0, -3.0, 3.0, 7.0, 12.0] {
-                    let input: Vec<f32> = (0..RATE as usize * 2)
+                    let input: Vec<f64> = (0..RATE as usize * 2)
                         .map(|i| {
                             let phase = std::f64::consts::TAU * frequency * i as f64 / RATE as f64;
                             (1..=8)
                                 .map(|h| 0.02 * (phase * h as f64 + shape * (h * h) as f64).cos())
-                                .sum::<f64>() as f32
+                                .sum::<f64>()
                         })
                         .collect();
                     let mut errors = [0.0; 2];

@@ -1,6 +1,6 @@
 //! A configurable chain of causal peaking biquads. No lookahead, buffering, or callback allocation.
 use crate::{
-    dsp::{biquad::Biquad, gain::amplitude, Sample},
+    dsp::{biquad::Biquad, gain::amplitude},
     RATE,
 };
 use std::error::Error;
@@ -189,17 +189,17 @@ pub struct Equalizer {
     gain: f64,
 }
 impl Equalizer {
-    pub fn process_in_place<T: Sample>(&mut self, samples: &mut [T]) {
+    pub fn process_in_place(&mut self, samples: &mut [f64]) {
         if !self.active {
             return;
         } // Neutral settings preserve every input bit.
         for sample in samples {
-            let mut value = sample.normalized();
+            let mut value = *sample;
             if !value.is_finite() {
                 for filter in &mut self.filters {
                     filter.filter.reset();
                 }
-                *sample = T::default();
+                *sample = 0.0;
                 continue;
             }
             // Attenuate before filtering to leave internal headroom as well.
@@ -207,7 +207,7 @@ impl Equalizer {
             for filter in &mut self.filters {
                 value = filter.process(value);
             }
-            *sample = T::from_normalized(value);
+            *sample = value;
         }
     }
 }
@@ -230,10 +230,10 @@ mod tests {
                 ],
                 output_db: 0.0,
             };
-            let input = [f32::from_bits(0x7fc01234), -0.0, 0.4];
+            let input = [f64::from_bits(0x7ff8_0000_0000_1234), -0.0, 0.4];
             let mut output = input;
             settings.build().unwrap().process_in_place(&mut output);
-            assert_eq!(output.map(f32::to_bits), input.map(f32::to_bits));
+            assert_eq!(output.map(f64::to_bits), input.map(f64::to_bits));
             settings.bands[count - 1].q = f64::NAN;
             assert!(settings.build().is_err());
         }
@@ -287,10 +287,10 @@ mod tests {
     #[test]
     fn neutral_and_disabled_preserve_bits() {
         let original = [
-            f32::from_bits(0x7fc01234),
+            f64::from_bits(0x7ff8_0000_0000_1234),
             -0.0,
-            f32::from_bits(1),
-            f32::INFINITY,
+            f64::from_bits(1),
+            f64::INFINITY,
             0.4,
         ];
         for enabled in [false, true] {
@@ -303,7 +303,7 @@ mod tests {
             }
             let mut samples = original;
             settings.build().unwrap().process_in_place(&mut samples);
-            assert_eq!(samples.map(f32::to_bits), original.map(f32::to_bits));
+            assert_eq!(samples.map(f64::to_bits), original.map(f64::to_bits));
         }
     }
     #[test]
@@ -316,18 +316,13 @@ mod tests {
                 };
                 settings.bands[index].gain_db = gain;
                 let frequency = settings.bands[index].frequency;
-                let mut samples: Vec<f32> = (0..RATE)
+                let mut samples: Vec<f64> = (0..RATE)
                     .map(|i| {
-                        (0.1 * (std::f64::consts::TAU * frequency * i as f64 / RATE as f64).sin())
-                            as f32
+                        0.1 * (std::f64::consts::TAU * frequency * i as f64 / RATE as f64).sin()
                     })
                     .collect();
                 settings.build().unwrap().process_in_place(&mut samples);
-                let power = samples[24000..]
-                    .iter()
-                    .map(|x| (*x as f64).powi(2))
-                    .sum::<f64>()
-                    / 24000.0;
+                let power = samples[24000..].iter().map(|x| (*x).powi(2)).sum::<f64>() / 24000.0;
                 let measured = 10.0 * (power / 0.005).log10();
                 assert!(
                     (measured - (gain - settings.headroom_db())).abs() < 0.01,
@@ -372,10 +367,10 @@ mod tests {
             output_db: 0.0,
         };
         let mut filter = settings.build().unwrap();
-        let mut samples = [0.9_f32; 8192];
+        let mut samples = [0.9_f64; 8192];
         filter.process_in_place(&mut samples);
         assert!(samples.iter().all(|x| x.is_finite()));
-        let mut invalid = [f32::NAN, 0.0];
+        let mut invalid = [f64::NAN, 0.0];
         filter.process_in_place(&mut invalid);
         assert_eq!(invalid, [0.0; 2]);
     }

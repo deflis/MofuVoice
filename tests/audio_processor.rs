@@ -41,7 +41,7 @@ fn level_and_compressor_switches_reach_the_audio_pipeline_in_all_formats() {
         for level in ["off", "on"] {
             for compressor in ["off", "on"] {
                 let args = ["--auto-level", level, "--compressor", compressor];
-                let mut expected = input.clone();
+                let mut expected: Vec<f64> = input.iter().map(|s| s.normalized()).collect();
                 settings(&args)
                     .level
                     .build()
@@ -52,6 +52,7 @@ fn level_and_compressor_switches_reach_the_audio_pipeline_in_all_formats() {
                 for (source, dest) in input.chunks(63).zip(actual.chunks_mut(63)) {
                     processor.process_block(source, dest).unwrap();
                 }
+                let expected: Vec<T> = expected.into_iter().map(T::from_normalized).collect();
                 assert_eq!(actual, expected, "level={level}, compressor={compressor}");
             }
         }
@@ -182,7 +183,7 @@ fn rumble_only_filters_before_neutral_pitch_without_gate_or_level() {
     let input: Vec<f32> = (0..48000)
         .map(|i| (0.2 * (std::f64::consts::TAU * 20.0 * i as f64 / RATE as f64).sin()) as f32)
         .collect();
-    let mut expected = input.clone();
+    let mut expected: Vec<f64> = input.iter().map(|s| s.normalized()).collect();
     mofu_voice::rumble::RumbleFilter::new(true).process_in_place(&mut expected);
     let mut processor =
         AudioProcessor::<f32>::new(RATE, 512, settings(&["--rumble-filter", "on"])).unwrap();
@@ -190,7 +191,10 @@ fn rumble_only_filters_before_neutral_pitch_without_gate_or_level() {
     for (source, dest) in input.chunks(511).zip(actual.chunks_mut(511)) {
         processor.process_block(source, dest).unwrap();
     }
-    assert_eq!(actual, expected);
+    assert_eq!(
+        actual,
+        expected.into_iter().map(|s| s as f32).collect::<Vec<_>>()
+    );
     assert!(actual[24000..].iter().all(|x| x.abs() < 0.013));
 }
 
@@ -263,7 +267,7 @@ fn deesser_mode_only_changes_presentation_and_custom_parameters_reach_audio() {
     let input: Vec<f32> = (0..48000)
         .map(|i| (0.4 * (std::f64::consts::TAU * 8000.0 * i as f64 / RATE as f64).sin()) as f32)
         .collect();
-    let mut reference = input.clone();
+    let mut reference: Vec<f64> = input.iter().map(|s| s.normalized()).collect();
     let parameters = settings(&common).deesser_parameters;
     mofu_voice::deesser::DeEsser::with_parameters(true, parameters)
         .unwrap()
@@ -276,7 +280,10 @@ fn deesser_mode_only_changes_presentation_and_custom_parameters_reach_audio() {
         for (source, dest) in input.chunks(127).zip(output.chunks_mut(127)) {
             processor.process_block(source, dest).unwrap();
         }
-        assert_eq!(output, reference);
+        assert_eq!(
+            output,
+            reference.iter().map(|s| *s as f32).collect::<Vec<_>>()
+        );
     }
 }
 

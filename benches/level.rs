@@ -9,17 +9,16 @@ fn main() {
         ("attack-release", 0.9, 3.0),
         ("ratio-1", 0.9, 1.0),
     ] {
-        let input: Vec<f32> = (0..RATE as usize * 4)
+        let input: Vec<f64> = (0..RATE as usize * 4)
             .map(|i| {
                 let envelope = if name == "attack-release" && i / 12000 % 2 == 1 {
                     0.01
                 } else {
                     1.0
                 };
-                (amplitude
+                amplitude
                     * envelope
-                    * (std::f64::consts::TAU * 173.0 * i as f64 / RATE as f64).sin())
-                    as f32
+                    * (std::f64::consts::TAU * 173.0 * i as f64 / RATE as f64).sin()
             })
             .collect();
         let mut times = Vec::new();
@@ -32,7 +31,7 @@ fn main() {
             }
             .build()
             .unwrap();
-            let mut output = [0.0_f32; 64];
+            let mut output = [0.0_f64; 64];
             let start = Instant::now();
             for chunk in input.chunks(64) {
                 output[..chunk.len()].copy_from_slice(black_box(chunk));

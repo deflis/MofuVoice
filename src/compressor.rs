@@ -6,7 +6,6 @@ use crate::{
     dsp::{
         envelope::{decay, update_rate},
         gain::{amplitude, amplitude_db},
-        Sample,
     },
     RATE,
 };
@@ -81,14 +80,14 @@ pub struct Compressor {
 }
 
 impl Compressor {
-    pub fn process_in_place<T: Sample>(&mut self, samples: &mut [T]) {
+    pub fn process_in_place(&mut self, samples: &mut [f64]) {
         if self.bypass {
             return;
         }
         for sample in samples {
-            let input = sample.normalized();
+            let input = *sample;
             if !input.is_finite() {
-                *sample = T::default();
+                *sample = 0.0;
                 self.peak = 0.0;
                 self.reduction_db = 0.0;
                 continue;
@@ -106,7 +105,7 @@ impl Compressor {
             };
             self.reduction_db += (target - self.reduction_db) * rate;
             if self.reduction_db > 0.0 {
-                *sample = T::from_normalized(input * amplitude(-self.reduction_db));
+                *sample = input * amplitude(-self.reduction_db);
             }
         }
     }
@@ -134,51 +133,40 @@ mod tests {
         ] {
             let mut dsp = settings.build().unwrap();
             let input = [
-                0.0_f32,
+                0.0_f64,
                 -0.0,
-                f32::from_bits(0x7fc01234),
-                f32::INFINITY,
-                f32::NEG_INFINITY,
-                f32::from_bits(1),
-                f32::MAX,
+                f64::from_bits(0x7ff8_0000_0000_1234),
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                f64::from_bits(1),
+                f64::MAX,
             ];
             let mut output = input;
             dsp.process_in_place(&mut output);
-            assert_eq!(input.map(f32::to_bits), output.map(f32::to_bits));
-            let input = [i32::MIN, -1, 0, 1, i32::MAX];
-            let mut output = input;
-            dsp.process_in_place(&mut output);
-            assert_eq!(input, output);
-            let input = [i16::MIN, -1, 0, 1, i16::MAX];
-            let mut output = input;
-            dsp.process_in_place(&mut output);
-            assert_eq!(input, output);
+            assert_eq!(input.map(f64::to_bits), output.map(f64::to_bits));
         }
     }
 
     #[test]
-    fn steady_state_matches_hard_knee_curve_in_all_formats() {
-        fn check<T: Sample>(tolerance: f64) {
+    fn steady_state_matches_hard_knee_curve() {
+        fn check(tolerance: f64) {
             for rate in crate::SAMPLE_RATES {
                 let settings = active();
                 for input in [0.01, 0.25, 0.5, 0.9, -0.5, -0.9] {
-                    let input = T::from_normalized(input);
                     let mut samples = vec![input; rate as usize];
                     settings
                         .build_with_sample_rate(rate)
                         .unwrap()
                         .process_in_place(&mut samples);
-                    let level = amplitude_db(input.normalized().abs(), 1e-30);
+                    let level = amplitude_db(input.abs(), 1e-30);
                     let reduction =
                         (level - settings.threshold_db).max(0.0) * (1.0 - 1.0 / settings.ratio);
-                    let expected = input.normalized() * amplitude(-reduction);
-                    assert!((samples.last().unwrap().normalized() - expected).abs() <= tolerance);
+                    let expected = input * amplitude(-reduction);
+                    assert!((*samples.last().unwrap() - expected).abs() <= tolerance);
                 }
             }
         }
-        check::<f32>(1e-7);
-        check::<i16>(0.5 / 32768.0 + 1e-12);
-        check::<i32>(0.5 / 2147483648.0 + 1e-12);
+        check(1e-7);
     }
 
     #[test]
@@ -190,7 +178,7 @@ mod tests {
                 ..active()
             };
             let mut dsp = settings.build_with_sample_rate(rate).unwrap();
-            let mut loud = vec![1.0_f32; rate as usize / 100];
+            let mut loud = vec![1.0_f64; rate as usize / 100];
             dsp.process_in_place(&mut loud);
             assert!(
                 loud[0] > 0.99,
@@ -202,7 +190,7 @@ mod tests {
             // the configured release constant independently of detector history.
             dsp.peak = 0.0;
             let initial = dsp.reduction_db;
-            let mut quiet = vec![0.01_f32; rate as usize / 10];
+            let mut quiet = vec![0.01_f64; rate as usize / 10];
             dsp.process_in_place(&mut quiet);
             assert!((dsp.reduction_db - initial * (-1.0_f64).exp()).abs() < 1e-11);
             assert!(quiet.last().unwrap() > quiet.first().unwrap());
@@ -211,14 +199,14 @@ mod tests {
 
     #[test]
     fn block_boundaries_and_empty_blocks_preserve_state() {
-        let input: Vec<f32> = (0..4097).map(|i| (i as f32 * 0.31).sin()).collect();
+        let input: Vec<f64> = (0..4097).map(|i| (i as f64 * 0.31).sin()).collect();
         let mut whole = input.clone();
         active().build().unwrap().process_in_place(&mut whole);
         for size in [1, 7, 64, 511] {
             let mut split = input.clone();
             let mut dsp = active().build().unwrap();
             for block in split.chunks_mut(size) {
-                dsp.process_in_place::<f32>(&mut []);
+                dsp.process_in_place(&mut []);
                 dsp.process_in_place(block);
             }
             assert_eq!(whole, split);
@@ -228,12 +216,12 @@ mod tests {
     #[test]
     fn invalid_samples_reset_and_finite_extremes_do_not_poison_state() {
         let mut dsp = active().build().unwrap();
-        for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
-            let mut input = [f32::MAX, -f32::MAX, invalid, -0.0, 0.01];
+        for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let mut input = [f64::MAX, -f64::MAX, invalid, -0.0, 0.01];
             dsp.process_in_place(&mut input);
             assert!(input.iter().all(|v| v.is_finite()));
             assert_eq!(input[2], 0.0);
-            assert_eq!(input[3].to_bits(), (-0.0_f32).to_bits());
+            assert_eq!(input[3].to_bits(), (-0.0_f64).to_bits());
             assert_eq!(input[4], 0.01);
         }
     }

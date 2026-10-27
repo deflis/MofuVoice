@@ -15,8 +15,8 @@ fn estimator_selection_preserves_pitch_mapping_and_block_boundaries() {
                 semitones: 3.0,
                 ..Default::default()
             };
-            let input: Vec<f32> = (0..24000)
-                .map(|i| (0.1 * (TAU * 113.0 * i as f64 / 48000.0).cos()) as f32)
+            let input: Vec<f64> = (0..24000)
+                .map(|i| 0.1 * (TAU * 113.0 * i as f64 / 48000.0).cos())
                 .collect();
             let mut whole = vec![0.0; input.len()];
             settings.build().unwrap().process_block(&input, &mut whole);
@@ -31,7 +31,7 @@ fn estimator_selection_preserves_pitch_mapping_and_block_boundaries() {
                 let (mut re, mut im) = (0.0, 0.0);
                 for (i, &sample) in whole[12000..].iter().enumerate() {
                     let phase = TAU * frequency * i as f64 / 48000.0;
-                    let sample = sample as f64 * (0.5 - 0.5 * (TAU * i as f64 / 12000.0).cos());
+                    let sample = sample * (0.5 - 0.5 * (TAU * i as f64 / 12000.0).cos());
                     re += sample * phase.cos();
                     im += sample * phase.sin();
                 }

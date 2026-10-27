@@ -7,11 +7,11 @@ const ALGORITHMS: [PitchAlgorithm; 3] = [
     PitchAlgorithm::FdPsola,
 ];
 
-fn power(signal: &[f32], frequency: f64) -> f64 {
+fn power(signal: &[f64], frequency: f64) -> f64 {
     let (mut re, mut im) = (0.0, 0.0);
     for (i, &value) in signal.iter().enumerate() {
         let phase = TAU * frequency * i as f64 / 48000.0;
-        let value = value as f64 * (0.5 - 0.5 * (TAU * i as f64 / signal.len() as f64).cos());
+        let value = value * (0.5 - 0.5 * (TAU * i as f64 / signal.len() as f64).cos());
         re += value * phase.cos();
         im += value * phase.sin();
     }
@@ -29,10 +29,10 @@ fn configured_psola_windows_keep_pitch(windows: SpectralWindows) {
                 preserve_formants: algorithm != PitchAlgorithm::FdPsola,
                 ..Default::default()
             };
-            let input: Vec<f32> = (0..48000)
+            let input: Vec<f64> = (0..48000)
                 .map(|i| {
                     let phase = TAU * 113.0 * i as f64 / 48000.0;
-                    (0.1 * phase.cos() + 0.02 * (3.0 * phase).cos()) as f32
+                    0.1 * phase.cos() + 0.02 * (3.0 * phase).cos()
                 })
                 .collect();
             let mut output = vec![0.0; input.len()];
@@ -63,7 +63,7 @@ fn configured_psola_windows_keep_pitch(windows: SpectralWindows) {
 }
 
 fn configured_psola_windows_preserve_and_shift_vowel_resonance(windows: SpectralWindows) {
-    let input: Vec<f32> = (0..48000)
+    let input: Vec<f64> = (0..48000)
         .map(|i| {
             let phase = TAU * 100.0 * i as f64 / 48000.0;
             (1..=40)
@@ -73,7 +73,7 @@ fn configured_psola_windows_preserve_and_shift_vowel_resonance(windows: Spectral
                         + 0.015 * (-0.5 * ((frequency - 1500.0) / 230.0).powi(2)).exp();
                     amplitude * (phase * h as f64).cos()
                 })
-                .sum::<f64>() as f32
+                .sum::<f64>()
         })
         .collect();
     for algorithm in ALGORITHMS {
@@ -118,10 +118,10 @@ fn configured_psola_windows_preserve_and_shift_vowel_resonance(windows: Spectral
 
 fn configured_psola_unvoiced_delay_matches_settings_after_ring_wrap(windows: SpectralWindows) {
     let mut seed = 17_u32;
-    let input: Vec<f32> = (0..72000)
+    let input: Vec<f64> = (0..72000)
         .map(|_| {
             seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
-            (0.1 * (seed as f64 / u32::MAX as f64 - 0.5)) as f32
+            0.1 * (seed as f64 / u32::MAX as f64 - 0.5)
         })
         .collect();
     for algorithm in ALGORITHMS {

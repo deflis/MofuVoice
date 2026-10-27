@@ -7,13 +7,13 @@ use mofu_voice::{
 
 #[test]
 fn gate_pitch_and_level_chain_is_independent_of_callback_boundaries() {
-    let input: Vec<f32> = (0..RATE as usize)
+    let input: Vec<f64> = (0..RATE as usize)
         .map(|i| {
             let voice = 0.35 * (std::f64::consts::TAU * 150.0 * i as f64 / RATE as f64).sin();
             if (12000..18000).contains(&i) {
                 0.0
             } else {
-                voice as f32
+                voice
             }
         })
         .collect();
