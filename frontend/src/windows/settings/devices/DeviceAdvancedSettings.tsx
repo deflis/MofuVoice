@@ -2,7 +2,7 @@ import styles from "../settings.module.css";
 import deviceStyles from "./devices.module.css";
 import { NumberInput } from "../NumberInput";
 import { DetailsPopup } from "../DetailsPopup";
-import { ChannelRoutingDetails } from "./ChannelRoutingSettings";
+
 import { useBackendSettings, useBufferSettings } from "./hooks";
 
 function BackendSettings() {
@@ -55,7 +55,6 @@ export function DeviceAdvancedSettings() {
   return (
     <DetailsPopup title="音声デバイス" buttonLabel="詳細設定">
       <BackendSettings />
-      <ChannelRoutingDetails />
       <BufferSettings />
     </DetailsPopup>
   );

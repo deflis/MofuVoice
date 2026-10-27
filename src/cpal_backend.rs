@@ -252,11 +252,35 @@ fn supported_rates(
             .collect()
     };
     let mut rates = crate::backend::DeviceSampleRates {
+        channels: Vec::new(),
         input: Vec::new(),
         output: Vec::new(),
         common: Vec::new(),
     };
     for rate in crate::SAMPLE_RATES {
+        let count = |ranges: &[SupportedStreamConfigRange], format| {
+            ranges
+                .iter()
+                .filter(|c| {
+                    c.min_sample_rate() <= rate
+                        && c.max_sample_rate() >= rate
+                        && c.sample_format() == format
+                })
+                .map(|c| c.channels() as usize)
+                .max()
+                .unwrap_or(0)
+        };
+        for format in [SampleFormat::F32, SampleFormat::I32, SampleFormat::I16] {
+            let input = count(input, format);
+            let output = count(output, format);
+            if input > 0 && output > 0 {
+                rates.channels.push(crate::backend::DeviceChannels {
+                    sample_rate: rate,
+                    input,
+                    output,
+                });
+            }
+        }
         let input = formats_at(input, rate);
         let output = formats_at(output, rate);
         if !input.is_empty() {
@@ -929,6 +953,82 @@ mod tests {
     ) -> SupportedStreamConfigRange {
         SupportedStreamConfigRange::new(channels, rate, rate, buffer, format)
     }
+    #[test]
+    fn channel_layouts_exclude_incompatible_formats_and_preserve_duplex_pairs() {
+        let buffer = SupportedBufferSize::Unknown;
+        let input = [
+            range(SampleFormat::F32, 8, 48000, buffer),
+            range(SampleFormat::I16, 2, 48000, buffer),
+        ];
+        let output = [range(SampleFormat::I16, 8, 48000, buffer)];
+        let rates = supported_rates(&input, &output);
+        assert_eq!(
+            rates.channels,
+            vec![crate::backend::DeviceChannels {
+                sample_rate: 48000,
+                input: 2,
+                output: 8
+            }]
+        );
+        let output = [
+            range(SampleFormat::F32, 2, 48000, buffer),
+            range(SampleFormat::I16, 8, 48000, buffer),
+        ];
+        let rates = supported_rates(&input, &output);
+        assert_eq!(rates.channels.len(), 2);
+        for layout in rates.channels {
+            for input_channel in 1..=layout.input {
+                for output_channel in 1..=layout.output {
+                    let routing = ChannelRouting {
+                        input_channel,
+                        output_channels: vec![output_channel],
+                    };
+                    assert!(negotiate_routing_at_rate(
+                        &input,
+                        &output,
+                        128,
+                        &routing,
+                        layout.sample_rate
+                    )
+                    .is_ok());
+                }
+            }
+        }
+        assert!(negotiate_routing_at_rate(
+            &input,
+            &output,
+            128,
+            &ChannelRouting {
+                input_channel: 8,
+                output_channels: vec![8]
+            },
+            48000
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn channel_choices_follow_rate_and_supported_formats() {
+        let buffer = SupportedBufferSize::Unknown;
+        let input = [
+            range(SampleFormat::F32, 8, 44100, buffer),
+            range(SampleFormat::I16, 2, 48000, buffer),
+            range(SampleFormat::U16, 16, 48000, buffer),
+        ];
+        let output = [range(SampleFormat::I16, 4, 48000, buffer)];
+        let rates = supported_rates(&input, &output);
+        assert_eq!(
+            rates.channels,
+            vec![crate::backend::DeviceChannels {
+                sample_rate: 48000,
+                input: 2,
+                output: 4
+            },]
+        );
+        let empty = supported_rates(&[], &[]);
+        assert!(empty.channels.is_empty());
+    }
+
     #[test]
     fn device_rates_include_only_engine_formats_and_require_a_common_format() {
         let buffer = SupportedBufferSize::Unknown;

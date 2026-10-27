@@ -78,10 +78,21 @@ impl ChannelRouting {
 #[cfg_attr(feature = "desktop", derive(serde::Serialize))]
 #[cfg_attr(feature = "desktop", serde(rename_all = "camelCase"))]
 pub struct DeviceSampleRates {
+    pub channels: Vec<DeviceChannels>,
     pub input: Vec<u32>,
     pub output: Vec<u32>,
     /// Requires a common sample format as well as the same rate.
     pub common: Vec<u32>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "desktop", derive(serde::Serialize))]
+#[cfg_attr(feature = "desktop", serde(rename_all = "camelCase"))]
+pub struct DeviceChannels {
+    /// Each entry is a compatible duplex layout; maxima from different entries cannot be combined.
+    pub sample_rate: u32,
+    pub input: usize,
+    pub output: usize,
 }
 
 pub struct AudioInspection {
@@ -263,7 +274,19 @@ impl AudioBackend for AsioBackend {
     fn supported_sample_rates(&self, name: &str) -> Result<DeviceSampleRates> {
         let driver = load_driver(name)?;
         let rates = crate::asio::supported_sample_rates(&driver)?;
+        let channels = driver.channels()?;
+        if !(1..=512).contains(&channels.ins) || !(1..=512).contains(&channels.outs) {
+            return Err("ASIO requires 1..512 input and output channels".into());
+        }
         Ok(DeviceSampleRates {
+            channels: rates
+                .iter()
+                .map(|&sample_rate| DeviceChannels {
+                    sample_rate,
+                    input: channels.ins as usize,
+                    output: channels.outs as usize,
+                })
+                .collect(),
             input: rates.clone(),
             output: rates.clone(),
             common: rates,

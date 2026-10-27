@@ -2,7 +2,6 @@ import styles from "../settings.module.css";
 import type { RateResult } from "./deviceSampleRates";
 import { useSampleRateSettings } from "./hooks";
 import { useSettingsLocked } from "../hooks";
-import { useDeviceSampleRates } from "./useDeviceSampleRates";
 
 function ratesText(rates: number[]) {
   return rates.length ? rates.map((rate) => `${rate.toLocaleString()} Hz`).join("、") : "なし";
@@ -59,11 +58,9 @@ function SupportedRates({
   return <p className={styles.muted}>{message}</p>;
 }
 
-export function SampleRateSettings() {
-  const { device, outputDevice, resolvedBackend, sampleRate, setSampleRate } =
-    useSampleRateSettings();
+export function SampleRateSettings({ result }: { result: RateResult | undefined }) {
+  const { device, resolvedBackend, sampleRate, setSampleRate } = useSampleRateSettings();
   const locked = useSettingsLocked();
-  const result = useDeviceSampleRates({ backend: resolvedBackend, device, outputDevice }, locked);
   return (
     <>
       <label>
