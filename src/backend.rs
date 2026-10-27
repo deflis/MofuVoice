@@ -89,6 +89,7 @@ pub struct DeviceSampleRates {
 #[cfg_attr(feature = "desktop", derive(serde::Serialize))]
 #[cfg_attr(feature = "desktop", serde(rename_all = "camelCase"))]
 pub struct DeviceChannels {
+    /// Each entry is a compatible duplex layout; maxima from different entries cannot be combined.
     pub sample_rate: u32,
     pub input: usize,
     pub output: usize,

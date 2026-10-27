@@ -2,11 +2,13 @@ import styles from "../settings.module.css";
 import deviceStyles from "./devices.module.css";
 import { useChannelRouting, useSampleRateSettings } from "./hooks";
 import type { RateResult } from "./deviceSampleRates";
+import { channelLimits } from "./deviceChannels";
 
 export function ChannelRoutingDetails({ result }: { result: RateResult | undefined }) {
   const { inputChannel, outputChannels, setInputChannel, setOutputChannels } = useChannelRouting();
   const { sampleRate } = useSampleRateSettings();
-  const channels = result?.rates?.channels.find((entry) => entry.sampleRate === sampleRate);
+  const channels =
+    result?.rates && channelLimits(result.rates.channels, sampleRate, inputChannel, outputChannels);
   const inputChoices = Array.from({ length: channels?.input ?? 0 }, (_, index) => index + 1);
   const outputChoices = channels
     ? [
@@ -40,7 +42,7 @@ export function ChannelRoutingDetails({ result }: { result: RateResult | undefin
       </fieldset>
       {!result && <p>利用可能なチャンネルを確認中です。音声動作中は停止して確認してください。</p>}
       {result?.error && <p role="alert">チャンネル情報を取得できません：{result.error}</p>}
-      {result?.rates && (!channels || !channels.input || !channels.output) && (
+      {result?.rates && !channels?.available && (
         <p role="alert">このサンプリングレートで利用できる入出力チャンネルがありません。</p>
       )}
       {channels &&
