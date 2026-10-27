@@ -10,6 +10,7 @@ pub(crate) mod gain;
 pub(crate) mod phase;
 pub(crate) mod psola;
 mod sample;
+pub(crate) mod sinc;
 pub(crate) mod window;
 
 pub use sample::Sample;

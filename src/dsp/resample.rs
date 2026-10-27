@@ -1,13 +1,15 @@
 //! Streaming windowed-sinc rate conversion. Storage and kernels are prepared off-thread.
-use std::f64::consts::{PI, TAU};
+use crate::dsp::sinc::{fill_kernels, select_dot, Dot, PHASES};
+#[cfg(test)]
+use std::f64::consts::TAU;
 
 const RADIUS: usize = 64;
-const PHASES: usize = 256;
 
 pub(crate) struct RateConverter {
     input_rate: u32,
     output_rate: u32,
     kernels: Vec<f64>,
+    dot: Dot,
     history: Vec<f64>,
     radius: usize,
     taps: usize,
@@ -24,32 +26,12 @@ impl RateConverter {
         let taps = radius * 2 + 1;
         let cutoff = 0.45 * (output_rate as f64 / input_rate as f64).min(1.0);
         let mut kernels = vec![0.0; (PHASES + 1) * taps];
-        for phase in 0..=PHASES {
-            let kernel = &mut kernels[phase * taps..(phase + 1) * taps];
-            for (i, tap) in kernel.iter_mut().enumerate() {
-                let x = i as f64 - radius as f64 - phase as f64 / PHASES as f64;
-                let t = x / radius as f64;
-                let window = if t.abs() < 1.0 {
-                    0.42 + 0.5 * (PI * t).cos() + 0.08 * (TAU * t).cos()
-                } else {
-                    0.0
-                };
-                *tap = window
-                    * if x.abs() < 1e-12 {
-                        2.0 * cutoff
-                    } else {
-                        (TAU * cutoff * x).sin() / (PI * x)
-                    };
-            }
-            let sum: f64 = kernel.iter().sum();
-            for tap in kernel {
-                *tap /= sum;
-            }
-        }
+        fill_kernels(&mut kernels, radius, radius as f64, cutoff);
         Ok(Self {
             input_rate,
             output_rate,
             kernels,
+            dot: select_dot(),
             history: vec![0.0; (taps + 1).next_power_of_two()],
             radius,
             taps,
@@ -82,15 +64,26 @@ impl RateConverter {
                 / self.output_rate as f64;
             let index = phase.floor() as usize;
             let fraction = phase - index as f64;
-            let mut value = 0.0;
-            for i in 0..self.taps {
-                let position = center + i as i64 - self.radius as i64;
-                if position >= 0 {
-                    let a = self.kernels[index * self.taps + i];
-                    let b = self.kernels[(index + 1) * self.taps + i];
-                    value += self.history[position as usize % self.history.len()]
-                        * (a + fraction * (b - a));
-                }
+            let lower = &self.kernels[index * self.taps..(index + 1) * self.taps];
+            let upper = &self.kernels[(index + 1) * self.taps..(index + 2) * self.taps];
+            let first = center - self.radius as i64;
+            let skip = (-first).max(0).min(self.taps as i64) as usize;
+            let start = (first + skip as i64) as usize % self.history.len();
+            let count = (self.taps - skip).min(self.history.len() - start);
+            let split = skip + count;
+            let mut value = (self.dot)(
+                &self.history[start..start + count],
+                &lower[skip..split],
+                &upper[skip..split],
+                fraction,
+            );
+            if split < self.taps {
+                value += (self.dot)(
+                    &self.history[..self.taps - split],
+                    &lower[split..],
+                    &upper[split..],
+                    fraction,
+                );
             }
             emit(value);
             self.next += self.input_rate as u64;
