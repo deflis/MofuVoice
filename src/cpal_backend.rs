@@ -444,6 +444,19 @@ type BlockProcessor<I, O> =
     fn(&mut AudioProcessor<I>, &[I], &mut [O]) -> std::result::Result<u64, &'static str>;
 type InputCallback<I> = Box<dyn FnMut(&[I]) + Send>;
 
+// Queue samples are native output frames, including while capture is resampling.
+fn input_reserve(frames: usize, input_rate: u32, output_rate: u32) -> usize {
+    frames
+        .saturating_mul(output_rate as usize)
+        .div_ceil(input_rate as usize)
+        .saturating_mul(2)
+}
+
+fn queue_layout(frames: usize, input_rate: u32, output_rate: u32) -> (usize, usize) {
+    let reserve = input_reserve(frames, input_rate, output_rate).max(frames * 2);
+    (reserve, (reserve * 4).max(32768).next_power_of_two())
+}
+
 struct Capture<I: Sample, O> {
     input_channel: usize,
     processor: AudioProcessor<I>,
@@ -552,6 +565,9 @@ impl<O: Sample> ResampledCapture<O> {
             metrics,
             ..
         } = self;
+        // Publish the observed input-period requirement before publishing its samples.
+        let reserve = input_reserve(frames, self.input_rate, metrics.sample_rate);
+        metrics.prime_frames.fetch_max(reserve, Ordering::Relaxed);
         for frame in data.chunks_exact(self.channels) {
             let sample = frame[self.input_channel - 1];
             metrics
@@ -627,9 +643,8 @@ impl<T: Sample> Playback<T> {
             let target = self
                 .metrics
                 .prime_frames
-                .load(Ordering::Relaxed)
+                .fetch_max(frames.saturating_mul(2), Ordering::Relaxed)
                 .max(frames.saturating_mul(2));
-            self.metrics.prime_frames.store(target, Ordering::Relaxed);
             self.metrics.queue_depth.store(queued, Ordering::Relaxed);
             if target > self.queue.capacity() {
                 self.metrics
@@ -705,11 +720,15 @@ fn build<
     } else {
         0
     };
-    let capacity = (frames as usize * 8).max(32768).next_power_of_two();
+    let (reserve, capacity) = queue_layout(
+        frames as usize,
+        prepared.input_config.sample_rate,
+        prepared.output_config.sample_rate,
+    );
     let (producer, consumer) = audio_queue::channel::<O>(capacity);
     let rate = prepared.configuration.sample_rate as u32;
     let metrics = Arc::new(Metrics::with_sample_rate(
-        frames as usize * 2,
+        reserve,
         prepared.output_config.sample_rate,
     ));
     let output_channels = routing.output_channels.clone();
@@ -1510,6 +1529,99 @@ mod tests {
                 assert_eq!(supported_rates(&input, &output).common, [RATE]);
             }
         }
+    }
+
+    #[test]
+    fn resampling_primes_in_output_frames_across_device_callback_schedules() {
+        for (input_rate, dsp_rate, output_rate, input_period, output_period) in [
+            (44100, 48000, 192000, 128, 128),
+            (44100, 48000, 192000, 512, 128),
+            (96000, 48000, 44100, 128, 512),
+            (44100, 44100, 48000, 128, 128),
+        ] {
+            let (reserve, capacity) = queue_layout(128, input_rate, output_rate);
+            let (queue, consumer) = audio_queue::channel::<f32>(capacity);
+            let metrics = Arc::new(Metrics::with_sample_rate(reserve, output_rate));
+            metrics.active.store(true, Ordering::Release);
+            let options = Options::parse(["--pitch", "0"].map(String::from)).unwrap();
+            let mut capture = ResampledCapture {
+                input_channel: 1,
+                channels: 1,
+                input_rate,
+                input_converter: crate::dsp::resample::RateConverter::new(input_rate, dsp_rate)
+                    .unwrap(),
+                output_converter: crate::dsp::resample::RateConverter::new(dsp_rate, output_rate)
+                    .unwrap(),
+                processor: AudioProcessor::new(dsp_rate, 1, DspSettings::from(&options)).unwrap(),
+                queue,
+                metrics: metrics.clone(),
+            };
+            let mut playback = Playback {
+                output_channels: vec![1],
+                channels: 1,
+                queue: consumer,
+                metrics: metrics.clone(),
+                primed: false,
+            };
+            let delay = (crate::dsp::resample::RateConverter::delay_ms(input_rate, dsp_rate)
+                + crate::dsp::resample::RateConverter::delay_ms(dsp_rate, output_rate))
+                / 1000.0;
+            let mut captured = 0_u64;
+            let mut played = 0_u64;
+            // Merge independent device clocks, including output callbacks between captures.
+            while captured < 64 {
+                if captured * input_period as u64 * output_rate as u64
+                    <= played * output_period as u64 * input_rate as u64
+                {
+                    let input: Vec<f32> = (0..input_period)
+                        .map(|i| {
+                            let position = captured * input_period as u64 + i as u64;
+                            (0.25
+                                * (std::f64::consts::TAU * 1000.0 * position as f64
+                                    / input_rate as f64)
+                                    .sin()) as f32
+                        })
+                        .collect();
+                    capture.process(&input);
+                    captured += 1;
+                } else {
+                    let before = metrics.played_frames.load(Ordering::Relaxed);
+                    let mut output = vec![0.0; output_period];
+                    playback.process(&mut output);
+                    if metrics.played_frames.load(Ordering::Relaxed) > before {
+                        for (i, sample) in output.iter().enumerate() {
+                            let position = before + i as u64;
+                            if position > 1024 {
+                                let expected = 0.25
+                                    * (std::f64::consts::TAU
+                                        * 1000.0
+                                        * (position as f64 / output_rate as f64 - delay))
+                                        .sin();
+                                assert!((*sample as f64 - expected).abs() < 0.001);
+                            }
+                        }
+                    }
+                    played += 1;
+                }
+                assert_eq!(metrics.faults.load(Ordering::Relaxed), 0,
+                    "{input_rate}->{dsp_rate}->{output_rate}, periods {input_period}/{output_period}");
+            }
+            assert!(playback.primed);
+            assert!(metrics.played_frames.load(Ordering::Relaxed) > 0);
+            assert!(
+                metrics.prime_frames.load(Ordering::Relaxed)
+                    >= input_reserve(input_period, input_rate, output_rate)
+            );
+        }
+    }
+
+    #[test]
+    fn queue_capacity_covers_converted_periods_at_extreme_supported_rates() {
+        assert_eq!(input_reserve(128, 44100, 192000), 1116);
+        assert_eq!(queue_layout(128, 48000, 48000), (256, 32768));
+        let (reserve, capacity) = queue_layout(8192, 8000, 192000);
+        assert_eq!(reserve, 393216);
+        assert!(capacity >= reserve * 4 && capacity.is_power_of_two());
     }
 
     #[test]
