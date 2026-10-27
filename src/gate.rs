@@ -3,7 +3,6 @@
 use crate::dsp::{
     envelope::decay,
     gain::{amplitude, amplitude_db},
-    Sample,
 };
 use crate::RATE;
 use std::{error::Error, fmt};
@@ -275,16 +274,16 @@ impl NoiseGate {
         input * self.gain
     }
 
-    pub fn process_in_place<T: Sample>(&mut self, samples: &mut [T]) {
+    pub fn process_in_place(&mut self, samples: &mut [f64]) {
         if !self.enabled {
             return;
         }
         for sample in samples {
-            *sample = T::from_normalized(self.process_sample(sample.normalized()));
+            *sample = self.process_sample(*sample);
         }
     }
 
-    pub fn process_block<T: Sample>(&mut self, input: &[T], output: &mut [T]) {
+    pub fn process_block(&mut self, input: &[f64], output: &mut [f64]) {
         assert_eq!(
             input.len(),
             output.len(),
@@ -295,7 +294,7 @@ impl NoiseGate {
             return;
         }
         for (sample, out) in input.iter().zip(output.iter_mut()) {
-            *out = T::from_normalized(self.process_sample(sample.normalized()));
+            *out = self.process_sample(*sample);
         }
     }
 }
@@ -351,11 +350,9 @@ mod tests {
     }
 
     #[test]
-    fn active_formats_and_irregular_blocks_preserve_state() {
-        let input: Vec<f32> = (0..48_000)
-            .map(|i| {
-                (amplitude(-80.0 + (i % 24_000) as f64 / 400.0) * (i as f64 * 0.07).sin()) as f32
-            })
+    fn irregular_blocks_preserve_state() {
+        let input: Vec<f64> = (0..48_000)
+            .map(|i| amplitude(-80.0 + (i % 24_000) as f64 / 400.0) * (i as f64 * 0.07).sin())
             .collect();
         for threshold in [GateThreshold::Db(-40.0), GateThreshold::Auto] {
             let mut whole = input.clone();
@@ -374,24 +371,6 @@ mod tests {
                 position = end;
             }
             assert_eq!(whole, chunks);
-            let mut short: Vec<i16> = input
-                .iter()
-                .map(|x| i16::from_normalized(*x as f64))
-                .collect();
-            let mut int: Vec<i32> = input
-                .iter()
-                .map(|x| i32::from_normalized(*x as f64))
-                .collect();
-            NoiseGate::new(true, threshold, 5.0, 80.0)
-                .unwrap()
-                .process_in_place(&mut short);
-            NoiseGate::new(true, threshold, 5.0, 80.0)
-                .unwrap()
-                .process_in_place(&mut int);
-            for i in 0..input.len() {
-                assert!((short[i].normalized() - whole[i] as f64).abs() < 1e-4);
-                assert!((int[i].normalized() - whole[i] as f64).abs() < 1e-6);
-            }
         }
     }
 
@@ -410,18 +389,9 @@ mod tests {
     }
 
     #[test]
-    fn disabled_preserves_integer_bits() {
-        let mut gate = NoiseGate::new(false, GateThreshold::Auto, 5.0, 80.0).unwrap();
-        let input = [i32::MIN, -1, 0, 1, i32::MAX];
-        let mut output = [0; 5];
-        gate.process_block(&input, &mut output);
-        assert_eq!(input, output);
-    }
-
-    #[test]
     fn invalid_samples_are_silenced_and_follow_the_silence_envelope() {
-        let input = [0.5_f32, f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.25];
-        let clean = [0.5_f32, 0.0, 0.0, 0.0, 0.25];
+        let input = [0.5_f64, f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.25];
+        let clean = [0.5_f64, 0.0, 0.0, 0.0, 0.25];
         let mut expected = [0.0; 5];
         NoiseGate::new(true, GateThreshold::Auto, 5.0, 80.0)
             .unwrap()
@@ -442,34 +412,34 @@ mod tests {
         NoiseGate::new(false, GateThreshold::Auto, 5.0, 80.0)
             .unwrap()
             .process_in_place(&mut bypass);
-        assert_eq!(bypass.map(f32::to_bits), input.map(f32::to_bits));
+        assert_eq!(bypass.map(f64::to_bits), input.map(f64::to_bits));
     }
 
     #[test]
     fn silence_stays_near_zero_when_open_threshold_is_high() {
         let mut gate = NoiseGate::new(true, GateThreshold::Db(-20.0), 1.0, 5.0).unwrap();
-        let input = vec![0.001_f32; 4_800];
+        let input = vec![0.001_f64; 4_800];
         let mut output = vec![0.0; input.len()];
         gate.process_block(&input, &mut output);
         let tail = &output[output.len() - 1_000..];
-        let rms = (tail.iter().map(|s| s * s).sum::<f32>() / tail.len() as f32).sqrt();
+        let rms = (tail.iter().map(|s| s * s).sum::<f64>() / tail.len() as f64).sqrt();
         assert!(rms < 0.0002, "rms={rms}");
     }
 
     #[test]
     fn strong_tone_passes_after_attack() {
         let mut gate = NoiseGate::new(true, GateThreshold::Db(-40.0), 1.0, 20.0).unwrap();
-        let input: Vec<f32> = (0..4_800)
-            .map(|i| (std::f64::consts::TAU * 440.0 * i as f64 / RATE as f64).sin() as f32 * 0.5)
+        let input: Vec<f64> = (0..4_800)
+            .map(|i| (std::f64::consts::TAU * 440.0 * i as f64 / RATE as f64).sin() * 0.5)
             .collect();
         let mut output = vec![0.0; input.len()];
         gate.process_block(&input, &mut output);
         let start = output.len() - 1_000;
-        let err: f32 = input[start..]
+        let err: f64 = input[start..]
             .iter()
             .zip(&output[start..])
             .map(|(a, b)| (a - b).abs())
-            .sum::<f32>()
+            .sum::<f64>()
             / 1_000.0;
         assert!(err < 0.02, "mean abs err={err}");
     }
@@ -477,18 +447,18 @@ mod tests {
     #[test]
     fn auto_threshold_learns_quiet_floor_and_opens_for_speech() {
         let mut gate = NoiseGate::new(true, GateThreshold::Auto, 2.0, 30.0).unwrap();
-        let noise: Vec<f32> = vec![0.0005; 48_000];
+        let noise: Vec<f64> = vec![0.0005; 48_000];
         let mut scratch = vec![0.0; noise.len()];
         gate.process_block(&noise, &mut scratch);
-        let speech: Vec<f32> = (0..24_000)
-            .map(|i| (std::f64::consts::TAU * 220.0 * i as f64 / RATE as f64).sin() as f32 * 0.25)
+        let speech: Vec<f64> = (0..24_000)
+            .map(|i| (std::f64::consts::TAU * 220.0 * i as f64 / RATE as f64).sin() * 0.25)
             .collect();
         let mut out = vec![0.0; speech.len()];
         gate.process_block(&speech, &mut out);
         let peak = out[out.len() - 2_000..]
             .iter()
             .map(|s| s.abs())
-            .fold(0.0_f32, f32::max);
+            .fold(0.0_f64, f64::max);
         assert!(peak > 0.1, "peak={peak}");
         assert!(gate.threshold_db() > gate.noise_floor_db);
     }
@@ -497,10 +467,10 @@ mod tests {
     fn zero_additional_latency_on_impulse_when_open() {
         let mut gate = NoiseGate::new(true, GateThreshold::Db(-60.0), 0.1, 0.1).unwrap();
         // Prime the gate open with a loud tone.
-        let prime = vec![0.5_f32; 2_000];
+        let prime = vec![0.5_f64; 2_000];
         let mut scratch = vec![0.0; prime.len()];
         gate.process_block(&prime, &mut scratch);
-        let mut input = vec![0.0_f32; 64];
+        let mut input = vec![0.0_f64; 64];
         input[0] = 1.0;
         let mut output = vec![0.0; 64];
         gate.process_block(&input, &mut output);
@@ -510,9 +480,9 @@ mod tests {
     #[test]
     fn auto_suppresses_repeated_quiet_clicks_after_silence() {
         let mut gate = NoiseGate::new(true, GateThreshold::Auto, 5.0, 80.0).unwrap();
-        gate.process_in_place(&mut vec![0.0_f32; RATE as usize * 2]);
-        let amplitude = amplitude(-52.0) as f32;
-        let mut clicks = vec![0.0_f32; RATE as usize];
+        gate.process_in_place(&mut vec![0.0_f64; RATE as usize * 2]);
+        let amplitude = amplitude(-52.0);
+        let mut clicks = vec![0.0_f64; RATE as usize];
         for start in (0..clicks.len()).step_by(RATE as usize / 10) {
             // Three millisecond alternating transients, ten keystrokes per second.
             for i in 0..144 {
@@ -520,7 +490,7 @@ mod tests {
             }
         }
         gate.process_in_place(&mut clicks);
-        let peak = clicks.iter().map(|x| x.abs()).fold(0.0_f32, f32::max);
+        let peak = clicks.iter().map(|x| x.abs()).fold(0.0_f64, f64::max);
         assert!(peak < amplitude * 0.1, "click attenuation <20 dB: {peak}");
         assert_eq!(gate.threshold_db(), AUTO_MIN_THRESHOLD_DB);
         assert_eq!(gate.hold_remaining, 0, "clicks must not trigger hold");
@@ -529,12 +499,11 @@ mod tests {
     #[test]
     fn auto_opens_for_quiet_voice_after_silence_and_closes_after_speech() {
         let mut gate = NoiseGate::new(true, GateThreshold::Auto, 5.0, 80.0).unwrap();
-        gate.process_in_place(&mut vec![0.0_f32; RATE as usize * 2]);
-        let tone_amplitude = amplitude(-34.0) as f32;
-        let mut voice: Vec<f32> = (0..RATE as usize / 2)
+        gate.process_in_place(&mut vec![0.0_f64; RATE as usize * 2]);
+        let tone_amplitude = amplitude(-34.0);
+        let mut voice: Vec<f64> = (0..RATE as usize / 2)
             .map(|i| {
-                (std::f64::consts::TAU * 180.0 * i as f64 / RATE as f64).sin() as f32
-                    * tone_amplitude
+                (std::f64::consts::TAU * 180.0 * i as f64 / RATE as f64).sin() * tone_amplitude
             })
             .collect();
         let original = voice.clone();
@@ -547,20 +516,18 @@ mod tests {
         for (input, output) in original[2400..].iter().zip(&voice[2400..]) {
             assert!((input - output).abs() < tone_amplitude * 0.001);
         }
-        gate.process_in_place(&mut vec![0.0_f32; RATE as usize]);
-        let mut noise = vec![amplitude(-52.0) as f32; RATE as usize / 2];
+        gate.process_in_place(&mut vec![0.0_f64; RATE as usize]);
+        let mut noise = vec![amplitude(-52.0); RATE as usize / 2];
         gate.process_in_place(&mut noise);
-        assert!(noise
-            .iter()
-            .all(|x| x.abs() < amplitude(-52.0) as f32 * 0.1));
+        assert!(noise.iter().all(|x| x.abs() < amplitude(-52.0) * 0.1));
     }
 
     #[test]
     fn manual_threshold_can_still_be_lower_than_auto_minimum() {
         let mut gate = NoiseGate::new(true, GateThreshold::Db(-80.0), 5.0, 80.0).unwrap();
-        let mut quiet = vec![amplitude(-65.0) as f32; RATE as usize / 2];
+        let mut quiet = vec![amplitude(-65.0); RATE as usize / 2];
         gate.process_in_place(&mut quiet);
         assert_eq!(gate.threshold_db(), -80.0);
-        assert!(quiet.last().unwrap().abs() > amplitude(-65.0) as f32 * 0.99);
+        assert!(quiet.last().unwrap().abs() > amplitude(-65.0) * 0.99);
     }
 }

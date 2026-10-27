@@ -25,9 +25,9 @@ fn td_psola_keeps_voiced_glides_phase_continuous() {
             phase
         })
         .collect();
-    let input: Vec<f32> = phases
+    let input: Vec<f64> = phases
         .iter()
-        .map(|&p| (0.1 * p.cos() + 0.04 * (3.0 * p).cos()) as f32)
+        .map(|&p| 0.1 * p.cos() + 0.04 * (3.0 * p).cos())
         .collect();
     for pitch in [3.0, 7.0, 12.0] {
         let ratio = pitch_ratio(pitch).unwrap();
@@ -58,15 +58,15 @@ fn td_psola_keeps_voiced_glides_phase_continuous() {
     }
 }
 
-fn power(signal: &[f32], frequency: f64, rate: u32) -> f64 {
+fn power(signal: &[f64], frequency: f64, rate: u32) -> f64 {
     let (mut re, mut im) = (0.0, 0.0);
     let step = std::f64::consts::TAU * frequency / rate as f64;
     let (cos_step, sin_step) = (step.cos(), step.sin());
     let (mut phase_re, mut phase_im) = (1.0, 0.0);
     for (i, &value) in signal.iter().enumerate() {
         let window = 0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / signal.len() as f64).cos();
-        re += value as f64 * window * phase_re;
-        im += value as f64 * window * phase_im;
+        re += value * window * phase_re;
+        im += value * window * phase_im;
         (phase_re, phase_im) = (
             phase_re * cos_step - phase_im * sin_step,
             phase_re * sin_step + phase_im * cos_step,
@@ -78,7 +78,7 @@ fn power(signal: &[f32], frequency: f64, rate: u32) -> f64 {
 #[test]
 fn td_psola_preserves_a_vowel_resonance_when_changing_pitch() {
     for rate in SAMPLE_RATES {
-        let input: Vec<f32> = (0..rate as usize)
+        let input: Vec<f64> = (0..rate as usize)
             .map(|i| {
                 let phase = std::f64::consts::TAU * 120.0 * i as f64 / rate as f64;
                 (1..=24)
@@ -88,7 +88,7 @@ fn td_psola_preserves_a_vowel_resonance_when_changing_pitch() {
                             + 0.02 * (-0.5 * ((frequency - 1200.0) / 180.0).powi(2)).exp();
                         amplitude * (phase * h as f64).cos()
                     })
-                    .sum::<f64>() as f32
+                    .sum::<f64>()
             })
             .collect();
         for pitch in [-12.0, -3.0, 3.0, 7.0, 12.0] {
@@ -111,14 +111,14 @@ fn td_psola_preserves_a_vowel_resonance_when_changing_pitch() {
 #[test]
 fn td_psola_handles_voicing_boundaries_retargeting_and_flush_without_stale_grains() {
     let mut seed = 19_u32;
-    let input: Vec<f32> = (0..48000)
+    let input: Vec<f64> = (0..48000)
         .map(|i| {
             let phase = std::f64::consts::TAU * 113.0 * i as f64 / 48000.0;
             seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
             match i / 12000 {
                 0 => 0.0,
-                1 | 3 => (0.1 * phase.cos() + 0.03 * (3.0 * phase).cos()) as f32,
-                _ => (0.03 * (seed as f64 / u32::MAX as f64 - 0.5)) as f32,
+                1 | 3 => 0.1 * phase.cos() + 0.03 * (3.0 * phase).cos(),
+                _ => 0.03 * (seed as f64 / u32::MAX as f64 - 0.5),
             }
         })
         .collect();
@@ -129,7 +129,7 @@ fn td_psola_handles_voicing_boundaries_retargeting_and_flush_without_stale_grain
         dsp.process_block(&input, &mut output);
         assert!(output.iter().all(|x| x.is_finite() && x.abs() <= 1.0));
     }
-    let silence = vec![0.0_f32; 20000];
+    let silence = vec![0.0_f64; 20000];
     let mut output = silence.clone();
     dsp.process_block(&silence, &mut output);
     assert!(output[12000..].iter().all(|&x| x == 0.0));
@@ -142,14 +142,14 @@ fn td_psola_handles_voicing_boundaries_retargeting_and_flush_without_stale_grain
 #[test]
 fn resampled_td_psola_handles_voicing_boundaries_and_flushes_cleanly() {
     let mut seed = 19_u32;
-    let input: Vec<f32> = (0..48000)
+    let input: Vec<f64> = (0..48000)
         .map(|i| {
             let phase = std::f64::consts::TAU * 113.0 * i as f64 / 48000.0;
             seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
             match i / 12000 {
                 0 => 0.0,
-                1 | 3 => (0.1 * phase.cos() + 0.03 * (3.0 * phase).cos()) as f32,
-                _ => (0.03 * (seed as f64 / u32::MAX as f64 - 0.5)) as f32,
+                1 | 3 => 0.1 * phase.cos() + 0.03 * (3.0 * phase).cos(),
+                _ => 0.03 * (seed as f64 / u32::MAX as f64 - 0.5),
             }
         })
         .collect();
@@ -168,7 +168,7 @@ fn resampled_td_psola_handles_voicing_boundaries_and_flushes_cleanly() {
         dsp.process_block(&input, &mut output);
         assert!(output.iter().all(|x| x.is_finite() && x.abs() <= 1.0));
     }
-    let silence = vec![0.0_f32; 20000];
+    let silence = vec![0.0_f64; 20000];
     dsp.process_block(&silence, &mut output[..silence.len()]);
     assert!(output[12000..silence.len()].iter().all(|&x| x == 0.0));
 }
@@ -178,10 +178,10 @@ fn td_psola_generates_the_requested_fundamental_at_both_device_rates() {
     for rate in SAMPLE_RATES {
         for frequency in [80.0, 113.0, 203.0] {
             for pitch in [-12.0, -3.0, 3.0, 7.0, 12.0] {
-                let input: Vec<f32> = (0..rate as usize)
+                let input: Vec<f64> = (0..rate as usize)
                     .map(|i| {
                         let phase = std::f64::consts::TAU * frequency * i as f64 / rate as f64;
-                        (0.1 * phase.cos() + 0.04 * (3.0 * phase).cos()) as f32
+                        0.1 * phase.cos() + 0.04 * (3.0 * phase).cos()
                     })
                     .collect();
                 let mut output = vec![0.0; input.len()];
@@ -205,10 +205,10 @@ fn td_psola_generates_the_requested_fundamental_at_both_device_rates() {
 
 #[test]
 fn td_psola_is_block_independent_and_preserves_neutral_sample_bits() {
-    let input: Vec<f32> = (0..20000)
+    let input: Vec<f64> = (0..20000)
         .map(|i| {
             let phase = std::f64::consts::TAU * 137.0 * i as f64 / 48000.0;
-            (0.1 * phase.cos() + 0.03 * (4.0 * phase).sin()) as f32
+            0.1 * phase.cos() + 0.03 * (4.0 * phase).sin()
         })
         .collect();
     let mut whole = vec![0.0; input.len()];
@@ -221,18 +221,10 @@ fn td_psola_is_block_independent_and_preserves_neutral_sample_bits() {
         }
         assert_eq!(whole, split);
     }
-    let floats = [f32::NAN, f32::INFINITY, -0.0, f32::from_bits(1), 0.25];
+    let floats = [f64::NAN, f64::INFINITY, -0.0, f64::from_bits(1), 0.25];
     let mut output = [0.0; 5];
     shifter(0.0).process_block(&floats, &mut output);
-    assert_eq!(floats.map(f32::to_bits), output.map(f32::to_bits));
-    let integers = [i32::MIN, -1, 0, 1, i32::MAX];
-    let mut output = [0; 5];
-    shifter(0.0).process_block(&integers, &mut output);
-    assert_eq!(integers, output);
-    let shorts = [i16::MIN, -1, 0, 1, i16::MAX];
-    let mut output = [0; 5];
-    shifter(0.0).process_block(&shorts, &mut output);
-    assert_eq!(shorts, output);
+    assert_eq!(floats.map(f64::to_bits), output.map(f64::to_bits));
 }
 
 #[test]
@@ -283,7 +275,7 @@ fn td_psola_formant_settings_and_pipeline_latency_are_validated() {
 #[test]
 fn resampled_grains_keep_td_pitch_and_move_vowel_resonance() {
     for rate in SAMPLE_RATES {
-        let input: Vec<f32> = (0..rate as usize)
+        let input: Vec<f64> = (0..rate as usize)
             .map(|i| {
                 let phase = std::f64::consts::TAU * 100.0 * i as f64 / rate as f64;
                 (1..=60)
@@ -293,7 +285,7 @@ fn resampled_grains_keep_td_pitch_and_move_vowel_resonance() {
                             + 0.015 * (-0.5 * ((frequency - 1500.0) / 230.0).powi(2)).exp();
                         amplitude * (phase * h as f64).cos()
                     })
-                    .sum::<f64>() as f32
+                    .sum::<f64>()
             })
             .collect();
         for pitch in [-3.0, 7.0, 12.0] {
@@ -333,10 +325,10 @@ fn resampled_grains_keep_td_pitch_and_move_vowel_resonance() {
 
 #[test]
 fn resampled_grains_are_block_independent_during_pitch_changes() {
-    let input: Vec<f32> = (0..24000)
+    let input: Vec<f64> = (0..24000)
         .map(|i| {
             let p = std::f64::consts::TAU * 113.0 * i as f64 / 48000.0;
-            (0.1 * p.cos() + 0.03 * (3.0 * p).cos()) as f32
+            0.1 * p.cos() + 0.03 * (3.0 * p).cos()
         })
         .collect();
     let mut reference = None;
@@ -377,17 +369,17 @@ fn resampling_moves_unvoiced_resonance_without_changing_duration() {
         let radius = 0.94;
         let coefficient = 2.0 * radius * (std::f64::consts::TAU * 1800.0 / rate as f64).cos();
         let (mut a, mut b) = (0.0, 0.0);
-        let input: Vec<f32> = (0..rate as usize)
+        let input: Vec<f64> = (0..rate as usize)
             .map(|_| {
                 seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
                 let x = 0.005 * (seed as f64 / u32::MAX as f64 - 0.5) + coefficient * a
                     - radius * radius * b;
                 b = a;
                 a = x;
-                x as f32
+                x
             })
             .collect();
-        let averaged_power = |signal: &[f32], frequency| {
+        let averaged_power = |signal: &[f64], frequency| {
             signal
                 .windows(4096)
                 .step_by(2048)
@@ -438,7 +430,7 @@ fn resampling_moves_unvoiced_resonance_without_changing_duration() {
 fn resampled_grains_keep_fixed_delay_and_flush_without_drifting() {
     let impulse = 16384;
     for shift in [-12.0, -4.0, 2.53, 12.0] {
-        let mut input = vec![0.0_f32; 48000];
+        let mut input = vec![0.0_f64; 48000];
         input[impulse] = 0.25;
         let mut output = vec![0.0; input.len()];
         let mut dsp = PitchShifter::new(
@@ -451,11 +443,11 @@ fn resampled_grains_keep_fixed_delay_and_flush_without_drifting() {
         )
         .unwrap();
         dsp.process_block(&input, &mut output);
-        let energy: f64 = output.iter().map(|&x| (x as f64).powi(2)).sum();
+        let energy: f64 = output.iter().map(|&x| x.powi(2)).sum();
         let centroid: f64 = output
             .iter()
             .enumerate()
-            .map(|(i, &x)| i as f64 * (x as f64).powi(2))
+            .map(|(i, &x)| i as f64 * x.powi(2))
             .sum::<f64>()
             / energy;
         eprintln!("formant={shift}: impulse centroid={centroid}");
@@ -463,7 +455,7 @@ fn resampled_grains_keep_fixed_delay_and_flush_without_drifting() {
         assert!(output[impulse + 5376 + 1024..].iter().all(|&x| x == 0.0));
         for pitch in [-12.0, 12.0, 0.0] {
             dsp.set_semitones(pitch).unwrap();
-            let silence = vec![0.0_f32; 48000];
+            let silence = vec![0.0_f64; 48000];
             dsp.process_block(&silence, &mut output);
             assert!(output.iter().all(|&x| x == 0.0));
         }
@@ -472,11 +464,11 @@ fn resampled_grains_keep_fixed_delay_and_flush_without_drifting() {
 
 #[test]
 fn extreme_independent_ratios_remain_finite_across_many_ring_wraps() {
-    let input: Vec<f32> = (0..96000)
+    let input: Vec<f64> = (0..96000)
         .map(|i| {
             let p = std::f64::consts::TAU * 83.0 * i as f64 / 48000.0;
             if i % 24000 < 16000 {
-                (0.07 * p.cos() + 0.03 * (3.0 * p).cos()) as f32
+                0.07 * p.cos() + 0.03 * (3.0 * p).cos()
             } else {
                 0.0
             }

@@ -5,7 +5,6 @@ use crate::{
     dsp::{
         envelope::decay,
         gain::{amplitude, power},
-        Sample,
     },
     RATE,
 };
@@ -144,7 +143,7 @@ impl DeEsser {
         let reduction = (excess * 0.75).min(self.parameters.range_db) * weight;
         amplitude(-reduction)
     }
-    pub fn process_in_place<T: Sample>(&mut self, samples: &mut [T]) {
+    pub fn process_in_place(&mut self, samples: &mut [f64]) {
         if !self.enabled {
             return;
         }
@@ -152,21 +151,21 @@ impl DeEsser {
             // At zero range, finite samples pass unchanged. Keep the active
             // filter's nonfinite-input policy without running its detectors.
             for sample in samples {
-                if !sample.normalized().is_finite() {
-                    *sample = T::default();
+                if !sample.is_finite() {
+                    *sample = 0.0;
                 }
             }
             return;
         }
         for sample in samples {
-            let input = sample.normalized();
+            let input = *sample;
             if !input.is_finite() {
                 self.previous_input = 0.0;
                 self.low = 0.0;
                 self.high_power = 0.0;
                 self.full_power = 0.0;
                 self.gain = 1.0;
-                *sample = T::default();
+                *sample = 0.0;
                 continue;
             }
             let input = input.clamp(-16.0, 16.0);
@@ -190,9 +189,9 @@ impl DeEsser {
             if 1.0 - self.gain < 1e-12 {
                 self.gain = 1.0;
             }
-            // Preserve untouched sample bits; do not quantize unity-gain integers.
+            // Preserve untouched sample bits at unity gain.
             if self.gain != 1.0 {
-                *sample = T::from_normalized(input + (self.gain - 1.0) * high);
+                *sample = input + (self.gain - 1.0) * high;
             }
             for state in [&mut self.low, &mut self.high_power, &mut self.full_power] {
                 if state.abs() < 1e-30 {
@@ -240,15 +239,13 @@ mod tests {
             }
         }
     }
-    fn tone(hz: f64, amplitude: f64) -> Vec<f32> {
+    fn tone(hz: f64, amplitude: f64) -> Vec<f64> {
         (0..RATE)
-            .map(|i| {
-                (amplitude * (std::f64::consts::TAU * hz * i as f64 / RATE as f64).sin()) as f32
-            })
+            .map(|i| amplitude * (std::f64::consts::TAU * hz * i as f64 / RATE as f64).sin())
             .collect()
     }
-    fn power(x: &[f32]) -> f64 {
-        x.iter().map(|x| (*x as f64).powi(2)).sum::<f64>() / x.len() as f64
+    fn power(x: &[f64]) -> f64 {
+        x.iter().map(|x| (*x).powi(2)).sum::<f64>() / x.len() as f64
     }
     #[test]
     fn strong_highs_reduce_but_vowels_and_quiet_highs_remain() {
@@ -270,29 +267,25 @@ mod tests {
         }
     }
     #[test]
-    fn bypass_bits_formats_and_zero_buffer_delay() {
+    fn bypass_bits_and_zero_buffer_delay() {
         let original = [
-            f32::from_bits(0x7fc01234),
+            f64::from_bits(0x7ff8_0000_0000_1234),
             -0.0,
-            f32::INFINITY,
-            f32::from_bits(1),
+            f64::INFINITY,
+            f64::from_bits(1),
         ];
         let mut output = original;
         DeEsser::new(false).process_in_place(&mut output);
-        assert_eq!(output.map(f32::to_bits), original.map(f32::to_bits));
-        let mut shorts = [i16::MIN, -1, 0, 1, i16::MAX];
-        let original = shorts;
-        DeEsser::new(false).process_in_place(&mut shorts);
-        assert_eq!(shorts, original);
-        let mut impulse = [0.5_f32, 0.0];
+        assert_eq!(output.map(f64::to_bits), original.map(f64::to_bits));
+        let mut impulse = [0.5_f64, 0.0];
         DeEsser::new(true).process_in_place(&mut impulse);
         assert!(impulse[0] > 0.49);
     }
     #[test]
     fn block_continuity_invalid_recovery_and_release() {
         let mut input = tone(8000.0, 0.4);
-        input[1500] = f32::NAN;
-        input[2000] = f32::INFINITY;
+        input[1500] = f64::NAN;
+        input[2000] = f64::INFINITY;
         let mut whole = input.clone();
         let mut chunks = input;
         DeEsser::new(true).process_in_place(&mut whole);
@@ -302,7 +295,7 @@ mod tests {
         }
         assert_eq!(whole, chunks);
         assert!(whole.iter().all(|x| x.is_finite()));
-        dsp.process_in_place(&mut vec![0.0_f32; RATE as usize * 2]);
+        dsp.process_in_place(&mut vec![0.0_f64; RATE as usize * 2]);
         assert_eq!(dsp.gain, 1.0);
         let original = tone(250.0, 0.4);
         let mut output = original.clone();
@@ -313,14 +306,14 @@ mod tests {
     fn mixed_voice_retains_low_band_and_catches_short_sibilant_burst() {
         let low = tone(250.0, 0.15);
         let high = tone(8000.0, 0.4);
-        let mut mixed: Vec<f32> = low.iter().zip(&high).map(|(a, b)| a + b).collect();
+        let mut mixed: Vec<f64> = low.iter().zip(&high).map(|(a, b)| a + b).collect();
         DeEsser::new(true).process_in_place(&mut mixed);
-        let amplitude = |samples: &[f32], hz: f64| {
+        let amplitude = |samples: &[f64], hz: f64| {
             let (mut re, mut im) = (0.0, 0.0);
             for (i, x) in samples.iter().enumerate() {
                 let phase = std::f64::consts::TAU * hz * i as f64 / RATE as f64;
-                re += *x as f64 * phase.cos();
-                im += *x as f64 * phase.sin();
+                re += *x * phase.cos();
+                im += *x * phase.sin();
             }
             2.0 * re.hypot(im) / samples.len() as f64
         };
@@ -361,33 +354,20 @@ mod tests {
             ..DeEsserParameters::default()
         };
         let input = [
-            f32::from_bits(0x7fc01234),
+            f64::from_bits(0x7ff8_0000_0000_1234),
             -0.0,
-            f32::INFINITY,
-            f32::MAX,
-            f32::from_bits(1),
+            f64::INFINITY,
+            f64::MAX,
+            f64::from_bits(1),
         ];
         let mut output = input;
         DeEsser::with_parameters(true, parameters)
             .unwrap()
             .process_in_place(&mut output);
         assert_eq!(
-            output.map(f32::to_bits),
-            [0.0_f32, -0.0, 0.0, f32::MAX, f32::from_bits(1)].map(f32::to_bits)
+            output.map(f64::to_bits),
+            [0.0_f64, -0.0, 0.0, f64::MAX, f64::from_bits(1)].map(f64::to_bits)
         );
-
-        let mut shorts = [i16::MIN, -1, 0, 1, i16::MAX];
-        let original = shorts;
-        DeEsser::with_parameters(true, parameters)
-            .unwrap()
-            .process_in_place(&mut shorts);
-        assert_eq!(shorts, original);
-        let mut ints = [i32::MIN, -1, 0, 1, i32::MAX];
-        let original = ints;
-        DeEsser::with_parameters(true, parameters)
-            .unwrap()
-            .process_in_place(&mut ints);
-        assert_eq!(ints, original);
     }
 
     #[test]
@@ -437,26 +417,6 @@ mod tests {
             }
             assert_eq!(whole, chunks);
             assert!(whole.iter().all(|x| x.is_finite()));
-        }
-    }
-    #[test]
-    fn active_integer_formats_match_float() {
-        let input = tone(8000.0, 0.4);
-        let mut float = input.clone();
-        let mut short: Vec<_> = input
-            .iter()
-            .map(|x| i16::from_normalized(*x as f64))
-            .collect();
-        let mut int: Vec<_> = input
-            .iter()
-            .map(|x| i32::from_normalized(*x as f64))
-            .collect();
-        DeEsser::new(true).process_in_place(&mut float);
-        DeEsser::new(true).process_in_place(&mut short);
-        DeEsser::new(true).process_in_place(&mut int);
-        for i in 0..input.len() {
-            assert!((short[i].normalized() - float[i] as f64).abs() < 1e-4);
-            assert!((int[i].normalized() - float[i] as f64).abs() < 1e-6);
         }
     }
 }

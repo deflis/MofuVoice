@@ -4,7 +4,6 @@ use crate::{
     dsp::{
         envelope::update_rate,
         gain::{amplitude, amplitude_db, power, upper_db_boundary},
-        Sample,
     },
     RATE,
 };
@@ -192,13 +191,13 @@ impl AutoLevel {
             )
         }
     }
-    pub fn process_in_place<T: Sample>(&mut self, samples: &mut [T]) {
+    pub fn process_in_place(&mut self, samples: &mut [f64]) {
         if !self.settings.enabled && !self.settings.compressor_enabled {
             return;
         } // Preserve every bypass bit, including NaNs.
         for sample in samples {
             let update_target = self.control_phase == 0;
-            let input = sample.normalized();
+            let input = *sample;
             // Invalid wet samples are silenced without poisoning detector state.
             let input = if input.is_finite() {
                 input.clamp(-16.0, 16.0)
@@ -246,7 +245,7 @@ impl AutoLevel {
             let ceiling_gain = (amplitude(-1.0) / compressed.abs().max(1e-12)).min(1.0);
             self.guard_gain += (1.0 - self.guard_gain) * self.guard_release_rate;
             self.guard_gain = self.guard_gain.min(ceiling_gain);
-            *sample = T::from_normalized(compressed * self.guard_gain);
+            *sample = compressed * self.guard_gain;
 
             self.control_phase += 1;
             if self.control_phase == TARGET_INTERVAL {
@@ -290,13 +289,13 @@ mod tests {
     }
     // Retain the former sample loop as an independent streaming reference.
     impl AutoLevel {
-        fn process_reference<T: Sample>(&mut self, samples: &mut [T]) {
+        fn process_reference(&mut self, samples: &mut [f64]) {
             let amplitude = |db: f64| 10.0_f64.powf(db / 20.0);
             if !self.settings.enabled {
                 return;
             } // Preserve every bypass bit, including NaNs.
             for sample in samples {
-                let input = sample.normalized();
+                let input = *sample;
                 // Invalid wet samples are silenced without poisoning detector state.
                 let input = if input.is_finite() {
                     input.clamp(-16.0, 16.0)
@@ -331,7 +330,7 @@ mod tests {
                 let ceiling_gain = (amplitude(-1.0) / compressed.abs().max(1e-12)).min(1.0);
                 self.guard_gain += (1.0 - self.guard_gain) * self.release_rate;
                 self.guard_gain = self.guard_gain.min(ceiling_gain);
-                *sample = T::from_normalized(compressed * self.guard_gain);
+                *sample = compressed * self.guard_gain;
             }
         }
     }
@@ -373,7 +372,7 @@ mod tests {
         // Target updates are intentionally decimated; detector and gain state
         // remain sample-rate, so compare against the former loop with a small
         // normalized-output tolerance instead of requiring bit identity.
-        fn check<T: Sample>(input: &[T], settings: LevelSettings, tolerance: f64) {
+        fn check(input: &[f64], settings: LevelSettings, tolerance: f64) {
             let mut expected = input.to_vec();
             let mut actual = input.to_vec();
             let mut reference = settings.build().unwrap();
@@ -383,12 +382,7 @@ mod tests {
                 optimized.process_in_place(chunk);
             }
             for (index, (a, b)) in actual.iter().zip(&expected).enumerate() {
-                assert!(
-                    (a.normalized() - b.normalized()).abs() <= tolerance,
-                    "sample {index}: {} vs {}",
-                    a.normalized(),
-                    b.normalized()
-                );
+                assert!((a - b).abs() <= tolerance, "sample {index}: {} vs {}", a, b);
             }
             assert!((optimized.compression_db - reference.compression_db).abs() < 1e-4);
             if settings.ratio != 1.0 {
@@ -412,32 +406,12 @@ mod tests {
                     ratio,
                     ..active()
                 };
-                let mut float: Vec<f32> = input.iter().map(|x| *x as f32).collect();
-                float[12001] = f32::NAN;
-                float[12002] = f32::INFINITY;
+                let mut float = input.clone();
+                float[12001] = f64::NAN;
+                float[12002] = f64::INFINITY;
                 float[12003] = -32.0;
                 check(&float, settings, 0.0025);
-                check(
-                    &input.iter().map(|x| *x as f32).collect::<Vec<_>>(),
-                    settings,
-                    0.0025,
-                );
-                check(
-                    &input
-                        .iter()
-                        .map(|x| i16::from_normalized(*x))
-                        .collect::<Vec<_>>(),
-                    settings,
-                    0.0025,
-                );
-                check(
-                    &input
-                        .iter()
-                        .map(|x| i32::from_normalized(*x))
-                        .collect::<Vec<_>>(),
-                    settings,
-                    0.0025,
-                );
+                check(&input, settings, 0.0025);
             }
         }
     }
@@ -510,13 +484,13 @@ mod tests {
             assert_eq!(actual, expected);
         }
     }
-    fn tone(amplitude: f32, seconds: usize) -> Vec<f32> {
+    fn tone(amplitude: f64, seconds: usize) -> Vec<f64> {
         (0..RATE as usize * seconds)
-            .map(|i| amplitude * (std::f32::consts::TAU * 200.0 * i as f32 / RATE as f32).sin())
+            .map(|i| amplitude * (std::f64::consts::TAU * 200.0 * i as f64 / RATE as f64).sin())
             .collect()
     }
-    fn rms(samples: &[f32]) -> f64 {
-        (samples.iter().map(|x| (*x as f64).powi(2)).sum::<f64>() / samples.len() as f64).sqrt()
+    fn rms(samples: &[f64]) -> f64 {
+        (samples.iter().map(|x| (*x).powi(2)).sum::<f64>() / samples.len() as f64).sqrt()
     }
     #[test]
     fn invalid_settings_fail_even_when_disabled() {
@@ -567,26 +541,18 @@ mod tests {
         .is_err());
     }
     #[test]
-    fn bypass_preserves_all_formats() {
+    fn bypass_preserves_bits() {
         let mut dsp = LevelSettings::default().build().unwrap();
         let original = [
-            f32::from_bits(0x7fc01234),
+            f64::from_bits(0x7ff8_0000_0000_1234),
             -0.0,
-            f32::from_bits(1),
+            f64::from_bits(1),
             -1.0,
-            f32::INFINITY,
+            f64::INFINITY,
         ];
         let mut samples = original;
         dsp.process_in_place(&mut samples);
-        assert_eq!(original.map(f32::to_bits), samples.map(f32::to_bits));
-        let mut int = [i32::MIN, -1, 0, 1, i32::MAX];
-        let original = int;
-        dsp.process_in_place(&mut int);
-        assert_eq!(int, original);
-        let mut short = [i16::MIN, -1, 0, 1, i16::MAX];
-        let original = short;
-        dsp.process_in_place(&mut short);
-        assert_eq!(short, original);
+        assert_eq!(original.map(f64::to_bits), samples.map(f64::to_bits));
     }
     #[test]
     fn levels_quiet_speech_without_raising_silence_or_low_noise() {
@@ -600,7 +566,7 @@ mod tests {
             amplitude_db(rms(last), 1e-12)
         );
         let gain = dsp.level_gain_db;
-        let mut silence = vec![0.0_f32; RATE as usize * 5];
+        let mut silence = vec![0.0_f64; RATE as usize * 5];
         dsp.process_in_place(&mut silence);
         assert!(silence.iter().all(|x| *x == 0.0));
         assert_eq!(gain, dsp.level_gain_db);
@@ -620,7 +586,7 @@ mod tests {
         let original = rms(&loud[48000..]);
         dsp.process_in_place(&mut loud);
         assert!(rms(&loud[48000..]) < original * 0.65);
-        let mut silence = vec![0.0_f32; 48000];
+        let mut silence = vec![0.0_f64; 48000];
         dsp.process_in_place(&mut silence);
         assert!(dsp.compression_db < 0.1);
         let mut speech = tone(0.1, 2);
@@ -633,16 +599,14 @@ mod tests {
         let settings = active();
         let window = (RATE as usize) / 100;
         for name in ["loud", "attack-release"] {
-            let input: Vec<f32> = (0..RATE as usize * 4)
+            let input: Vec<f64> = (0..RATE as usize * 4)
                 .map(|i| {
                     let envelope = if name == "attack-release" && i / 12000 % 2 == 1 {
                         0.01
                     } else {
                         1.0
                     };
-                    (0.9 * envelope
-                        * (std::f64::consts::TAU * 173.0 * i as f64 / RATE as f64).sin())
-                        as f32
+                    0.9 * envelope * (std::f64::consts::TAU * 173.0 * i as f64 / RATE as f64).sin()
                 })
                 .collect();
             let mut expected = input.clone();
@@ -653,7 +617,7 @@ mod tests {
             let max_error = actual
                 .iter()
                 .zip(&expected)
-                .map(|(a, b)| (a - b).abs() as f64)
+                .map(|(a, b)| (a - b).abs())
                 .fold(0.0_f64, f64::max);
             assert!(max_error <= 0.01, "{name} max sample error {max_error}");
 
@@ -684,8 +648,8 @@ mod tests {
             response_ms: 100.0,
             ..LevelSettings::default()
         };
-        let mut samples: Vec<f32> = (0..RATE as usize * 2)
-            .map(|i| (0.5 * (std::f64::consts::TAU * 3000.0 * i as f64 / RATE as f64).sin()) as f32)
+        let mut samples: Vec<f64> = (0..RATE as usize * 2)
+            .map(|i| 0.5 * (std::f64::consts::TAU * 3000.0 * i as f64 / RATE as f64).sin())
             .collect();
         settings.build().unwrap().process_in_place(&mut samples);
 
@@ -706,7 +670,7 @@ mod tests {
         };
         let mut dsp = settings.build().unwrap();
 
-        let mut first = [0.1_f32];
+        let mut first = [0.1_f64];
         dsp.process_in_place(&mut first);
         assert_eq!(dsp.control_phase, 1);
         let level_target = dsp.cached_level_target_db;
@@ -714,7 +678,7 @@ mod tests {
         let first_power = dsp.power;
         let first_peak = dsp.peak;
 
-        let mut middle = [0.9_f32; TARGET_INTERVAL - 1];
+        let mut middle = [0.9_f64; TARGET_INTERVAL - 1];
         dsp.process_in_place(&mut middle);
         assert_eq!(dsp.control_phase, 0);
         assert_eq!(dsp.cached_level_target_db, level_target);
@@ -725,7 +689,7 @@ mod tests {
         );
         assert_ne!(dsp.peak, first_peak, "peak detector must update per sample");
 
-        let mut next = [0.9_f32];
+        let mut next = [0.9_f64];
         dsp.process_in_place(&mut next);
         assert_eq!(dsp.control_phase, 1);
         assert_ne!(dsp.cached_level_target_db, level_target);
@@ -736,7 +700,7 @@ mod tests {
     fn chunks_are_identical_and_impulse_has_no_delay() {
         let mut whole = tone(0.15, 2);
         whole[20000] = 8.0;
-        whole[20001] = f32::NAN;
+        whole[20001] = f64::NAN;
         let mut chunks = whole.clone();
         let mut whole_dsp = active().build().unwrap();
         whole_dsp.process_in_place(&mut whole);
@@ -763,26 +727,13 @@ mod tests {
         assert_eq!(dsp.compression_db, whole_dsp.compression_db);
         assert_eq!(dsp.guard_gain, whole_dsp.guard_gain);
         assert!(whole.iter().all(|x| x.is_finite() && x.abs() <= 0.892));
-        let mut impulse = [0.0, 4.0_f32, 0.0];
+        let mut impulse = [0.0, 4.0_f64, 0.0];
         active().build().unwrap().process_in_place(&mut impulse);
         assert_eq!(impulse[0], 0.0);
         assert!(impulse[1] > 0.0);
         assert_eq!(impulse[2], 0.0);
     }
-    #[test]
-    fn active_integer_formats_match_float_with_quantization() {
-        let input = [0.0, 0.5, -0.8, 0.1_f32];
-        let mut float = input;
-        let mut int = input.map(|x| i32::from_normalized(x as f64));
-        let mut short = input.map(|x| i16::from_normalized(x as f64));
-        active().build().unwrap().process_in_place(&mut float);
-        active().build().unwrap().process_in_place(&mut int);
-        active().build().unwrap().process_in_place(&mut short);
-        for i in 0..4 {
-            assert!((int[i].normalized() - float[i] as f64).abs() < 1e-6);
-            assert!((short[i].normalized() - float[i] as f64).abs() < 1e-4);
-        }
-    }
+
     #[test]
     fn custom_parameters_and_soft_knee() {
         let settings = LevelSettings {
@@ -812,8 +763,8 @@ mod tests {
             for (i, sample) in last.iter().enumerate() {
                 let phase =
                     std::f64::consts::TAU * 200.0 * harmonic as f64 * i as f64 / RATE as f64;
-                real += *sample as f64 * phase.cos();
-                imag += *sample as f64 * phase.sin();
+                real += *sample * phase.cos();
+                imag += *sample * phase.sin();
             }
             real * real + imag * imag
         };

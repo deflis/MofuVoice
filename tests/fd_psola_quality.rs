@@ -13,14 +13,14 @@ fn shifter(pitch: f64, preserve_formants: bool) -> PitchShifter {
     .unwrap()
 }
 
-fn power(signal: &[f32], frequency: f64, rate: u32) -> f64 {
+fn power(signal: &[f64], frequency: f64, rate: u32) -> f64 {
     let (mut re, mut im) = (0.0, 0.0);
     let denominator = (signal.len() - 1).max(1) as f64;
     for (i, &value) in signal.iter().enumerate() {
         let window = 0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / denominator).cos();
         let phase = std::f64::consts::TAU * frequency * i as f64 / rate as f64;
-        re += value as f64 * window * phase.cos();
-        im += value as f64 * window * phase.sin();
+        re += value * window * phase.cos();
+        im += value * window * phase.sin();
     }
     re * re + im * im
 }
@@ -30,10 +30,10 @@ fn fd_psola_moves_voiced_fundamental_at_supported_rates() {
     for rate in SAMPLE_RATES {
         for frequency in [80.0, 113.0, 203.0] {
             let pitch = 7.0;
-            let input: Vec<f32> = (0..rate as usize)
+            let input: Vec<f64> = (0..rate as usize)
                 .map(|i| {
                     let phase = std::f64::consts::TAU * frequency * i as f64 / rate as f64;
-                    (0.12 * phase.cos() + 0.035 * (3.0 * phase).cos()) as f32
+                    0.12 * phase.cos() + 0.035 * (3.0 * phase).cos()
                 })
                 .collect();
             let mut output = vec![0.0; input.len()];
@@ -59,7 +59,7 @@ fn fd_psola_moves_voiced_fundamental_at_supported_rates() {
 fn fd_psola_keeps_vowel_resonance_with_formant_preservation() {
     let rate = 48000;
     let f0 = 100.0;
-    let input: Vec<f32> = (0..rate as usize)
+    let input: Vec<f64> = (0..rate as usize)
         .map(|i| {
             let phase = std::f64::consts::TAU * f0 * i as f64 / rate as f64;
             (1..=60)
@@ -69,7 +69,7 @@ fn fd_psola_keeps_vowel_resonance_with_formant_preservation() {
                         + 0.018 * (-0.5 * ((frequency - 1500.0) / 220.0).powi(2)).exp();
                     envelope * (phase * harmonic as f64).cos()
                 })
-                .sum::<f64>() as f32
+                .sum::<f64>()
         })
         .collect();
     let mut output = vec![0.0; input.len()];
@@ -90,10 +90,10 @@ fn fd_psola_keeps_vowel_resonance_with_formant_preservation() {
 #[test]
 fn fd_psola_preserves_unvoiced_delay_and_neutral_bits() {
     let mut seed = 29_u32;
-    let noise: Vec<f32> = (0..24000)
+    let noise: Vec<f64> = (0..24000)
         .map(|_| {
             seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
-            0.05 * (seed as f64 / u32::MAX as f64 - 0.5) as f32
+            0.05 * (seed as f64 / u32::MAX as f64 - 0.5)
         })
         .collect();
     let mut output = vec![0.0; noise.len()];
@@ -103,18 +103,18 @@ fn fd_psola_preserves_unvoiced_delay_and_neutral_bits() {
         assert_eq!(output[i].to_bits(), noise[i - delay].to_bits());
     }
 
-    let input = [f32::NAN, f32::INFINITY, -0.0, f32::from_bits(1), 0.25];
+    let input = [f64::NAN, f64::INFINITY, -0.0, f64::from_bits(1), 0.25];
     let mut bypass = [0.0; 5];
     shifter(0.0, true).process_block(&input, &mut bypass);
-    assert_eq!(input.map(f32::to_bits), bypass.map(f32::to_bits));
+    assert_eq!(input.map(f64::to_bits), bypass.map(f64::to_bits));
 }
 
 #[test]
 fn fd_psola_is_independent_of_audio_block_boundaries() {
-    let input: Vec<f32> = (0..24000)
+    let input: Vec<f64> = (0..24000)
         .map(|i| {
             let phase = std::f64::consts::TAU * 137.0 * i as f64 / 48000.0;
-            (0.1 * phase.cos() + 0.03 * (4.0 * phase).sin()) as f32
+            0.1 * phase.cos() + 0.03 * (4.0 * phase).sin()
         })
         .collect();
     let mut whole = vec![0.0; input.len()];
@@ -133,7 +133,7 @@ fn fd_psola_is_independent_of_audio_block_boundaries() {
 fn fd_psola_applies_independent_formant_shift_and_emits_audio() {
     use mofu_voice::pitch::PitchSettings;
     let rate = 48000;
-    let input: Vec<f32> = (0..rate)
+    let input: Vec<f64> = (0..rate)
         .map(|i| {
             let phase = std::f64::consts::TAU * 100.0 * i as f64 / rate as f64;
             (1..=40)
@@ -142,7 +142,7 @@ fn fd_psola_applies_independent_formant_shift_and_emits_audio() {
                         0.02 * (-0.5 * ((h as f64 * 100.0 - 1200.0) / 180.0).powi(2)).exp();
                     amplitude * (phase * h as f64).cos()
                 })
-                .sum::<f64>() as f32
+                .sum::<f64>()
         })
         .collect();
     for shift in [-4.0, 4.0] {

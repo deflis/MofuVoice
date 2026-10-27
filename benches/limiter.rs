@@ -9,9 +9,9 @@ fn release(ms: f64) -> f64 {
     (-1.0 / (ms * 0.001 * RATE as f64)).exp()
 }
 
-fn process_reference(samples: &mut [f32], ceiling: f64, release: f64, gain: &mut f64) {
+fn process_reference(samples: &mut [f64], ceiling: f64, release: f64, gain: &mut f64) {
     for sample in samples {
-        let input = *sample as f64;
+        let input = *sample;
         if !input.is_finite() {
             *sample = 0.0;
             *gain = 1.0;
@@ -22,18 +22,18 @@ fn process_reference(samples: &mut [f32], ceiling: f64, release: f64, gain: &mut
         let released = 1.0 - (1.0 - *gain) * release;
         *gain = target.min(released);
         if *gain < 1.0 {
-            *sample = (input * *gain).clamp(-ceiling, ceiling) as f32;
+            *sample = (input * *gain).clamp(-ceiling, ceiling);
         }
     }
 }
 
-fn median_reference(input: &[f32], settings: LimiterSettings) -> f64 {
+fn median_reference(input: &[f64], settings: LimiterSettings) -> f64 {
     let ceiling = ceiling(settings.ceiling_db);
     let release = release(settings.release_ms);
     let mut times = Vec::with_capacity(31);
     for _ in 0..31 {
         let mut gain = 1.0;
-        let mut output = [0.0_f32; 64];
+        let mut output = [0.0_f64; 64];
         let start = Instant::now();
         for chunk in input.chunks(64) {
             output[..chunk.len()].copy_from_slice(black_box(chunk));
@@ -46,11 +46,11 @@ fn median_reference(input: &[f32], settings: LimiterSettings) -> f64 {
     times[15]
 }
 
-fn median_limiter(input: &[f32], settings: LimiterSettings) -> f64 {
+fn median_limiter(input: &[f64], settings: LimiterSettings) -> f64 {
     let mut times = Vec::with_capacity(31);
     for _ in 0..31 {
         let mut limiter = settings.build().unwrap();
-        let mut output = [0.0_f32; 64];
+        let mut output = [0.0_f64; 64];
         let start = Instant::now();
         for chunk in input.chunks(64) {
             output[..chunk.len()].copy_from_slice(black_box(chunk));
@@ -63,7 +63,7 @@ fn median_limiter(input: &[f32], settings: LimiterSettings) -> f64 {
     times[15]
 }
 
-fn output_reference(input: &[f32], settings: LimiterSettings) -> Vec<f32> {
+fn output_reference(input: &[f64], settings: LimiterSettings) -> Vec<f64> {
     let mut gain = 1.0;
     let ceiling = ceiling(settings.ceiling_db);
     let release = release(settings.release_ms);
@@ -80,10 +80,8 @@ fn limiter_below_ceiling_and_fallback_benchmark() {
         ..Default::default()
     };
     for (name, amplitude) in [("below-ceiling", 0.2), ("fallback-clipping", 0.95)] {
-        let input: Vec<f32> = (0..RATE as usize * 4)
-            .map(|i| {
-                (amplitude * (std::f64::consts::TAU * 173.0 * i as f64 / RATE as f64).sin()) as f32
-            })
+        let input: Vec<f64> = (0..RATE as usize * 4)
+            .map(|i| amplitude * (std::f64::consts::TAU * 173.0 * i as f64 / RATE as f64).sin())
             .collect();
         let expected = output_reference(&input, settings);
         let mut actual = input.clone();

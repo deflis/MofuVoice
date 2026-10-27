@@ -5,10 +5,10 @@ use mofu_voice::{
 use std::{hint::black_box, time::Instant};
 
 fn main() {
-    let input: Vec<f32> = (0..RATE as usize)
+    let input: Vec<f64> = (0..RATE as usize)
         .map(|i| {
             let phase = std::f64::consts::TAU * 113.0 * i as f64 / RATE as f64;
-            (0.12 * phase.sin() + 0.05 * (phase * 3.0).sin()) as f32
+            0.12 * phase.sin() + 0.05 * (phase * 3.0).sin()
         })
         .collect();
 

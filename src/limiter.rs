@@ -2,7 +2,7 @@
 //! No lookahead or added sample delay. This does not constrain inter-sample peaks
 //! or peaks introduced by later stages in the chain.
 use crate::{
-    dsp::{envelope::decay, gain::amplitude, Sample},
+    dsp::{envelope::decay, gain::amplitude},
     RATE,
 };
 
@@ -58,11 +58,7 @@ pub struct Limiter {
 }
 
 impl Limiter {
-    pub fn process<T: Sample>(&mut self, samples: &mut [T]) {
-        self.process_in_place(samples);
-    }
-
-    pub fn process_in_place<T: Sample>(&mut self, samples: &mut [T]) {
+    pub fn process_in_place(&mut self, samples: &mut [f64]) {
         if !self.enabled {
             return;
         }
@@ -71,16 +67,16 @@ impl Limiter {
         // unchanged. Check that common case once before entering the limiter.
         if self.gain == 1.0
             && samples.iter().all(|sample| {
-                let input = sample.normalized();
+                let input = *sample;
                 input.is_finite() && input.abs() <= self.ceiling
             })
         {
             return;
         }
         for sample in samples {
-            let input = sample.normalized();
+            let input = *sample;
             if !input.is_finite() {
-                *sample = T::default();
+                *sample = 0.0;
                 self.gain = 1.0;
                 continue;
             }
@@ -94,8 +90,7 @@ impl Limiter {
             self.gain = target.min(released);
             // Preserve dry bits (including signed zero) whenever no gain is needed.
             if self.gain < 1.0 {
-                *sample =
-                    T::from_normalized((input * self.gain).clamp(-self.ceiling, self.ceiling));
+                *sample = (input * self.gain).clamp(-self.ceiling, self.ceiling);
             }
         }
     }
@@ -113,28 +108,20 @@ mod tests {
     }
 
     #[test]
-    fn disabled_preserves_all_formats_and_float_bits() {
+    fn disabled_preserves_float_bits() {
         let mut dsp = LimiterSettings::default().build().unwrap();
         let input = [
-            0.0_f32,
+            0.0_f64,
             -0.0,
-            f32::from_bits(0x7fc01234),
-            f32::INFINITY,
-            f32::NEG_INFINITY,
-            f32::from_bits(1),
-            f32::MAX,
+            f64::from_bits(0x7ff8_0000_0000_1234),
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::from_bits(1),
+            f64::MAX,
         ];
         let mut output = input;
         dsp.process_in_place(&mut output);
-        assert_eq!(input.map(f32::to_bits), output.map(f32::to_bits));
-        let input = [i32::MIN, -1, 0, 1, i32::MAX];
-        let mut output = input;
-        dsp.process_in_place(&mut output);
-        assert_eq!(input, output);
-        let input = [i16::MIN, -1, 0, 1, i16::MAX];
-        let mut output = input;
-        dsp.process_in_place(&mut output);
-        assert_eq!(input, output);
+        assert_eq!(input.map(f64::to_bits), output.map(f64::to_bits));
     }
 
     #[test]
@@ -147,49 +134,45 @@ mod tests {
             };
             let mut dsp = settings.build_with_sample_rate(rate).unwrap();
             let ceiling = amplitude(settings.ceiling_db);
-            let mut peak = [1.0_f32];
-            dsp.process(&mut peak);
-            assert!((peak[0] as f64 - ceiling).abs() < 1e-7);
+            let mut peak = [1.0_f64];
+            dsp.process_in_place(&mut peak);
+            assert!((peak[0] - ceiling).abs() < 1e-7);
             let initial_gain = dsp.gain;
-            let mut silence = vec![0.0_f32; rate as usize / 10];
-            dsp.process(&mut silence);
+            let mut silence = vec![0.0_f64; rate as usize / 10];
+            dsp.process_in_place(&mut silence);
             assert!((dsp.gain - (1.0 - (1.0 - initial_gain) * (-1.0_f64).exp())).abs() < 1e-11);
             assert!(silence.iter().all(|v| *v == 0.0));
         }
     }
 
     #[test]
-    fn output_peak_is_bounded_for_all_formats() {
-        fn check<T: Sample>(tolerance: f64) {
+    fn output_peak_is_bounded() {
+        fn check(tolerance: f64) {
             let settings = LimiterSettings {
                 ceiling_db: -12.0,
                 ..active()
             };
             let mut dsp = settings.build().unwrap();
-            let mut input: Vec<T> = (0..4096)
-                .map(|i| T::from_normalized((i as f64 * 0.3).sin()))
-                .collect();
-            dsp.process(&mut input);
+            let mut input: Vec<f64> = (0..4096).map(|i| (i as f64 * 0.3).sin()).collect();
+            dsp.process_in_place(&mut input);
             assert!(input
                 .iter()
-                .all(|s| s.normalized().abs() <= amplitude(-12.0) + tolerance));
+                .all(|s| s.abs() <= amplitude(-12.0) + tolerance));
         }
-        check::<f32>(1e-7);
-        check::<i16>(0.5 / 32768.0);
-        check::<i32>(0.5 / 2147483648.0);
+        check(1e-7);
     }
 
     #[test]
     fn state_crosses_block_boundaries_exactly() {
-        let input: Vec<f32> = (0..4097).map(|i| (i as f32 * 0.31).sin()).collect();
+        let input: Vec<f64> = (0..4097).map(|i| (i as f64 * 0.31).sin()).collect();
         let mut whole = input.clone();
-        active().build().unwrap().process(&mut whole);
+        active().build().unwrap().process_in_place(&mut whole);
         for size in [1, 7, 64, 511] {
             let mut split = input.clone();
             let mut dsp = active().build().unwrap();
-            dsp.process::<f32>(&mut []);
+            dsp.process_in_place(&mut []);
             for block in split.chunks_mut(size) {
-                dsp.process(block);
+                dsp.process_in_place(block);
             }
             assert_eq!(whole, split);
         }
@@ -198,41 +181,30 @@ mod tests {
     #[test]
     fn invalid_inputs_reset_state_and_finite_extremes_are_limited() {
         let mut dsp = active().build().unwrap();
-        for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
-            let mut input = [f32::MAX, invalid, -0.0, 0.1];
-            dsp.process(&mut input);
+        for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let mut input = [f64::MAX, invalid, -0.0, 0.1];
+            dsp.process_in_place(&mut input);
             assert!(input[0].abs() <= 0.892);
             assert_eq!(input[1], 0.0);
-            assert_eq!(input[2].to_bits(), (-0.0_f32).to_bits());
+            assert_eq!(input[2].to_bits(), (-0.0_f64).to_bits());
             assert_eq!(input[3], 0.1);
         }
     }
 
     #[test]
-    fn unity_gain_below_ceiling_preserves_bits_for_all_formats() {
+    fn unity_gain_below_ceiling_preserves_bits() {
         let mut dsp = active().build().unwrap();
         let input = [
-            0.0_f32,
+            0.0_f64,
             -0.0,
-            f32::from_bits(1),
-            -f32::from_bits(1),
+            f64::from_bits(1),
+            -f64::from_bits(1),
             0.25,
             -0.75,
         ];
         let mut output = input;
         dsp.process_in_place(&mut output);
-        assert_eq!(input.map(f32::to_bits), output.map(f32::to_bits));
-        assert_eq!(dsp.gain, 1.0);
-
-        let input = [0_i16, 1, -1, 20_000, -20_000];
-        let mut output = input;
-        dsp.process_in_place(&mut output);
-        assert_eq!(input, output);
-
-        let input = [0_i32, 1, -1, 1_500_000_000, -1_500_000_000];
-        let mut output = input;
-        dsp.process_in_place(&mut output);
-        assert_eq!(input, output);
+        assert_eq!(input.map(f64::to_bits), output.map(f64::to_bits));
         assert_eq!(dsp.gain, 1.0);
     }
 
@@ -243,23 +215,22 @@ mod tests {
             ..active()
         };
         let ceiling = amplitude(settings.ceiling_db);
-        let ceiling_f32 = ceiling as f32;
-        let above_ceiling = f32::from_bits(ceiling_f32.to_bits() + 1);
-        assert!(above_ceiling as f64 > ceiling);
+        let above_ceiling = f64::from_bits(ceiling.to_bits() + 1);
+        assert!(above_ceiling > ceiling);
 
         let mut dsp = settings.build().unwrap();
-        let mut input = [0.1_f32, above_ceiling];
+        let mut input = [0.1_f64, above_ceiling];
         dsp.process_in_place(&mut input);
-        assert!(input[1].abs() as f64 <= ceiling + 1e-7);
+        assert!(input[1].abs() <= ceiling + 1e-7);
         assert!(dsp.gain < 1.0);
 
         // A later block remains limited while the gain releases.
-        let mut input = [0.5_f32; 4];
+        let mut input = [0.5_f64; 4];
         dsp.process_in_place(&mut input);
         assert!(input.iter().all(|sample| *sample < 0.5));
 
         // Invalid values must take the normal path and reset limiter history.
-        let mut invalid = [f32::NAN, 0.25];
+        let mut invalid = [f64::NAN, 0.25];
         dsp.process_in_place(&mut invalid);
         assert_eq!(invalid[0], 0.0);
         assert_eq!(invalid[1], 0.25);

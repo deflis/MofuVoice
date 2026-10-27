@@ -11,7 +11,6 @@ use crate::dsp::{
     fft_split::{SplitBuffer, SplitRoots},
     phase,
     window::hann,
-    Sample,
 };
 use std::{error::Error, fmt};
 #[path = "pitch_math.rs"]
@@ -1337,15 +1336,12 @@ impl PitchShifter {
     }
 
     /// Equal-length blocks; callback storage and FFT tables are never allocated here.
-    pub fn process_block<T: Sample>(&mut self, input: &[T], output: &mut [T]) -> u64 {
+    pub fn process_block(&mut self, input: &[f64], output: &mut [f64]) {
         let window = self.windows.analysis;
         let queue = 2 * window;
         assert_eq!(input.len(), output.len());
-        let mut nonzero = 0;
         for (&sample, out) in input.iter().zip(output) {
-            nonzero += u64::from(sample != T::default());
-            let value = sample.normalized();
-            let dry = if value.is_finite() { value } else { 0.0 };
+            let dry = if sample.is_finite() { sample } else { 0.0 };
             let mut wet_ready = true;
             let pvsola_wet = self.pvsola.as_mut().map(|pvsola| {
                 wet_ready = pvsola.ready();
@@ -1389,7 +1385,7 @@ impl PitchShifter {
             *out = if self.wet == 0.0 {
                 sample
             } else {
-                T::from_normalized((dry * (1.0 - self.wet) + wet * self.wet).clamp(-1.0, 1.0))
+                (dry * (1.0 - self.wet) + wet * self.wet).clamp(-1.0, 1.0)
             };
             self.clock = (self.clock + 1) % queue;
             self.until_frame -= 1;
@@ -1406,7 +1402,6 @@ impl PitchShifter {
                 self.until_frame = HOP;
             }
         }
-        nonzero
     }
 }
 
@@ -1618,11 +1613,11 @@ mod tests {
                 return;
             }
             let mut seed = 7_u32;
-            let input: Vec<f32> = (0..8192)
+            let input: Vec<f64> = (0..8192)
                 .map(|i| {
                     seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
                     let noise = seed as f64 / u32::MAX as f64 - 0.5;
-                    (0.12 * (i as f64 * 0.013).sin() + 0.03 * noise) as f32
+                    0.12 * (i as f64 * 0.013).sin() + 0.03 * noise
                 })
                 .collect();
             for preserve in [false, true] {
@@ -1660,7 +1655,7 @@ mod tests {
                     for pitch in [-12.0, -3.0, 0.0, 3.0, 7.0, 12.0, 0.0] {
                         vector.set_semitones(pitch).unwrap();
                         portable.set_semitones(pitch).unwrap();
-                        let mut expected = [0.0_f32; 127];
+                        let mut expected = [0.0_f64; 127];
                         let mut actual = expected;
                         for chunk in input.chunks(127) {
                             vector.process_block(chunk, &mut actual[..chunk.len()]);
@@ -1679,15 +1674,15 @@ mod tests {
     fn batched_phase_analysis_matches_system_reference() {
         for algorithm in PitchAlgorithm::SPECTRAL {
             let mut seed = 17_u32;
-            let input: Vec<f32> = (0..16_384)
+            let input: Vec<f64> = (0..16_384)
                 .map(|i| {
                     seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
                     let noise = seed as f64 / u32::MAX as f64 - 0.5;
                     let chirp = 0.013 * i as f64 + 0.000002 * (i * i) as f64;
                     match i / 4096 {
                         0 => 0.0,
-                        1 => (0.12 * chirp.sin() + 0.07 * (3.0 * chirp).cos()) as f32,
-                        2 => (0.2 * noise) as f32,
+                        1 => 0.12 * chirp.sin() + 0.07 * (3.0 * chirp).cos(),
+                        2 => 0.2 * noise,
                         _ => {
                             if i == 12_288 {
                                 0.7
@@ -1726,7 +1721,7 @@ mod tests {
                     for pitch in [-12.0, -3.0, 0.0, 3.0, 7.0, 12.0, 0.0] {
                         lazy.set_semitones(pitch).unwrap();
                         eager.set_semitones(pitch).unwrap();
-                        let mut actual = [0.0_f32; 127];
+                        let mut actual = [0.0_f64; 127];
                         let mut expected = actual;
                         for chunk in input.chunks(127) {
                             lazy.process_block(chunk, &mut actual[..chunk.len()]);
@@ -1770,10 +1765,10 @@ mod tests {
     #[test]
     fn shared_phase_rotation_matches_polar_reference_across_retargeting() {
         for algorithm in PitchAlgorithm::SPECTRAL {
-            let input: Vec<f32> = (0..8192)
+            let input: Vec<f64> = (0..8192)
                 .map(|i| {
                     let phase = 0.013 * i as f64 + 0.000002 * (i * i) as f64;
-                    (0.12 * phase.sin() + 0.07 * (phase * 3.0).cos()) as f32
+                    0.12 * phase.sin() + 0.07 * (phase * 3.0).cos()
                 })
                 .collect();
             let mut output = vec![0.0; input.len()];
@@ -1793,7 +1788,7 @@ mod tests {
                     )
                     .unwrap();
                     // Silence exercises the spectrum with no detected peaks.
-                    dsp.process_block(&vec![0.0_f32; WINDOW], &mut output[..WINDOW]);
+                    dsp.process_block(&vec![0.0_f64; WINDOW], &mut output[..WINDOW]);
                     for pitch in [-12.0, -3.0, 0.0, 3.0, 7.0, 12.0] {
                         dsp.set_semitones(pitch).unwrap();
                         for (chunk, out) in input.chunks(127).zip(output.chunks_mut(127)) {
@@ -1968,12 +1963,12 @@ mod tests {
                             .unwrap();
                     dsp.wet = 1.0;
                     dsp.target_wet = 1.0;
-                    let input: Vec<f32> = (0..24000)
+                    let input: Vec<f64> = (0..24000)
                         .map(|i| {
                             if i % 157 == 0 {
                                 0.5
                             } else {
-                                (0.1 * (i as f64 * 0.13).sin()) as f32
+                                0.1 * (i as f64 * 0.13).sin()
                             }
                         })
                         .collect();
@@ -2005,8 +2000,8 @@ mod tests {
         // Exercise the transform, rather than the public neutral bypass.
         dsp.wet = 1.0;
         dsp.target_wet = 1.0;
-        let mut input: Vec<f32> = (0..12_000)
-            .map(|i| (0.13 * (i as f64 * 0.03).sin() + 0.05 * (i as f64 * 0.13).cos()) as f32)
+        let mut input: Vec<f64> = (0..12_000)
+            .map(|i| 0.13 * (i as f64 * 0.03).sin() + 0.05 * (i as f64 * 0.13).cos())
             .collect();
         input[3072] = 0.7;
         let mut output = vec![0.0; input.len()];

@@ -3,12 +3,12 @@ use mofu_voice::{
     RATE,
 };
 
-fn tone(frequency: f64, count: usize) -> Vec<f32> {
+fn tone(frequency: f64, count: usize) -> Vec<f64> {
     tone_at_rate(frequency, count, RATE)
 }
-fn tone_at_rate(frequency: f64, count: usize, rate: u32) -> Vec<f32> {
+fn tone_at_rate(frequency: f64, count: usize, rate: u32) -> Vec<f64> {
     (0..count)
-        .map(|i| (0.2 * (std::f64::consts::TAU * frequency * i as f64 / rate as f64).sin()) as f32)
+        .map(|i| 0.2 * (std::f64::consts::TAU * frequency * i as f64 / rate as f64).sin())
         .collect()
 }
 
@@ -30,9 +30,8 @@ fn pitch_lobes_above_nyquist_are_discarded_without_aliasing() {
                 .unwrap()
                 .process_block(&input, &mut output);
                 let settled = &output[8192..];
-                let rms = (settled.iter().map(|&x| (x as f64).powi(2)).sum::<f64>()
-                    / settled.len() as f64)
-                    .sqrt();
+                let rms =
+                    (settled.iter().map(|&x| x.powi(2)).sum::<f64>() / settled.len() as f64).sqrt();
                 assert!(rms < 0.002, "pitch={pitch}, preserve={preserve}, RMS={rms}");
             }
         }
@@ -45,12 +44,12 @@ fn moving_pitch_keeps_amplitude_and_phase_continuous() {
         let count = 96_000;
         let mut phase = 0.0_f64;
         let mut phases = Vec::with_capacity(count);
-        let input: Vec<f32> = (0..count)
+        let input: Vec<f64> = (0..count)
             .map(|i| {
                 let frequency = 80.0 + 140.0 * i as f64 / count as f64;
                 phase += std::f64::consts::TAU * frequency / RATE as f64;
                 phases.push(phase);
-                (0.2 * phase.sin()) as f32
+                0.2 * phase.sin()
             })
             .collect();
         for pitch in [3.0, 7.0, 12.0] {
@@ -70,8 +69,7 @@ fn moving_pitch_keeps_amplitude_and_phase_continuous() {
                 .0
                 .iter()
                 .map(|chunk| {
-                    (chunk.iter().map(|&x| (x as f64).powi(2)).sum::<f64>() / chunk.len() as f64)
-                        .sqrt()
+                    (chunk.iter().map(|&x| x.powi(2)).sum::<f64>() / chunk.len() as f64).sqrt()
                 })
                 .collect();
             let mean = levels.iter().sum::<f64>() / levels.len() as f64;
@@ -112,16 +110,16 @@ fn moving_pitch_keeps_amplitude_and_phase_continuous() {
     }
 }
 
-fn power(signal: &[f32], frequency: f64) -> f64 {
+fn power(signal: &[f64], frequency: f64) -> f64 {
     power_at_rate(signal, frequency, RATE)
 }
-fn power_at_rate(signal: &[f32], frequency: f64, rate: u32) -> f64 {
+fn power_at_rate(signal: &[f64], frequency: f64, rate: u32) -> f64 {
     let angle = std::f64::consts::TAU * frequency / rate as f64;
     let coefficient = 2.0 * angle.cos();
     let (mut a, mut b) = (0.0, 0.0);
     for (i, &sample) in signal.iter().enumerate() {
         let window = 0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / signal.len() as f64).cos();
-        let next = sample as f64 * window + coefficient * a - b;
+        let next = sample * window + coefficient * a - b;
         b = a;
         a = next;
     }
@@ -194,14 +192,14 @@ fn formant_quality_at_rate(
     let radius = 0.98_f64;
     let coefficient = 2.0 * radius * (std::f64::consts::TAU * 1500.0 / rate as f64).cos();
     let (mut a, mut b) = (0.0, 0.0);
-    let input: Vec<f32> = (0..65_536)
+    let input: Vec<f64> = (0..65_536)
         .map(|_| {
             seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
             let x = 0.001 * (seed as f64 / u32::MAX as f64 - 0.5) + coefficient * a
                 - radius * radius * b;
             b = a;
             a = x;
-            x as f32
+            x
         })
         .collect();
     for (pitch, preserve, shift) in [
@@ -317,7 +315,7 @@ fn block_boundaries_formats_bypass_and_retargeting() {
                 assert_eq!(whole, split);
             }
         }
-        let floats = [f32::NAN, f32::INFINITY, -0.0, f32::from_bits(1), 0.25];
+        let floats = [f64::NAN, f64::INFINITY, -0.0, f64::from_bits(1), 0.25];
         let mut dsp = PitchShifter::new(
             0.0,
             true,
@@ -329,15 +327,7 @@ fn block_boundaries_formats_bypass_and_retargeting() {
         .unwrap();
         let mut output = [0.0; 5];
         dsp.process_block(&floats, &mut output);
-        assert_eq!(floats.map(f32::to_bits), output.map(f32::to_bits));
-        let integers = [i32::MIN, -1, 0, 1, i32::MAX];
-        let mut output = [0; 5];
-        dsp.process_block(&integers, &mut output);
-        assert_eq!(integers, output);
-        let shorts = [i16::MIN, -1, 0, 1, i16::MAX];
-        let mut output = [0; 5];
-        dsp.process_block(&shorts, &mut output);
-        assert_eq!(shorts, output);
+        assert_eq!(floats.map(f64::to_bits), output.map(f64::to_bits));
         let mut output = vec![0.0; input.len()];
         for pitch in [7.0, -12.0, 12.0, 0.0] {
             dsp.set_semitones(pitch).unwrap();
@@ -362,11 +352,11 @@ fn silence_and_impulse_delay_and_invalid_settings() {
             )
             .unwrap();
             let mut output = vec![1.0; 8192];
-            dsp.process_block(&vec![0.0_f32; output.len()], &mut output);
+            dsp.process_block(&vec![0.0_f64; output.len()], &mut output);
             assert!(output.iter().all(|&x| x == 0.0));
             let mut input = vec![0.0; 8192];
-            input[0] = f32::NAN;
-            input[1] = f32::INFINITY;
+            input[0] = f64::NAN;
+            input[1] = f64::INFINITY;
             dsp.process_block(&input, &mut output);
             assert!(output.iter().all(|&x| x == 0.0));
             input[0] = 0.0;

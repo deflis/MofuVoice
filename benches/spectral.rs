@@ -50,10 +50,10 @@ impl BenchmarkStart {
 
 fn main() {
     eprintln!("DSP_BENCH_CLOCK=cpu selects thread CPU time on 64-bit Linux; default is wall time. Worst blocks always use wall time.");
-    let input: Vec<f32> = (0..RATE as usize * 4)
+    let input: Vec<f64> = (0..RATE as usize * 4)
         .map(|i| {
             let phase = std::f64::consts::TAU * 113.0 * i as f64 / RATE as f64;
-            (0.12 * phase.sin() + 0.05 * (phase * 3.0).sin() + 0.03 * (phase * 7.0).sin()) as f32
+            0.12 * phase.sin() + 0.05 * (phase * 3.0).sin() + 0.03 * (phase * 7.0).sin()
         })
         .collect();
     for algorithm in PitchAlgorithm::ALL {
@@ -94,10 +94,10 @@ fn main() {
                         let start = BenchmarkStart::now();
                         for chunk in input.chunks(512) {
                             let block = Instant::now();
-                            black_box(dsp.process_block(
+                            dsp.process_block(
                                 black_box(chunk),
                                 black_box(&mut output[..chunk.len()]),
-                            ));
+                            );
                             level.process_in_place(black_box(&mut output[..chunk.len()]));
                             worst_block = worst_block.max(block.elapsed().as_secs_f64() * 1000.0);
                         }

@@ -1,7 +1,6 @@
 //! Mono Schroeder reverberator: four parallel combs followed by two allpasses.
 //! `decay_ms` is the comb feedback's nominal -60 dB decay time, not a measured
 //! room response. The dry path has no delay; wet onset includes comb transit.
-use crate::dsp::Sample;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ReverbSettings {
@@ -108,13 +107,13 @@ impl Reverb {
         self.settings.enabled && self.settings.mix != 0.0
     }
 
-    pub fn process_in_place<T: Sample>(&mut self, samples: &mut [T]) {
+    pub fn process_in_place(&mut self, samples: &mut [f64]) {
         if !self.enabled() {
             return;
         }
         for sample in samples {
             // Reject nonfinite input before it can poison any feedback history.
-            let input = sample.normalized();
+            let input = *sample;
             let dry = if input.is_finite() {
                 input.clamp(-16.0, 16.0)
             } else {
@@ -133,12 +132,8 @@ impl Reverb {
                 delay.push(wet + 0.5 * output);
                 wet = output;
             }
-            *sample = T::from_normalized((1.0 - self.settings.mix) * dry + self.settings.mix * wet);
+            *sample = (1.0 - self.settings.mix) * dry + self.settings.mix * wet;
         }
-    }
-
-    pub fn process<T: Sample>(&mut self, samples: &mut [T]) {
-        self.process_in_place(samples);
     }
 }
 
@@ -162,22 +157,14 @@ mod tests {
             },
         ] {
             let original = [
-                f32::from_bits(0x7fc01234),
+                f64::from_bits(0x7ff8_0000_0000_1234),
                 -0.0,
-                f32::from_bits(1),
-                f32::INFINITY,
+                f64::from_bits(1),
+                f64::INFINITY,
             ];
             let mut samples = original;
-            settings.build().unwrap().process(&mut samples);
-            assert_eq!(samples.map(f32::to_bits), original.map(f32::to_bits));
-            let mut shorts = [i16::MIN, -1, 0, 1, i16::MAX];
-            let before = shorts;
-            settings.build().unwrap().process(&mut shorts);
-            assert_eq!(shorts, before);
-            let mut ints = [i32::MIN, -1, 0, 1, i32::MAX];
-            let before = ints;
-            settings.build().unwrap().process(&mut ints);
-            assert_eq!(ints, before);
+            settings.build().unwrap().process_in_place(&mut samples);
+            assert_eq!(samples.map(f64::to_bits), original.map(f64::to_bits));
         }
     }
 
@@ -189,18 +176,18 @@ mod tests {
                 decay_ms: 500.0,
                 ..active()
             };
-            let mut data = vec![0.0_f32; rate as usize * 2];
+            let mut data = vec![0.0_f64; rate as usize * 2];
             data[0] = 1.0;
             settings
                 .build_with_sample_rate(rate)
                 .unwrap()
-                .process(&mut data);
+                .process_in_place(&mut data);
             let first =
                 (0.020 * rate as f64).round() as usize + (0.0297 * rate as f64).round() as usize;
             assert!(data[..first].iter().all(|x| *x == 0.0));
             assert!(data[first].abs() > 0.01);
             let energy = |range: std::ops::Range<usize>| {
-                data[range].iter().map(|x| (*x as f64).powi(2)).sum::<f64>()
+                data[range].iter().map(|x| (*x).powi(2)).sum::<f64>()
             };
             assert!(energy(rate as usize..rate as usize * 2) < energy(0..rate as usize / 2) * 1e-9);
         }
@@ -208,45 +195,31 @@ mod tests {
 
     #[test]
     fn dry_path_is_immediate_and_restart_has_no_tail() {
-        let mut data = [1.0_f32, 0.0, 0.0];
-        active().build().unwrap().process(&mut data);
+        let mut data = [1.0_f64, 0.0, 0.0];
+        active().build().unwrap().process_in_place(&mut data);
         assert_eq!(data, [0.85, 0.0, 0.0]);
-        let mut silence = vec![0.0_f32; crate::RATE as usize];
-        active().build().unwrap().process(&mut silence);
+        let mut silence = vec![0.0_f64; crate::RATE as usize];
+        active().build().unwrap().process_in_place(&mut silence);
         assert!(silence.iter().all(|x| *x == 0.0));
     }
 
     #[test]
-    fn blocks_formats_and_nonfinite_recovery() {
-        let original: Vec<f32> = (0..16000)
+    fn blocks_and_nonfinite_recovery() {
+        let original: Vec<f64> = (0..16000)
             .map(|i| if i % 1000 == 0 { 0.125 } else { 0.0 })
             .collect();
         let mut whole = original.clone();
         let mut chunks = original.clone();
-        active().build().unwrap().process(&mut whole);
+        active().build().unwrap().process_in_place(&mut whole);
         let mut dsp = active().build().unwrap();
         for chunk in chunks.chunks_mut(63) {
-            dsp.process(chunk);
+            dsp.process_in_place(chunk);
         }
         assert_eq!(whole, chunks);
-        let mut shorts: Vec<i16> = original
-            .iter()
-            .map(|x| i16::from_normalized(*x as f64))
-            .collect();
-        let mut ints: Vec<i32> = original
-            .iter()
-            .map(|x| i32::from_normalized(*x as f64))
-            .collect();
-        active().build().unwrap().process(&mut shorts);
-        active().build().unwrap().process(&mut ints);
-        for ((float, short), int) in whole.iter().zip(shorts).zip(ints) {
-            assert!((short.normalized() - *float as f64).abs() < 1.6e-5);
-            assert!((int.normalized() - *float as f64).abs() < 1e-8);
-        }
-        let mut invalid = vec![0.0_f32; 16000];
-        invalid[..4].copy_from_slice(&[f32::NAN, f32::INFINITY, f32::NEG_INFINITY, f32::MAX]);
+        let mut invalid = vec![0.0_f64; 16000];
+        invalid[..4].copy_from_slice(&[f64::NAN, f64::INFINITY, f64::NEG_INFINITY, f64::MAX]);
         invalid[1000] = 0.5;
-        active().build().unwrap().process(&mut invalid);
+        active().build().unwrap().process_in_place(&mut invalid);
         assert!(invalid.iter().all(|x| x.is_finite()));
         assert!(invalid[1000] > 0.0);
     }

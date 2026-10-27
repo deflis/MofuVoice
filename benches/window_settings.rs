@@ -7,14 +7,14 @@ use std::{f64::consts::TAU, hint::black_box, time::Instant};
 fn main() {
     // Keep timing out of the parallel quality tests. This harness-free benchmark
     // runs one configuration at a time, after quality validation in CI.
-    let psola_input: Vec<f32> = (0..RATE)
+    let psola_input: Vec<f64> = (0..RATE)
         .map(|i| {
             let phase = TAU * 113.0 * i as f64 / RATE as f64;
-            (0.1 * phase.cos() + 0.02 * (3.0 * phase).cos()) as f32
+            0.1 * phase.cos() + 0.02 * (3.0 * phase).cos()
         })
         .collect();
-    let spectral_input: Vec<f32> = (0..RATE)
-        .map(|i| (0.2 * (TAU * 203.0 * i as f64 / RATE as f64).sin()) as f32)
+    let spectral_input: Vec<f64> = (0..RATE)
+        .map(|i| 0.2 * (TAU * 203.0 * i as f64 / RATE as f64).sin())
         .collect();
     for analysis in [1024, 2048, 4096, 8192] {
         for synthesis in [256, 512, 1024, 2048] {

@@ -57,11 +57,11 @@ fn eq_converts_integer_formats_once_and_has_no_buffered_delay() {
     let input: Vec<f32> = (0..2000)
         .map(|i| (0.2 * (i as f64 * 0.1).sin()) as f32)
         .collect();
-    let mut expected = input.clone();
+    let mut expected: Vec<f64> = input.iter().map(|s| *s as f64).collect();
     options.eq.build().unwrap().process_in_place(&mut expected);
     assert_eq!(
         run(&input, &["--eq", "on", "--eq-band1", "250,-4,0.7"], 63),
-        expected
+        expected.iter().map(|s| *s as f32).collect::<Vec<_>>()
     );
     let i16_input: Vec<_> = input
         .iter()
@@ -74,10 +74,10 @@ fn eq_converts_integer_formats_once_and_has_no_buffered_delay() {
     let i16_output = run(&i16_input, &["--eq", "on", "--eq-band1", "250,-4,0.7"], 128);
     let i32_output = run(&i32_input, &["--eq", "on", "--eq-band1", "250,-4,0.7"], 128);
     for (i, sample) in expected.iter().enumerate() {
-        assert!((i16_output[i].normalized() - *sample as f64).abs() < 0.0001);
-        assert!((i32_output[i].normalized() - *sample as f64).abs() < 0.000001);
+        assert!((i16_output[i].normalized() - *sample).abs() < 0.0001);
+        assert!((i32_output[i].normalized() - *sample).abs() < 0.000001);
     }
-    let mut impulse = [1.0_f32, 0.0, 0.0];
+    let mut impulse = [1.0_f64, 0.0, 0.0];
     options.eq.build().unwrap().process_in_place(&mut impulse);
     assert_ne!(impulse[0], 0.0);
     for enabled in ["off", "on"] {
