@@ -13,3 +13,6 @@ mod sample;
 pub(crate) mod window;
 
 pub use sample::Sample;
+
+#[cfg(feature = "cpal-backend")]
+pub(crate) mod resample;

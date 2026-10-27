@@ -29,13 +29,15 @@ function SupportedRates({
           </>
         )}
         <p>
-          {backend === "asio" ? "デバイスの対応レート" : "入出力で共通して使えるレート"}：
+          {backend === "asio" ? "デバイスの対応レート" : "入出力で変換なしに使えるレート"}：
           {ratesText(result.rates.common)}
         </p>
         {!result.rates.common.includes(sampleRate) && (
           <p role="alert">
             選択中の {sampleRate.toLocaleString()} Hz
-            は対応していません。対応レートを選び直してください。
+            {backend === "cpal"
+              ? "での直接入出力に対応していないため、デバイスの対応レートとの間でリサンプリングします。"
+              : "は対応していません。対応レートを選び直してください。"}
           </p>
         )}
         <p className={styles.muted}>
@@ -83,7 +85,7 @@ export function SampleRateSettings({ result }: { result: RateResult | undefined 
         />
       </div>
       <p className={styles.muted}>
-        入出力デバイスが対応するレートを選んでください。変更は次の開始時に反映されます。ASIOではドライバー側の設定も同じレートに揃えてください。
+        CPALでは選択レートに非対応の入出力を自動でリサンプリングします。変換により遅延が追加されます。変更は次の開始時に反映されます。ASIOではドライバー側の設定も同じレートに揃えてください。
       </p>
     </>
   );

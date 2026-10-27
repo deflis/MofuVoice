@@ -113,21 +113,40 @@ fn negotiate_at_rate(
         return Err("Frames must be 1..8192".into());
     }
     let select = |ranges: &[SupportedStreamConfigRange], direction: &str| {
-        for format in [SampleFormat::F32, SampleFormat::I32, SampleFormat::I16] {
-            if let Some(range) = ranges
-                .iter()
-                .filter(|c| usable(c, frames, format, rate))
-                .min_by_key(|c| c.channels())
-            {
-                let mut config = (*range).with_sample_rate(rate).config();
-                config.buffer_size = match range.buffer_size() {
-                    SupportedBufferSize::Range { .. } => cpal::BufferSize::Fixed(frames),
-                    SupportedBufferSize::Unknown => cpal::BufferSize::Default,
-                };
-                return Ok((format, config));
+        let mut choices = Vec::new();
+        for range in ranges {
+            let low = range.min_sample_rate().max(8000);
+            let high = range.max_sample_rate().min(192000);
+            if low > high {
+                continue;
+            }
+            let native_rate = rate.clamp(low, high);
+            let format = range.sample_format();
+            let preference = match format {
+                SampleFormat::F32 => 0,
+                SampleFormat::I32 => 1,
+                SampleFormat::I16 => 2,
+                _ => continue,
+            };
+            if usable(range, frames, format, native_rate) {
+                choices.push((
+                    (native_rate.abs_diff(rate), preference, range.channels()),
+                    range,
+                    native_rate,
+                ));
             }
         }
-        Err(format!("{direction} needs f32/i32/i16 at {rate} Hz and a supported period; sample-rate conversion is not performed."))
+        if let Some((_, range, native_rate)) = choices.into_iter().min_by_key(|c| c.0) {
+            let mut config = (*range).with_sample_rate(native_rate).config();
+            config.buffer_size = match range.buffer_size() {
+                SupportedBufferSize::Range { .. } => cpal::BufferSize::Fixed(frames),
+                SupportedBufferSize::Unknown => cpal::BufferSize::Default,
+            };
+            return Ok((range.sample_format(), config));
+        }
+        Err(format!(
+            "{direction} needs f32/i32/i16 at 8000..192000 Hz and a supported period"
+        ))
     };
     let (input_format, input_config) = select(input, "Input")?;
     let (output_format, output_config) = select(output, "Output")?;
@@ -217,10 +236,12 @@ impl CpalBackend {
         let details = format!("CPAL {:?}: input '{}' / {} channels / {:?}; output '{}' / {} channels / {:?}; {rate} Hz; input format {input_format:?}, output format {output_format:?}. Selected input {input_channel} -> outputs {output_channels:?}, other outputs silent. Default periods are chosen by the host and observed during playback.",
             cpal::default_host().id(), input.description()?.name(), input_config.channels, input_config.buffer_size,
             output.description()?.name(), output_config.channels, output_config.buffer_size);
+        let details = format!("{details} Native input={} Hz, DSP={rate} Hz, native output={} Hz; resampling FIR delay={:.3} ms.", input_config.sample_rate, output_config.sample_rate,
+            crate::dsp::resample::RateConverter::delay_ms(input_config.sample_rate, rate) + crate::dsp::resample::RateConverter::delay_ms(rate, output_config.sample_rate));
         let configuration = crate::backend::AudioConfiguration {
             device: input.description()?.name().to_string(),
             output_device: output.description()?.name().to_string(),
-            sample_rate: input_config.sample_rate as f64,
+            sample_rate: self.sample_rate as f64,
             inputs: input_config.channels as usize,
             outputs: output_config.channels as usize,
         };
@@ -261,8 +282,8 @@ fn supported_rates(
             ranges
                 .iter()
                 .filter(|c| {
-                    c.min_sample_rate() <= rate
-                        && c.max_sample_rate() >= rate
+                    c.min_sample_rate() <= 192000
+                        && c.max_sample_rate() >= 8000
                         && matches!(
                             c.sample_format(),
                             SampleFormat::F32 | SampleFormat::I32 | SampleFormat::I16
@@ -421,6 +442,7 @@ impl Metrics {
 
 type BlockProcessor<I, O> =
     fn(&mut AudioProcessor<I>, &[I], &mut [O]) -> std::result::Result<u64, &'static str>;
+type InputCallback<I> = Box<dyn FnMut(&[I]) + Send>;
 
 struct Capture<I: Sample, O> {
     input_channel: usize,
@@ -491,6 +513,82 @@ impl<I: Sample, O: Sample> Capture<I, O> {
             .fetch_max(elapsed, Ordering::Relaxed);
         if elapsed > frames as u64 * 1_000_000_000 / self.metrics.sample_rate as u64 {
             self.metrics.deadline_misses.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+struct ResampledCapture<O> {
+    input_channel: usize,
+    channels: usize,
+    input_rate: u32,
+    input_converter: crate::dsp::resample::RateConverter,
+    output_converter: crate::dsp::resample::RateConverter,
+    processor: AudioProcessor<f64>,
+    queue: Producer<O>,
+    metrics: Arc<Metrics>,
+}
+
+impl<O: Sample> ResampledCapture<O> {
+    fn process<I: Sample>(&mut self, data: &[I]) {
+        if !self.metrics.processing() || data.is_empty() {
+            return;
+        }
+        let start = Instant::now();
+        if !data.len().is_multiple_of(self.channels) {
+            self.metrics
+                .faults
+                .fetch_or(INVALID_BUFFER, Ordering::Relaxed);
+            return;
+        }
+        let frames = data.len() / self.channels;
+        self.metrics
+            .max_input_frames
+            .fetch_max(frames, Ordering::Relaxed);
+        let Self {
+            input_converter,
+            output_converter,
+            processor,
+            queue,
+            metrics,
+            ..
+        } = self;
+        for frame in data.chunks_exact(self.channels) {
+            let sample = frame[self.input_channel - 1];
+            metrics
+                .nonzero
+                .fetch_add(u64::from(sample != I::default()), Ordering::Relaxed);
+            input_converter.push(sample.normalized(), |sample| {
+                if metrics.faults.load(Ordering::Relaxed) != 0 {
+                    return;
+                }
+                let mut output = [0.0];
+                if processor.process_block(&[sample], &mut output).is_err() {
+                    metrics.faults.fetch_or(INVALID_BUFFER, Ordering::Relaxed);
+                    return;
+                }
+                #[cfg(windows)]
+                crate::spectrum::push_output_samples(&output);
+                output_converter.push(output[0], |s| {
+                    if metrics.faults.load(Ordering::Relaxed) == 0
+                        && !queue.push_block(&[O::from_normalized(s)])
+                    {
+                        metrics.overruns.fetch_add(1, Ordering::Relaxed);
+                        metrics.faults.fetch_or(OVERRUN, Ordering::Relaxed);
+                    }
+                });
+            });
+            if metrics.faults.load(Ordering::Relaxed) != 0 {
+                return;
+            }
+        }
+        metrics.input_blocks.fetch_add(1, Ordering::Relaxed);
+        metrics
+            .last_input_ns
+            .store(metrics.now_ns(), Ordering::Relaxed);
+        let elapsed = start.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+        metrics.max_input_ns.fetch_max(elapsed, Ordering::Relaxed);
+        if elapsed > frames as u64 * 1_000_000_000 / self.input_rate as u64 {
+            metrics.deadline_misses.fetch_add(1, Ordering::Relaxed);
         }
     }
 }
@@ -609,18 +707,44 @@ fn build<
     };
     let capacity = (frames as usize * 8).max(32768).next_power_of_two();
     let (producer, consumer) = audio_queue::channel::<O>(capacity);
-    let rate = prepared.input_config.sample_rate;
-    let metrics = Arc::new(Metrics::with_sample_rate(frames as usize * 2, rate));
+    let rate = prepared.configuration.sample_rate as u32;
+    let metrics = Arc::new(Metrics::with_sample_rate(
+        frames as usize * 2,
+        prepared.output_config.sample_rate,
+    ));
     let output_channels = routing.output_channels.clone();
-    let mut capture = Capture {
-        input_channel: routing.input_channel,
-        process_block,
-        processor: AudioProcessor::new(rate, frames as usize, dsp)?,
-        mono: vec![I::default(); frames as usize],
-        processed: vec![O::default(); frames as usize],
-        channels: prepared.input_config.channels as usize,
-        queue: producer,
-        metrics: metrics.clone(),
+    let mut capture: InputCallback<I> = if prepared.input_config.sample_rate != rate
+        || prepared.output_config.sample_rate != rate
+    {
+        let mut capture = ResampledCapture::<O> {
+            input_channel: routing.input_channel,
+            channels: prepared.input_config.channels as usize,
+            input_rate: prepared.input_config.sample_rate,
+            input_converter: crate::dsp::resample::RateConverter::new(
+                prepared.input_config.sample_rate,
+                rate,
+            )?,
+            output_converter: crate::dsp::resample::RateConverter::new(
+                rate,
+                prepared.output_config.sample_rate,
+            )?,
+            processor: AudioProcessor::<f64>::new(rate, 1, dsp)?,
+            queue: producer,
+            metrics: metrics.clone(),
+        };
+        Box::new(move |data: &[I]| capture.process(data))
+    } else {
+        let mut capture = Capture {
+            input_channel: routing.input_channel,
+            process_block,
+            processor: AudioProcessor::new(rate, frames as usize, dsp)?,
+            mono: vec![I::default(); frames as usize],
+            processed: vec![O::default(); frames as usize],
+            channels: prepared.input_config.channels as usize,
+            queue: producer,
+            metrics: metrics.clone(),
+        };
+        Box::new(move |data: &[I]| capture.process(data))
     };
     let mut playback = Playback {
         output_channels,
@@ -632,7 +756,7 @@ fn build<
     let errors = metrics.clone();
     let input = prepared.input.build_input_stream(
         prepared.input_config,
-        move |data: &[I], _| capture.process(data),
+        move |data: &[I], _| capture(data),
         move |_| {
             errors.faults.fetch_or(DEVICE_ERROR, Ordering::Relaxed);
         },
@@ -759,8 +883,8 @@ impl AudioStream for CpalStream {
         let target = self.metrics.prime_frames.load(Ordering::Relaxed);
         let queued = self.metrics.queue_depth.load(Ordering::Relaxed);
         let latency = self.pitch_latency;
-        Ok(format!("CPAL driver latency unavailable through this adapter; queue startup target={target} frames ({:.3} ms), queued snapshot={queued} frames ({:.3} ms), capacity={} frames; wet DSP={latency} samples ({:.3} ms), neutral DSP=0. Hardware round-trip latency is unmeasured. Separate device clock drift is not corrected.",
-            target as f64 * 1000.0 / self.configuration.sample_rate, queued as f64 * 1000.0 / self.configuration.sample_rate, self.capacity,
+        Ok(format!("CPAL driver latency unavailable through this adapter; queue startup target={target} frames ({:.3} ms), queued snapshot={queued} frames ({:.3} ms), capacity={} frames; wet DSP={latency} samples ({:.3} ms), neutral DSP=0; rate-converter delay is listed in configuration details. Hardware round-trip latency is unmeasured. Separate device clock drift is not corrected.",
+            target as f64 * 1000.0 / self.metrics.sample_rate as f64, queued as f64 * 1000.0 / self.metrics.sample_rate as f64, self.capacity,
             latency as f64 * 1000.0 / self.configuration.sample_rate))
     }
     fn check_events(&self) -> Result<()> {
@@ -1026,18 +1150,20 @@ mod tests {
         let rates = supported_rates(&input, &output);
         assert_eq!(
             rates.channels,
-            vec![crate::backend::DeviceChannels {
-                sample_rate: 48000,
-                input: 8,
-                output: 8
-            }]
+            crate::SAMPLE_RATES
+                .map(|sample_rate| crate::backend::DeviceChannels {
+                    sample_rate,
+                    input: 8,
+                    output: 8
+                })
+                .to_vec()
         );
         let output = [
             range(SampleFormat::F32, 2, 48000, buffer),
             range(SampleFormat::I16, 8, 48000, buffer),
         ];
         let rates = supported_rates(&input, &output);
-        assert_eq!(rates.channels.len(), 1);
+        assert_eq!(rates.channels.len(), 2);
         for layout in rates.channels {
             for input_channel in 1..=layout.input {
                 for output_channel in 1..=layout.output {
@@ -1081,11 +1207,13 @@ mod tests {
         let rates = supported_rates(&input, &output);
         assert_eq!(
             rates.channels,
-            vec![crate::backend::DeviceChannels {
-                sample_rate: 48000,
-                input: 2,
-                output: 4
-            },]
+            crate::SAMPLE_RATES
+                .map(|sample_rate| crate::backend::DeviceChannels {
+                    sample_rate,
+                    input: 8,
+                    output: 4
+                })
+                .to_vec()
         );
         let empty = supported_rates(&[], &[]);
         assert!(empty.channels.is_empty());
@@ -1119,7 +1247,7 @@ mod tests {
     }
 
     #[test]
-    fn negotiates_selected_rate_and_rejects_mismatched_devices() {
+    fn negotiates_native_rates_independently_when_conversion_is_needed() {
         let buffer = SupportedBufferSize::Range { min: 64, max: 512 };
         for rate in crate::SAMPLE_RATES {
             let input = [range(SampleFormat::F32, 2, rate, buffer)];
@@ -1129,14 +1257,20 @@ mod tests {
             assert_eq!(input_config.sample_rate, rate);
             assert_eq!(output_config.sample_rate, rate);
             let other = if rate == 48000 { 44100 } else { 48000 };
-            assert!(negotiate_at_rate(&input, &output, 128, other).is_err());
+            assert_eq!(
+                negotiate_at_rate(&input, &output, 128, other)
+                    .unwrap()
+                    .2
+                    .sample_rate,
+                rate
+            );
             assert!(negotiate_at_rate(
                 &input,
                 &[range(SampleFormat::F32, 2, other, buffer)],
                 128,
                 rate
             )
-            .is_err());
+            .is_ok());
         }
         let broad = [SupportedStreamConfigRange::new(
             2,
@@ -1206,7 +1340,13 @@ mod tests {
         assert_eq!(output_config.buffer_size, cpal::BufferSize::Default);
         assert!(negotiate(&input, &output, 32).is_err());
         assert!(negotiate(&input, &output, 0).is_err());
-        assert!(negotiate(&input, &[range(SampleFormat::I16, 2, 44100, known)], 128).is_err());
+        assert_eq!(
+            negotiate(&input, &[range(SampleFormat::I16, 2, 44100, known)], 128)
+                .unwrap()
+                .3
+                .sample_rate,
+            44100
+        );
         assert!(negotiate(&input, &[range(SampleFormat::U16, 2, RATE, known)], 128).is_err());
     }
 
@@ -1370,6 +1510,104 @@ mod tests {
                 assert_eq!(supported_rates(&input, &output).common, [RATE]);
             }
         }
+    }
+
+    #[test]
+    fn resampled_neutral_voice_preserves_frequency_and_declared_delay() {
+        let options = Options::parse(["--pitch", "0"].map(String::from)).unwrap();
+        let (queue, mut output) = audio_queue::channel::<f32>(16384);
+        let metrics = Arc::new(Metrics::with_sample_rate(128, 44100));
+        metrics.active.store(true, Ordering::Release);
+        let mut capture = ResampledCapture {
+            input_channel: 2,
+            channels: 2,
+            input_rate: 96000,
+            input_converter: crate::dsp::resample::RateConverter::new(96000, 48000).unwrap(),
+            output_converter: crate::dsp::resample::RateConverter::new(48000, 44100).unwrap(),
+            processor: AudioProcessor::new(48000, 1, DspSettings::from(&options)).unwrap(),
+            queue,
+            metrics: metrics.clone(),
+        };
+        let input: Vec<f32> = (0..9600)
+            .flat_map(|i| {
+                [
+                    0.9,
+                    (0.25 * (std::f64::consts::TAU * 1000.0 * i as f64 / 96000.0).sin()) as f32,
+                ]
+            })
+            .collect();
+        for chunk in input.chunks(254) {
+            capture.process(chunk);
+        }
+        let delay = (crate::dsp::resample::RateConverter::delay_ms(96000, 48000)
+            + crate::dsp::resample::RateConverter::delay_ms(48000, 44100))
+            / 1000.0;
+        let mut index = 0;
+        while let Some(sample) = output.pop() {
+            if index > 1024 {
+                let expected = 0.25
+                    * (std::f64::consts::TAU * 1000.0 * (index as f64 / 44100.0 - delay)).sin();
+                assert!((sample as f64 - expected).abs() < 0.001);
+            }
+            index += 1;
+        }
+        assert_eq!(index, 4410);
+        assert_eq!(metrics.faults.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn resampled_capture_maps_every_format_pair_without_callback_allocations() {
+        fn check<I: Sample, O: Sample + Send>() {
+            for pitch in ["0", "3", "12"] {
+                let options = Options::parse(["--pitch", pitch].map(String::from)).unwrap();
+                let (queue, mut output) = audio_queue::channel::<O>(16384);
+                let metrics = Arc::new(Metrics::with_sample_rate(128, 44100));
+                metrics.active.store(true, Ordering::Release);
+                let mut capture = ResampledCapture {
+                    input_channel: 2,
+                    channels: 2,
+                    input_rate: 96000,
+                    input_converter: crate::dsp::resample::RateConverter::new(96000, 48000)
+                        .unwrap(),
+                    output_converter: crate::dsp::resample::RateConverter::new(48000, 44100)
+                        .unwrap(),
+                    processor: AudioProcessor::new(48000, 1, DspSettings::from(&options)).unwrap(),
+                    queue,
+                    metrics: metrics.clone(),
+                };
+                // An unselected nonzero channel must never leak into the mono path.
+                let input = [I::from_normalized(0.8), I::default()].repeat(9600);
+                ALLOCATIONS.with(|n| n.set(0));
+                COUNTING.with(|c| c.set(true));
+                let start = Instant::now();
+                for chunk in input.chunks(146) {
+                    capture.process(chunk);
+                }
+                let elapsed = start.elapsed();
+                COUNTING.with(|c| c.set(false));
+                assert_eq!(ALLOCATIONS.with(Cell::get), 0);
+                assert_eq!(metrics.faults.load(Ordering::Relaxed), 0);
+                assert_eq!(metrics.nonzero.load(Ordering::Relaxed), 0);
+                assert_eq!(output.len(), 4410);
+                while let Some(sample) = output.pop() {
+                    assert_eq!(sample.normalized(), 0.0);
+                }
+                eprintln!(
+                    "resampling {:?}->{:?}, pitch {pitch}: {elapsed:?}/100 ms",
+                    std::any::type_name::<I>(),
+                    std::any::type_name::<O>()
+                );
+            }
+        }
+        check::<f32, f32>();
+        check::<f32, i32>();
+        check::<f32, i16>();
+        check::<i32, f32>();
+        check::<i32, i32>();
+        check::<i32, i16>();
+        check::<i16, f32>();
+        check::<i16, i32>();
+        check::<i16, i16>();
     }
 
     #[test]
