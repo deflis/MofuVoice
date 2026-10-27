@@ -244,7 +244,7 @@ struct CallbackState {
     processing: AtomicBool,
     metrics: Metrics,
     dsp: UnsafeCell<DspChain>,
-    scratch: UnsafeCell<Vec<f32>>,
+    scratch: UnsafeCell<Vec<f64>>,
     /// Buffer descriptors copied after prepare; valid until dispose. Callback reads these
     /// without locking the shared `AsioStreams` mutex.
     input_buffers: OnceLock<Vec<AsioBufferInfo>>,
@@ -278,15 +278,8 @@ impl CallbackState {
                 // SAFETY: only the callback holding the processing guard accesses DSP.
                 // The control thread never reads or mutates it during streaming.
                 let dsp = unsafe { &mut *self.dsp.get() };
-                // Scratch storage is aligned for f32/i32 and large enough for i16.
-                let scratch = unsafe {
-                    let storage = &mut *self.scratch.get();
-                    debug_assert!(
-                        std::mem::size_of_val(storage.as_slice())
-                            >= self.frames * std::mem::size_of::<T>()
-                    );
-                    std::slice::from_raw_parts_mut(storage.as_mut_ptr().cast::<T>(), self.frames)
-                };
+                // SAFETY: the processing guard gives this callback exclusive scratch access.
+                let scratch = unsafe { &mut *self.scratch.get() };
                 nonzero = dsp.process_block(input, output, scratch);
                 crate::spectrum::push_output_samples(output);
             } else if self.output_channels.contains(&(channel + 1)) {

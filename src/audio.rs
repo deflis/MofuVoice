@@ -98,6 +98,7 @@ pub const FILTER_STAGES: [FilterStage; 11] = [
 ];
 
 pub struct DspChain {
+    working: Vec<f64>,
     input_eq: crate::eq::Equalizer,
     pre_conversion_eq: crate::eq::Equalizer,
     voice_enabled: bool,
@@ -120,6 +121,7 @@ impl DspChain {
     pub fn with_sample_rate(settings: DspSettings, rate: u32) -> Result<Self, Box<dyn Error>> {
         crate::validate_sample_rate(rate)?;
         Ok(Self {
+            working: vec![0.0; 8192],
             input_eq: settings.input_eq.build_with_sample_rate(rate)?,
             pre_conversion_eq: settings.pre_conversion_eq.build_with_sample_rate(rate)?,
             voice_enabled: settings.voice_enabled,
@@ -141,32 +143,53 @@ impl DspChain {
     }
 
     /// Equal input/output lengths, scratch at least that long. No allocation or I/O.
-    /// Scratch uses the same sample type, preserving integer and float neutral bypass.
+    /// All stages use f64; quantization happens only at the output boundary.
     /// Process one selected mono input; the backend maps/silences output channels.
     /// Returns the nonzero device input count, before any DSP attenuation or tails.
     pub fn process_block<T: Sample>(
         &mut self,
         input: &[T],
         output: &mut [T],
-        scratch: &mut [T],
+        scratch: &mut [f64],
+    ) -> u64 {
+        self.process_with(input, output, scratch, |source, value| {
+            if source.normalized().to_bits() == value.to_bits() {
+                source
+            } else {
+                T::from_normalized(value)
+            }
+        })
+    }
+
+    fn process_with<I: Sample, O: Sample>(
+        &mut self,
+        input: &[I],
+        output: &mut [O],
+        scratch: &mut [f64],
+        convert: impl Fn(I, f64) -> O,
     ) -> u64 {
         assert_eq!(input.len(), output.len());
         assert!(scratch.len() >= input.len());
         let scratch = &mut scratch[..input.len()];
-        let nonzero = crate::bypass_block(input, scratch);
+        assert!(input.len() <= self.working.len());
+        let nonzero = input.iter().filter(|s| **s != I::default()).count() as u64;
+        for (source, dest) in input.iter().zip(scratch.iter_mut()) {
+            *dest = source.normalized();
+        }
+        let working = &mut self.working[..input.len()];
         let mut converted = false;
         for stage in FILTER_STAGES {
             if stage == FilterStage::Voice {
                 if self.voice_enabled {
-                    self.pitch.process_block(scratch, output);
+                    self.pitch.process_block(scratch, working);
                 } else {
-                    output.copy_from_slice(scratch);
+                    working.copy_from_slice(scratch);
                 }
                 converted = true;
                 continue;
             }
             let samples = if converted {
-                &mut *output
+                &mut *working
             } else {
                 &mut *scratch
             };
@@ -187,6 +210,9 @@ impl DspChain {
                 FilterStage::Voice => unreachable!(),
             }
         }
+        for ((source, value), dest) in input.iter().zip(working.iter()).zip(output.iter_mut()) {
+            *dest = convert(*source, *value);
+        }
         nonzero
     }
 }
@@ -194,7 +220,8 @@ impl DspChain {
 /// Typed, preallocated callback storage for CPAL and other native adapters.
 pub struct AudioProcessor<T: Sample> {
     chain: DspChain,
-    scratch: Vec<T>,
+    scratch: Vec<f64>,
+    sample_type: std::marker::PhantomData<T>,
 }
 impl<T: Sample> AudioProcessor<T> {
     /// Configure DSP for the actual device rate; no implicit resampling.
@@ -209,9 +236,28 @@ impl<T: Sample> AudioProcessor<T> {
         }
         Ok(Self {
             chain: DspChain::with_sample_rate(settings, rate)?,
-            scratch: vec![T::default(); max_frames],
+            scratch: vec![0.0; max_frames],
+            sample_type: std::marker::PhantomData,
         })
     }
+    /// Convert independent input/output formats only at the chain boundaries.
+    /// Integer output rounds and saturates once, after all DSP stages.
+    pub fn process_into<O: Sample>(
+        &mut self,
+        input: &[T],
+        output: &mut [O],
+    ) -> Result<u64, &'static str> {
+        if input.len() != output.len() || input.len() > self.scratch.len() {
+            output.fill(O::default());
+            return Err("Invalid audio block lengths");
+        }
+        Ok(self
+            .chain
+            .process_with(input, output, &mut self.scratch, |_, value| {
+                O::from_normalized(value)
+            }))
+    }
+
     /// Variable-size blocks up to max_frames; state continues across block boundaries.
     /// On invalid lengths, silence output and leave DSP state unchanged.
     pub fn process_block(&mut self, input: &[T], output: &mut [T]) -> Result<u64, &'static str> {

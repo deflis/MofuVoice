@@ -89,7 +89,7 @@ fn complete_chain_matches_independent_processors_in_all_formats() {
                 T::from_normalized(0.7 * (i as f64 * 0.12).sin() + 0.2 * (i as f64 * 1.1).sin())
             })
             .collect();
-        let mut before = input.clone();
+        let mut before: Vec<f64> = input.iter().map(|s| s.normalized()).collect();
         mofu_voice::rumble::RumbleFilter::new(s.rumble_filter).process_in_place(&mut before);
         s.input_eq.build().unwrap().process_in_place(&mut before);
         s.limiter.build().unwrap().process_in_place(&mut before);
@@ -103,7 +103,7 @@ fn complete_chain_matches_independent_processors_in_all_formats() {
             .build()
             .unwrap()
             .process_in_place(&mut before);
-        let mut expected = vec![T::default(); input.len()];
+        let mut expected = vec![0.0_f64; input.len()];
         s.pitch
             .build()
             .unwrap()
@@ -114,6 +114,7 @@ fn complete_chain_matches_independent_processors_in_all_formats() {
             .build_with_sample_rate(RATE)
             .unwrap()
             .process_in_place(&mut expected);
+        let expected: Vec<T> = expected.into_iter().map(T::from_normalized).collect();
         for frames in [1, 63, 512] {
             let mut processor = AudioProcessor::new(RATE, frames, DspSettings::from(&o)).unwrap();
             let mut actual = vec![T::default(); input.len()];
