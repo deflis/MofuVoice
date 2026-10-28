@@ -271,6 +271,7 @@ struct DeviceSettings {
     backend: String,
     device: String,
     output_device: String,
+    preview_device: String,
     input_channel: usize,
     output_channels: Vec<usize>,
     frames: u32,
@@ -308,6 +309,7 @@ impl Settings {
                 backend: options.backend.name().into(),
                 device: options.device.clone(),
                 output_device: options.output_device.clone(),
+                preview_device: options.preview_device.clone(),
                 input_channel: options.input_channel,
                 output_channels: options.output_channels.clone(),
                 frames: options.frames,
@@ -371,6 +373,7 @@ impl Settings {
             level: self.level.settings(),
             device: self.devices.device.clone(),
             output_device: self.devices.output_device.clone(),
+            preview_device: self.devices.preview_device.clone(),
             input_channel: self.devices.input_channel,
             output_channels: self.devices.output_channels.clone(),
             backend: backend::BackendKind::parse(&self.devices.backend)
@@ -544,7 +547,13 @@ fn build_main_view(desktop: &mut Desktop) -> Result<MainView, String> {
             && !device_choices
                 .output_devices
                 .iter()
-                .any(|device| device == &settings.devices.output_device));
+                .any(|device| device == &settings.devices.output_device))
+        || (resolved == "cpal"
+            && !settings.devices.preview_device.is_empty()
+            && !device_choices
+                .output_devices
+                .iter()
+                .any(|device| device == &settings.devices.preview_device));
     let busy = desktop.session.poll();
     let info = desktop.session.info();
     Ok(MainView {

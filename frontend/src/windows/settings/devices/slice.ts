@@ -5,6 +5,7 @@ import type { DevicesValues } from "./schema";
 type DevicesState = DevicesValues & {
   setBackend: (value: DevicesValues["backend"]) => void;
   setDevice: (value: DevicesValues["device"]) => void;
+  setPreviewDevice: (value: DevicesValues["previewDevice"]) => void;
   setOutputDevice: (value: DevicesValues["outputDevice"]) => void;
   setInputChannel: (value: DevicesValues["inputChannel"]) => void;
   setOutputChannels: (value: DevicesValues["outputChannels"]) => void;
@@ -18,6 +19,9 @@ export const createDevicesSlice: StateCreator<SettingsStore, [], [], DevicesSlic
     backend: "auto",
     device: "",
     outputDevice: "",
+    previewDevice: "",
+    setPreviewDevice: (value) =>
+      set((state) => ({ devices: { ...state.devices, previewDevice: value } })),
     inputChannel: 1,
     outputChannels: [1],
     frames: 512,

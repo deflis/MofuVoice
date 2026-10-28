@@ -218,8 +218,9 @@ fn run_audio(
     } else {
         None
     };
-    let backend =
+    let mut backend =
         backend::select_with_sample_rate(kind, &options.output_device, options.sample_rate)?;
+    backend.set_preview_device(&options.preview_device)?;
     let routing = backend::ChannelRouting::from(&options);
     if options.inspect {
         let inspection =

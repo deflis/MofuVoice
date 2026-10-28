@@ -240,6 +240,7 @@ export function changeBackend(backend: string) {
     values.setBackend(v.parse(devicesSchema.entries.backend, backend));
     values.setDevice("");
     values.setOutputDevice("");
+    values.setPreviewDevice("");
     useSettingsConnection.setState({
       devices: [],
       outputDevices: [],

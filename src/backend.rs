@@ -128,6 +128,12 @@ pub trait AudioStream {
 /// Implement native device discovery/configuration separately from shared DSP.
 /// Inspect validates the requested sample rate and period without starting audio callbacks.
 pub trait AudioBackend {
+    fn set_preview_device(&mut self, name: &str) -> Result<()> {
+        if !name.is_empty() {
+            return Err("Preview device is only supported by CPAL".into());
+        }
+        Ok(())
+    }
     fn device_names(&self) -> Result<Vec<String>>;
     fn output_device_names(&self) -> Result<Vec<String>> {
         Ok(Vec::new())
