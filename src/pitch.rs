@@ -909,7 +909,6 @@ impl PitchShifter {
         let window = self.windows.analysis;
         let synthesis = self.windows.synthesis;
         let bins = window / 2 + 1;
-        let queue = 2 * window;
         // Quefrency is measured in samples, independently of FFT length.
         let cepstrum = CEPSTRUM;
         let ratio = if self.psola.is_some() {
@@ -921,7 +920,7 @@ impl PitchShifter {
         if let Some(fft) = &self.custom_fft {
             for i in 0..window {
                 self.shifted[i] = Complex {
-                    re: self.input[(clock + i) % window] * self.analysis_window[i],
+                    re: self.input[(clock + i) & (window - 1)] * self.analysis_window[i],
                     im: 0.0,
                 };
             }
@@ -931,7 +930,7 @@ impl PitchShifter {
             self.fft.forward_windowed_ring(
                 self.input.as_slice().try_into().unwrap(),
                 self.analysis_window.as_slice().try_into().unwrap(),
-                clock % window,
+                clock & (window - 1),
                 self.spectrum.as_mut_slice(),
                 &mut self.fft_work,
             );
@@ -1275,9 +1274,23 @@ impl PitchShifter {
             );
         }
         let start = window - synthesis;
-        for i in start..window {
-            self.output[(clock + i - start) % queue] +=
-                self.shifted[i].re * self.synthesis_window[i];
+        // Split once at the ring boundary so each contiguous overlap-add loop
+        // can vectorize without per-sample wrapping or indexed bounds checks.
+        let first = synthesis.min(self.output.len() - clock);
+        let (head, tail) = self.output.split_at_mut(clock);
+        for (output, offset) in [
+            (&mut tail[..first], 0),
+            (&mut head[..synthesis - first], first),
+        ] {
+            let begin = start + offset;
+            let end = begin + output.len();
+            for ((out, sample), weight) in output
+                .iter_mut()
+                .zip(&self.shifted[begin..end])
+                .zip(&self.synthesis_window[begin..end])
+            {
+                *out += sample.re * weight;
+            }
         }
         std::mem::swap(&mut self.previous_spectrum, &mut self.spectrum);
     }
@@ -1339,6 +1352,10 @@ impl PitchShifter {
     pub fn process_block(&mut self, input: &[f64], output: &mut [f64]) {
         let window = self.windows.analysis;
         let queue = 2 * window;
+        // Validated analysis lengths and their doubled queues are powers of two.
+        // Masking keeps ring indexing exact without a runtime integer division.
+        let input_mask = window - 1;
+        let output_mask = queue - 1;
         assert_eq!(input.len(), output.len());
         for (&sample, out) in input.iter().zip(output) {
             let dry = if sample.is_finite() { sample } else { 0.0 };
@@ -1357,7 +1374,7 @@ impl PitchShifter {
             } else {
                 dry
             };
-            self.input[self.clock % window] = source;
+            self.input[self.clock & input_mask] = source;
             let wet = if let Some(pvsola_wet) = pvsola_wet {
                 pvsola_wet
             } else if self.psola.is_some()
@@ -1365,9 +1382,9 @@ impl PitchShifter {
             {
                 source
             } else {
-                self.output[self.clock % queue]
+                self.output[self.clock]
             };
-            self.output[self.clock % queue] = 0.0;
+            self.output[self.clock] = 0.0;
             if self.remaining != 0 {
                 self.ratio += self.ratio_step;
                 self.remaining -= 1;
@@ -1387,7 +1404,7 @@ impl PitchShifter {
             } else {
                 (dry * (1.0 - self.wet) + wet * self.wet).clamp(-1.0, 1.0)
             };
-            self.clock = (self.clock + 1) % queue;
+            self.clock = (self.clock + 1) & output_mask;
             self.until_frame -= 1;
             if self.until_frame == 0 {
                 if self.pvsola.is_none()
