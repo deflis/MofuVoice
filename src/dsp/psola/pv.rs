@@ -5,7 +5,7 @@
 //! aligned against the completed vocoder output by cross-correlation and
 //! overlap-added, resetting the vocoder phases as described by Moinet & Dutoit.
 //! All storage is allocated at construction; the audio callback does no I/O.
-use crate::dsp::{complex::Complex, fft::Fft, phase, window::hann};
+use crate::dsp::{complex::Complex, fft::Fft, formant_math, phase, window::hann};
 use std::f64::consts::{PI, TAU};
 
 use crate::dsp::sinc::{fill_kernels, select_dot, Dot as ResampleDot, PHASES as RESAMPLE_PHASES};
@@ -31,7 +31,7 @@ const _: () = assert!(LATENCY >= FRAME + (FRAME + TOLERANCE) * 2 + RESAMPLE_RADI
 pub(crate) struct PvsOla {
     fft: Fft,
     correlation_fft: Fft,
-    vector_phase: bool,
+    vector_math: bool,
     math_precision: crate::pitch::MathPrecision,
     correlation_output: Box<[Complex; CORRELATION_SIZE]>,
     correlation_input: Box<[Complex; CORRELATION_SIZE]>,
@@ -89,7 +89,7 @@ impl PvsOla {
         Self {
             math_precision: crate::pitch::MathPrecision::Standard,
             fft: Fft::new(FRAME),
-            vector_phase: {
+            vector_math: {
                 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
                 {
                     std::is_x86_feature_detected!("avx2")
@@ -250,9 +250,35 @@ impl PvsOla {
         phase::angles(
             &self.frame[..],
             &mut self.current_phase[..],
-            self.vector_phase && self.math_precision == crate::pitch::MathPrecision::Standard,
+            self.vector_math && self.math_precision == crate::pitch::MathPrecision::Standard,
         );
         Complex::magnitudes(&self.frame[..], &mut self.magnitude[..]);
+    }
+
+    // Reuse the envelope buffer as log-magnitude scratch; no callback allocation.
+    // Regular frames and correlation resets use the same formant analysis.
+    fn analyze_envelope(&mut self, vector: bool) {
+        if self.preserve_formants && (self.ratio != 1.0 || self.formant_ratio != 1.0) {
+            formant_math::log(
+                &self.magnitude[..],
+                &mut self.envelope[..],
+                vector && self.math_precision == crate::pitch::MathPrecision::Standard,
+            );
+            for bin in 0..FRAME {
+                self.frame[bin] = Complex {
+                    re: self.envelope[bin],
+                    im: 0.0,
+                };
+            }
+            self.fft.inverse(&mut self.frame[..]);
+            self.frame[CEPSTRUM_CUTOFF + 1..FRAME - CEPSTRUM_CUTOFF].fill(Complex::default());
+            self.fft.forward(&mut self.frame[..]);
+            for bin in 0..FRAME {
+                self.envelope[bin] = self.frame[bin].re;
+            }
+        } else {
+            self.envelope.fill(0.0);
+        }
     }
 
     fn vocode_frame(&mut self, output_start: usize) {
@@ -277,22 +303,7 @@ impl PvsOla {
         };
         let stretch = HOP as f64 / alpha;
         self.analyze_spectrum();
-        if self.preserve_formants && (self.ratio != 1.0 || self.formant_ratio != 1.0) {
-            for bin in 0..FRAME {
-                self.frame[bin] = Complex {
-                    re: self.magnitude[bin].max(1e-12).ln(),
-                    im: 0.0,
-                };
-            }
-            self.fft.inverse(&mut self.frame[..]);
-            self.frame[CEPSTRUM_CUTOFF + 1..FRAME - CEPSTRUM_CUTOFF].fill(Complex::default());
-            self.fft.forward(&mut self.frame[..]);
-            for bin in 0..FRAME {
-                self.envelope[bin] = self.frame[bin].re;
-            }
-        } else {
-            self.envelope.fill(0.0);
-        }
+        self.analyze_envelope(self.vector_math);
         // Advance only positive-frequency phases. Using FRAME-k for the
         // negative bin adds whole turns at fractional analysis hops and breaks
         // conjugate symmetry, discarding signal energy in the inverse FFT.
@@ -437,22 +448,7 @@ impl PvsOla {
         }
         self.fft.forward(&mut self.frame[..]);
         self.analyze_spectrum();
-        if self.preserve_formants && (self.ratio != 1.0 || self.formant_ratio != 1.0) {
-            for bin in 0..FRAME {
-                self.frame[bin] = Complex {
-                    re: self.magnitude[bin].max(1e-12).ln(),
-                    im: 0.0,
-                };
-            }
-            self.fft.inverse(&mut self.frame[..]);
-            self.frame[CEPSTRUM_CUTOFF + 1..FRAME - CEPSTRUM_CUTOFF].fill(Complex::default());
-            self.fft.forward(&mut self.frame[..]);
-            for bin in 0..FRAME {
-                self.envelope[bin] = self.frame[bin].re;
-            }
-        } else {
-            self.envelope.fill(0.0);
-        }
+        self.analyze_envelope(self.vector_math);
         for bin in 0..FRAME {
             let raw_bin = if bin <= FRAME / 2 { bin } else { FRAME - bin };
             let target_bin =
@@ -575,11 +571,56 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "manual release benchmark"]
+    fn benchmark_formant_analysis() {
+        use std::{hint::black_box, time::Instant};
+        for semitones in [-12.0, -3.0, 0.0, 3.0, 7.0, 12.0] {
+            let ratio = 2.0_f64.powf(semitones / 12.0);
+            let mut dsp = PvsOla::new(ratio, true, 1.1);
+            for (i, value) in dsp.magnitude.iter_mut().enumerate() {
+                *value = 0.001 + (i as f64 * 0.17).sin().abs();
+            }
+            let mut times = [Vec::new(), Vec::new()];
+            for round in 0..9 {
+                for mode in [round % 2, 1 - round % 2] {
+                    let start = Instant::now();
+                    for _ in 0..2000 {
+                        let vector = mode == 1 && dsp.vector_math;
+                        black_box(&mut dsp).analyze_envelope(vector);
+                    }
+                    times[mode].push(start.elapsed().as_secs_f64() * 1e6 / 2000.0);
+                }
+            }
+            for values in &mut times {
+                values.sort_by(f64::total_cmp);
+            }
+            eprintln!("PVSOLA envelope pitch={semitones:+}: scalar_log={:.2}us vector_log={:.2}us speedup={:.2}x", times[0][4], times[1][4], times[0][4] / times[1][4]);
+        }
+    }
+
+    #[test]
+    fn accurate_envelope_uses_scalar_log_even_with_simd_available() {
+        let mut scalar = PvsOla::new(1.3, true, 1.1);
+        let mut accurate = PvsOla::new(1.3, true, 1.1);
+        accurate.set_math_precision(crate::pitch::MathPrecision::Accurate);
+        for i in 0..FRAME {
+            let magnitude = [0.0, 1e-15, 0.1, 1.0, 100.0][i % 5];
+            scalar.magnitude[i] = magnitude;
+            accurate.magnitude[i] = magnitude;
+        }
+        scalar.analyze_envelope(false);
+        accurate.analyze_envelope(accurate.vector_math);
+        for (expected, actual) in scalar.envelope.iter().zip(accurate.envelope.iter()) {
+            assert_eq!(actual.to_bits(), expected.to_bits());
+        }
+    }
+
+    #[test]
     fn shared_analysis_matches_scalar_for_regular_frames_and_resets() {
         for ratio in [0.5, 0.83, 1.3, 2.0] {
             for preserve in [false, true] {
                 let mut scalar = PvsOla::new(ratio, preserve, 1.1);
-                scalar.vector_phase = false;
+                scalar.vector_math = false;
                 let mut vector = PvsOla::new(ratio, preserve, 1.1);
                 for i in 0..24000 {
                     let input = 0.1 * (i as f64 * 0.071).sin() + 0.03 * (i as f64 * 0.213).cos();

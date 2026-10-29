@@ -2,10 +2,10 @@
 //! AVX2 and ARM64 NEON evaluate independent values without FMA or reduced precision.
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"))]
-#[path = "pitch_exp_table.rs"]
+#[path = "formant_exp_table.rs"]
 mod exp_table;
 
-pub(super) fn log(input: &[f64], output: &mut [f64], vector: bool) {
+pub(crate) fn log(input: &[f64], output: &mut [f64], vector: bool) {
     assert_eq!(input.len(), output.len());
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     if vector {
@@ -25,7 +25,7 @@ pub(super) fn log(input: &[f64], output: &mut [f64], vector: bool) {
     }
 }
 
-pub(super) fn exp(values: &mut [f64], vector: bool) {
+pub(crate) fn exp(values: &mut [f64], vector: bool) {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     if vector {
         // SAFETY: the caller uses the FFT's runtime AVX2 detection.
