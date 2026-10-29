@@ -13,6 +13,7 @@ export const voiceSchema = v.pipe(
       "td-psola-resampled",
       "fd-psola",
     ]),
+    mathPrecision: v.picklist(["standard", "accurate"]),
     psolaPitchEstimator: v.optional(v.picklist(["yin", "mpm", "mpm-fft", "nccf"]), "yin"),
     psolaAnalysisWindow: v.picklist([1024, 2048, 4096, 8192]),
     psolaSynthesisWindow: v.picklist([256, 512, 1024, 2048]),

@@ -16,6 +16,8 @@ export function VoiceSettings() {
     setEnabled,
     pitchUnit,
     setPitchUnit,
+    mathPrecision,
+    setMathPrecision,
     psolaPitchEstimator,
     setPsolaPitchEstimator,
     psolaAnalysisWindow,
@@ -65,6 +67,23 @@ export function VoiceSettings() {
       {!enabled && <p>{t("バイパス中。変換量は保持されます。")}</p>}
       <fieldset className={styles.settings} disabled={!enabled}>
         <DetailsPopup title={t("声の変換")} buttonLabel={t("詳細設定")}>
+          <label>
+            <span>{t("ボコーダーの計算精度")}</span>
+            <select
+              value={mathPrecision}
+              onChange={(event) =>
+                setMathPrecision(v.parse(voiceSchema.entries.mathPrecision, event.target.value))
+              }
+            >
+              <option value="standard">{t("標準（高速近似）")}</option>
+              <option value="accurate">{t("精度優先")}</option>
+            </select>
+          </label>
+          <p>
+            {t(
+              "精度優先はボコーダーの位相・フォルマント計算に標準の倍精度関数を使用します。CPU負荷が増える場合があります。窓長やPSOLAの補間精度は変わりません。",
+            )}
+          </p>
           <label>
             <span id={pitchAlgorithmId}>{t("ピッチ変換方式")}</span>
             <select

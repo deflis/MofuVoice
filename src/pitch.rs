@@ -158,9 +158,34 @@ pub fn pitch_ratio(semitones: f64) -> Result<f64, InvalidPitch> {
     Ok(2.0_f64.powf(semitones / 12.0))
 }
 
+/// Numerical evaluation of vocoder phase and formant functions.
+/// FFT acceleration and window sizes are independent of this choice.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MathPrecision {
+    #[default]
+    Standard,
+    Accurate,
+}
+impl MathPrecision {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Standard => "standard",
+            Self::Accurate => "accurate",
+        }
+    }
+    pub fn parse(value: &str) -> Result<Self, &'static str> {
+        match value {
+            "standard" => Ok(Self::Standard),
+            "accurate" => Ok(Self::Accurate),
+            _ => Err("math precision must be standard or accurate"),
+        }
+    }
+}
+
 /// Pitch and independent formant settings, in semitones.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PitchSettings {
+    pub math_precision: MathPrecision,
     /// Windows for vocoder pitch conversion and the optional formant stage.
     pub windows: SpectralWindows,
     pub psola_windows: SpectralWindows,
@@ -174,6 +199,7 @@ pub struct PitchSettings {
 impl Default for PitchSettings {
     fn default() -> Self {
         Self {
+            math_precision: MathPrecision::default(),
             algorithm: PitchAlgorithm::PhaseLocked,
             windows: SpectralWindows::default(),
             psola_windows: SpectralWindows::default(),
@@ -212,6 +238,10 @@ impl PitchSettings {
             self.windows,
             self.psola_windows,
         )?;
+        shifter.math_precision = self.math_precision;
+        if let Some(pvsola) = &mut shifter.pvsola {
+            pvsola.set_math_precision(self.math_precision);
+        }
         if let Some(psola) = &mut shifter.psola {
             psola.set_pitch_estimator(self.psola_pitch_estimator);
         }
@@ -694,6 +724,7 @@ struct Lobe {
 }
 
 pub struct PitchShifter {
+    math_precision: MathPrecision,
     windows: SpectralWindows,
     custom_fft: Option<crate::dsp::fft::Fft>,
     psola: Option<crate::dsp::psola::PsolaStream>,
@@ -788,6 +819,7 @@ impl PitchShifter {
             .map(|bin| std::f64::consts::TAU * HOP as f64 * bin as f64 / window as f64)
             .collect();
         Ok(Self {
+            math_precision: MathPrecision::default(),
             windows,
             custom_fft: (windows != SpectralWindows::default())
                 .then(|| crate::dsp::fft::Fft::new(window)),
@@ -937,7 +969,7 @@ impl PitchShifter {
             );
         }
         Complex::magnitudes(&self.spectrum[..bins], self.magnitude.as_mut_slice());
-        let vector = self.fft.vector();
+        let vector = self.fft.vector() && self.math_precision == MathPrecision::Standard;
         let neutral = ratio == 1.0 && self.formant_ratio == 1.0;
         if self.preserve_formants && !neutral {
             math::log(

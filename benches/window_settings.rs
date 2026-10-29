@@ -41,6 +41,7 @@ fn main() {
                 };
                 for semitones in [-12.0, -3.0, 3.0, 7.0, 12.0] {
                     let settings = PitchSettings {
+                        math_precision: Default::default(),
                         windows,
                         psola_windows: windows,
                         psola_pitch_estimator: Default::default(),

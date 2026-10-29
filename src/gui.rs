@@ -282,6 +282,7 @@ struct DeviceSettings {
 struct VoiceSettings {
     enabled: bool,
     pitch_unit: String,
+    math_precision: String,
     psola_pitch_estimator: String,
     psola_analysis_window: usize,
     psola_synthesis_window: usize,
@@ -318,6 +319,7 @@ impl Settings {
             voice: VoiceSettings {
                 enabled: options.voice_enabled,
                 pitch_unit: options.pitch_unit.clone(),
+                math_precision: options.pitch.math_precision.name().into(),
                 psola_pitch_estimator: options.pitch.psola_pitch_estimator.name().into(),
                 psola_analysis_window: options.pitch.psola_windows.analysis,
                 psola_synthesis_window: options.pitch.psola_windows.synthesis,
@@ -381,6 +383,8 @@ impl Settings {
             frames: self.devices.frames,
             sample_rate: self.devices.sample_rate,
             pitch: crate::pitch::PitchSettings {
+                math_precision: crate::pitch::MathPrecision::parse(&self.voice.math_precision)
+                    .map_err(str::to_string)?,
                 psola_pitch_estimator: crate::pitch::PitchEstimator::parse(
                     &self.voice.psola_pitch_estimator,
                 )
@@ -1198,6 +1202,18 @@ mod tests {
             assert_eq!(settings.voice.pitch_unit, unit);
             assert_eq!(settings.options().unwrap(), options);
             settings.voice.pitch_unit = "invalid".into();
+            assert!(settings.options().is_err());
+        }
+    }
+
+    #[test]
+    fn math_precision_controls_round_trip_and_reject_unknown_values() {
+        for mode in ["standard", "accurate"] {
+            let options = Options::parse_gui(["--math-precision", mode].map(String::from)).unwrap();
+            let mut settings = Settings::from_options(&options);
+            assert_eq!(settings.voice.math_precision, mode);
+            assert_eq!(settings.options().unwrap(), options);
+            settings.voice.math_precision = "unknown".into();
             assert!(settings.options().is_err());
         }
     }

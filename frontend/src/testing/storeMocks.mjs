@@ -18,6 +18,7 @@ export const settings = {
     enabled: true,
     pitchUnit: "semitones",
     pitchAlgorithm: "phase-locked",
+    mathPrecision: "standard",
     psolaPitchEstimator: "yin",
     psolaAnalysisWindow: 2048,
     psolaSynthesisWindow: 512,
