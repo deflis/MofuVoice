@@ -39,6 +39,8 @@ fn arguments(options: &Options) -> Vec<String> {
         options.pitch.windows.analysis.to_string(),
         "--synthesis-window".into(),
         options.pitch.windows.synthesis.to_string(),
+        "--math-precision".into(),
+        options.pitch.math_precision.name().into(),
         "--psola-pitch-estimator".into(),
         options.pitch.psola_pitch_estimator.name().into(),
         "--psola-analysis-window".into(),
@@ -145,6 +147,7 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
             "pitch",
             "pitch_algorithm",
             "pitch_unit",
+            "math_precision",
             "psola_pitch_estimator",
             "psola_analysis_window",
             "psola_synthesis_window",
@@ -227,6 +230,8 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
         values.get("analysis_window").copied().unwrap_or("2048"),
         "--synthesis-window",
         values.get("synthesis_window").copied().unwrap_or("512"),
+        "--math-precision",
+        values.get("math_precision").copied().unwrap_or("standard"),
         "--psola-pitch-estimator",
         values
             .get("psola_pitch_estimator")
@@ -385,6 +390,7 @@ pub(crate) fn merge(saved: &Options, args: Vec<String>) -> Result<Options, Box<d
             "--sample-rate",
             "--pitch",
             "--pitch-algorithm",
+            "--math-precision",
             "--psola-pitch-estimator",
             "--psola-analysis-window",
             "--psola-synthesis-window",
@@ -499,8 +505,10 @@ pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>>
         options.pitch.algorithm.name()
     ));
     text.push_str(&format!(
-        "analysis_window={}\nsynthesis_window={}\n",
-        options.pitch.windows.analysis, options.pitch.windows.synthesis
+        "math_precision={}\nanalysis_window={}\nsynthesis_window={}\n",
+        options.pitch.math_precision.name(),
+        options.pitch.windows.analysis,
+        options.pitch.windows.synthesis
     ));
     text.push_str(&format!(
         "psola_pitch_estimator={}\n",
@@ -761,6 +769,33 @@ mod tests {
             .unwrap();
             assert_eq!(merged.pitch.psola_pitch_estimator, estimator);
         }
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn math_precision_persists_merges_and_validates() {
+        let path = std::env::temp_dir().join(format!("math-precision-{}.ini", std::process::id()));
+        let options = Options::parse(["--math-precision", "accurate"].map(String::from)).unwrap();
+        save(&path, &options).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            load(&path).unwrap().pitch.math_precision,
+            options.pitch.math_precision
+        );
+        assert_eq!(
+            merge(&options, vec![]).unwrap().pitch.math_precision,
+            options.pitch.math_precision
+        );
+        assert_eq!(
+            merge(&options, vec!["--math-precision".into(), "standard".into()])
+                .unwrap()
+                .pitch
+                .math_precision,
+            crate::pitch::MathPrecision::Standard
+        );
+        assert!(
+            decode(&text.replace("math_precision=accurate", "math_precision=invalid")).is_err()
+        );
         std::fs::remove_file(path).unwrap();
     }
 

@@ -32,6 +32,7 @@ pub(crate) struct PvsOla {
     fft: Fft,
     correlation_fft: Fft,
     vector_phase: bool,
+    math_precision: crate::pitch::MathPrecision,
     correlation_output: Box<[Complex; CORRELATION_SIZE]>,
     correlation_input: Box<[Complex; CORRELATION_SIZE]>,
     input: Box<[f64; RING]>,
@@ -72,6 +73,9 @@ pub(crate) struct PvsOla {
 }
 
 impl PvsOla {
+    pub fn set_math_precision(&mut self, precision: crate::pitch::MathPrecision) {
+        self.math_precision = precision;
+    }
     pub fn new(ratio: f64, preserve_formants: bool, formant_ratio: f64) -> Self {
         assert!(ratio.is_finite() && (0.5..=2.0).contains(&ratio));
         let window = Box::new(std::array::from_fn(|i| hann(i, FRAME)));
@@ -83,6 +87,7 @@ impl PvsOla {
             );
         }
         Self {
+            math_precision: crate::pitch::MathPrecision::Standard,
             fft: Fft::new(FRAME),
             vector_phase: {
                 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -245,7 +250,7 @@ impl PvsOla {
         phase::angles(
             &self.frame[..],
             &mut self.current_phase[..],
-            self.vector_phase,
+            self.vector_phase && self.math_precision == crate::pitch::MathPrecision::Standard,
         );
         Complex::magnitudes(&self.frame[..], &mut self.magnitude[..]);
     }

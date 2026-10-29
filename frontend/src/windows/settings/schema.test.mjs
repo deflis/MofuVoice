@@ -229,3 +229,21 @@ test("PSOLA estimator choice is saved and invalid estimators rejected", async ()
     false,
   );
 });
+
+test("math precision is saved and restored and rejects invalid choices", async () => {
+  for (const mathPrecision of ["standard", "accurate"]) {
+    settingsStore.getState().voice.setMathPrecision(mathPrecision);
+    await settingsStore.getState().save();
+    const saved = calls("save_settings").at(-1).arguments[1].settings;
+    assert.equal(saved.voice.mathPrecision, mathPrecision);
+    handlers.set("settings_view", async () => ({ ...settingsView, settings: saved }));
+    assert.equal((await settingsApi.getView()).settings.voice.mathPrecision, mathPrecision);
+  }
+  assert.equal(
+    v.safeParse(settingsSchema, {
+      ...settings,
+      voice: { ...settings.voice, mathPrecision: "unknown" },
+    }).success,
+    false,
+  );
+});

@@ -147,6 +147,7 @@ fn fd_psola_applies_independent_formant_shift_and_emits_audio() {
         .collect();
     for shift in [-4.0, 4.0] {
         let settings = PitchSettings {
+            math_precision: Default::default(),
             psola_pitch_estimator: Default::default(),
             psola_windows: Default::default(),
             windows: Default::default(),

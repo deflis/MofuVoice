@@ -21,6 +21,7 @@ fn windows_validate_and_report_only_the_selected_algorithms_delay() {
             let settings = PitchSettings {
                 windows,
                 psola_windows: windows,
+                math_precision: Default::default(),
                 psola_pitch_estimator: Default::default(),
                 algorithm,
                 ..Default::default()
@@ -123,6 +124,7 @@ fn configured_windows_keep_pitch_and_phase_continuous(windows: SpectralWindows) 
             let settings = PitchSettings {
                 windows,
                 psola_windows: windows,
+                math_precision: Default::default(),
                 psola_pitch_estimator: Default::default(),
                 algorithm,
                 semitones,
