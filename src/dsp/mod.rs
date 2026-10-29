@@ -6,6 +6,7 @@ pub(crate) mod envelope;
 pub(crate) mod fft;
 pub(crate) mod fft_kernel;
 pub(crate) mod fft_split;
+pub(crate) mod formant_math;
 pub(crate) mod gain;
 pub(crate) mod phase;
 pub(crate) mod psola;
