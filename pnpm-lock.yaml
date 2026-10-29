@@ -229,13 +229,13 @@ importers:
     devDependencies:
       '@css-modules-kit/codegen':
         specifier: 1.4.0
-        version: 1.4.0(typescript@6.0.3)
+        version: 1.4.0(typescript@7.0.2)
       '@css-modules-kit/ts-plugin':
         specifier: 1.4.0
-        version: 1.4.0(typescript@6.0.3)
+        version: 1.4.0(typescript@7.0.2)
       typescript:
-        specifier: 6.0.3
-        version: 6.0.3
+        specifier: 7.0.2
+        version: 7.0.2
 
 packages:
 
@@ -1275,11 +1275,6 @@ packages:
     resolution: {integrity: sha512-jBrmx4lYmaC9k/mgPbylxs7kBUxHtD8256up+HjLaDFfXScKJQyil+SWXSvhAtT7XHo+yTVlpB81PGmHP8oLSQ==}
     engines: {node: ^20.0.0 || >=22.0.0}
 
-  typescript@6.0.3:
-    resolution: {integrity: sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw==}
-    engines: {node: '>=14.17'}
-    hasBin: true
-
   typescript@7.0.2:
     resolution: {integrity: sha512-8FYau96o3NKOhbjKi/qNvG/W5jhzxkbdm5sj9AbZ/5T5sWqn3hJgLfGx27sRKZWTvyzCP8dLRBTf5tBTSRVUNA==}
     engines: {node: '>=16.20.0'}
@@ -1469,26 +1464,26 @@ snapshots:
       '@babel/helper-string-parser': 8.0.6
       '@babel/helper-validator-identifier': 8.0.6
 
-  '@css-modules-kit/codegen@1.4.0(typescript@6.0.3)':
+  '@css-modules-kit/codegen@1.4.0(typescript@7.0.2)':
     dependencies:
-      '@css-modules-kit/core': 1.4.0(typescript@6.0.3)
+      '@css-modules-kit/core': 1.4.0(typescript@7.0.2)
       chokidar: 4.0.3
-      typescript: 6.0.3
+      typescript: 7.0.2
 
-  '@css-modules-kit/core@1.4.0(typescript@6.0.3)':
+  '@css-modules-kit/core@1.4.0(typescript@7.0.2)':
     dependencies:
       postcss: 8.5.29
       postcss-safe-parser: 7.1.0(postcss@8.5.29)
       postcss-selector-parser: 7.1.6
       postcss-value-parser: 4.2.0
-      typescript: 6.0.3
+      typescript: 7.0.2
 
-  '@css-modules-kit/ts-plugin@1.4.0(typescript@6.0.3)':
+  '@css-modules-kit/ts-plugin@1.4.0(typescript@7.0.2)':
     dependencies:
-      '@css-modules-kit/core': 1.4.0(typescript@6.0.3)
+      '@css-modules-kit/core': 1.4.0(typescript@7.0.2)
       '@volar/language-core': 2.4.28
-      '@volar/typescript': 2.4.28(typescript@6.0.3)
-      typescript: 6.0.3
+      '@volar/typescript': 2.4.28(typescript@7.0.2)
+      typescript: 7.0.2
 
   '@jridgewell/gen-mapping@0.4.0-beta.0':
     dependencies:
@@ -1829,13 +1824,13 @@ snapshots:
 
   '@volar/source-map@2.4.28': {}
 
-  '@volar/typescript@2.4.28(typescript@6.0.3)':
+  '@volar/typescript@2.4.28(typescript@7.0.2)':
     dependencies:
       '@volar/language-core': 2.4.28
       path-browserify: 1.0.1
       vscode-uri: 3.2.0
     optionalDependencies:
-      typescript: 6.0.3
+      typescript: 7.0.2
 
   babel-plugin-react-compiler@1.0.0:
     dependencies:
@@ -2087,8 +2082,6 @@ snapshots:
       picomatch: 4.0.7
 
   tinypool@2.2.0: {}
-
-  typescript@6.0.3: {}
 
   typescript@7.0.2:
     optionalDependencies:
