@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import styles from "../settings.module.css";
 import { NumberInput } from "../NumberInput";
 import { useId } from "react";
@@ -18,6 +19,7 @@ export function SemitonesInput({
   value: number;
   onChange: (value: number) => void;
 }) {
+  const { t } = useTranslation();
   const number = percent ? Number(semitonesToPercent(value).toFixed(4)) : value;
   const change = (nextValue: number) =>
     onChange(percent ? percentToSemitones(nextValue) : nextValue);
@@ -27,7 +29,7 @@ export function SemitonesInput({
     <div className={styles.semitones}>
       <label htmlFor={sliderId}>
         {label}
-        <small>{percent ? "%" : "半音"}</small>
+        <small>{percent ? "%" : t("半音")}</small>
       </label>
       <div className={styles["slider-row"]}>
         <input
@@ -40,7 +42,7 @@ export function SemitonesInput({
           onChange={(event) => change(event.currentTarget.valueAsNumber)}
         />
         <NumberInput
-          aria-label={`${label}の値（${percent ? "%" : "半音"}）`}
+          aria-label={t("{0}の値（{1}）", { v0: label, v1: percent ? "%" : t("半音") })}
           min={percent ? 50 : -12}
           max={percent ? 200 : 12}
           step={percent ? "any" : 0.01}
@@ -50,7 +52,10 @@ export function SemitonesInput({
         />
         <div className={styles["eq-scale"]}>
           <span>{lowerLabel}</span>
-          <span>元の声{percent ? "（100%）" : ""}</span>
+          <span>
+            {t("元の声")}
+            {percent ? "（100%）" : ""}
+          </span>
           <span>{upperLabel}</span>
         </div>
       </div>

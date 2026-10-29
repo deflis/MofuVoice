@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import styles from "./overview.module.css";
 import * as v from "valibot";
 import { useSettingsStore } from "../store";
@@ -19,6 +20,7 @@ export function EqCard({
   id: string;
   title: string;
 }) {
+  const { t } = useTranslation();
   const settings = useSettingsStore((state) => state[slot]);
   const rate = useSettingsStore((state) => state.devices.sampleRate);
   const rumble = useSettingsStore((state) => slot === "inputEq" && state.noise.rumbleFilter);
@@ -41,7 +43,7 @@ export function EqCard({
   return (
     <Card
       id={id}
-      title={title}
+      title={t(title)}
       onSelect={onSelect}
       locked={locked}
       toggles={
@@ -50,15 +52,21 @@ export function EqCard({
               { label: "EQ", enabled: settings.enabled, onChange: setEnabled },
               { label: "80 Hz HPF", enabled: rumble, onChange: setRumbleFilter },
             ]
-          : [{ label: "有効", enabled: settings.enabled, onChange: setEnabled }]
+          : [{ label: t("有効"), enabled: settings.enabled, onChange: setEnabled }]
       }
     >
       {(settings.enabled || (isInput && rumble)) &&
         (valid ? (
           <>
             <Plot
-              description={`${title}の有効な処理の周波数応答。${rate} Hz。${settings.enabled ? "EQの出力調整と正のゲインに対するヘッドルームを含みます。" : "80 Hz HPFの設定応答です。"}`}
-              xLabel="20 Hz → 20 kHz（対数）"
+              description={t("{0}の有効な処理の周波数応答。{1} Hz。{2}", {
+                v0: t(title),
+                v1: rate,
+                v2: settings.enabled
+                  ? t("EQの出力調整と正のゲインに対するヘッドルームを含みます。")
+                  : t("80 Hz HPFの設定応答です。"),
+              })}
+              xLabel={t("20 Hz → 20 kHz（対数）")}
               yLabel={`${minimum}〜${maximum} dB`}
             >
               <path className={styles["filter-reference"]} d={`M36 ${y(0)}H308`} />
@@ -77,7 +85,7 @@ export function EqCard({
                   />
                 ))}
             </Plot>
-            {isInput && rumble && <Value>低域ノイズ対策: 80 Hz HPF</Value>}
+            {isInput && rumble && <Value>{t("低域ノイズ対策: 80 Hz HPF")}</Value>}
             {settings.enabled && (
               <>
                 <Value>
@@ -89,15 +97,17 @@ export function EqCard({
                     .join(" · ")}
                 </Value>
                 <Value>
-                  出力調整 {num(settings.outputDb)} dB · ヘッドルーム{" "}
+                  {t("出力調整")}
+                  {num(settings.outputDb)}
+                  {t("dB · ヘッドルーム")}{" "}
                   {num(settings.bands.reduce((sum, band) => sum + Math.max(0, band.gainDb), 0))} dB
                   · {rate.toLocaleString()} Hz
                 </Value>
               </>
             )}
             <small>
-              {isInput ? "図は有効なHPFとEQの合成特性です。" : "図はEQの設定周波数応答です。"}
-              {settings.enabled && "出力調整と内部ヘッドルームを含みます。"}
+              {isInput ? t("図は有効なHPFとEQの合成特性です。") : t("図はEQの設定周波数応答です。")}
+              {settings.enabled && t("出力調整と内部ヘッドルームを含みます。")}
             </small>
           </>
         ) : (

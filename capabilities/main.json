@@ -2,5 +2,5 @@
   "identifier": "main",
   "description": "Main, settings, and log windows use typed IPC commands and channels.",
   "windows": ["main", "settings", "log"],
-  "permissions": []
+  "permissions": ["core:window:allow-set-title"]
 }

@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import styles from "../settings.module.css";
 import deviceStyles from "./devices.module.css";
 import { NumberInput } from "../NumberInput";
@@ -6,10 +7,11 @@ import { DetailsPopup } from "../DetailsPopup";
 import { useBackendSettings, useBufferSettings } from "./hooks";
 
 function BackendSettings() {
+  const { t } = useTranslation();
   const { backend, backends, changeBackend } = useBackendSettings();
   return (
     <fieldset className={styles.settings}>
-      <legend>音声バックエンド</legend>
+      <legend>{t("音声バックエンド")}</legend>
       <div className={deviceStyles["routing-choices"]}>
         {backends.map((available) => (
           <button
@@ -18,23 +20,28 @@ function BackendSettings() {
             aria-pressed={backend === available}
             onClick={() => void changeBackend(available)}
           >
-            {{ auto: "自動", cpal: "標準", asio: "ASIO" }[available] ?? available}
+            {{ auto: t("自動"), cpal: t("標準"), asio: "ASIO" }[available] ?? available}
           </button>
         ))}
       </div>
       {!backends.includes(backend) && (
-        <p role="alert">現在の接続方式「{backend}」は利用できません。選び直してください。</p>
+        <p role="alert">
+          {t("現在の接続方式「")}
+          {backend}
+          {t("」は利用できません。選び直してください。")}
+        </p>
       )}
     </fieldset>
   );
 }
 
 function BufferSettings() {
+  const { t } = useTranslation();
   const { frames, setFrames } = useBufferSettings();
   return (
     <>
       <label>
-        バッファサイズ（サンプル）
+        {t("バッファサイズ（サンプル）")}
         <NumberInput
           min="1"
           max="8192"
@@ -45,15 +52,18 @@ function BufferSettings() {
         />
       </label>
       <p>
-        小さくすると遅延が減ります。音切れする場合は大きくしてください。デバイスによっては指定値が調整されます。
+        {t(
+          "小さくすると遅延が減ります。音切れする場合は大きくしてください。デバイスによっては指定値が調整されます。",
+        )}
       </p>
     </>
   );
 }
 
 export function DeviceAdvancedSettings() {
+  const { t } = useTranslation();
   return (
-    <DetailsPopup title="音声デバイス" buttonLabel="詳細設定">
+    <DetailsPopup title={t("音声デバイス")} buttonLabel={t("詳細設定")}>
       <BackendSettings />
       <BufferSettings />
     </DetailsPopup>

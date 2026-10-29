@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import styles from "./settings.module.css";
 import { CompressorSettings } from "./compressor/CompressorSettings";
 import { FilterOverview } from "./overview/FilterOverview";
@@ -29,20 +30,21 @@ const groups: { id: SettingsSection; name: string }[] = [
 ];
 
 export function SettingsPanel() {
+  const { t } = useTranslation();
   const locked = useSettingsLocked();
   const [group, setGroup] = useState<SettingsSection>(readSettingsSection);
   useEffect(() => connectSettingsNavigation(setGroup), []);
   return (
     <div className={styles["settings-layout"]}>
-      <nav aria-label="設定カテゴリ">
+      <nav aria-label={t("設定カテゴリ")}>
         {groups.map((item) => (
           <button
-            key={item.name}
+            key={t(item.name)}
             type="button"
             aria-current={group === item.id ? "page" : undefined}
             onClick={() => setGroup(item.id)}
           >
-            {item.name}
+            {t(item.name)}
           </button>
         ))}
       </nav>
@@ -59,17 +61,17 @@ export function SettingsPanel() {
         ) : (
           <>
             <button type="button" onClick={() => setGroup("overview")}>
-              フィルタ構成へ戻る
+              {t("フィルタ構成へ戻る")}
             </button>
             <fieldset className={styles.settings} disabled={locked}>
               {group === "inputEq" && (
                 <>
-                  <EqSettings filter="inputEq" title="入力EQ" />
+                  <EqSettings filter="inputEq" title={t("入力EQ")} />
                   <RumbleSettings />
                 </>
               )}
               {group === "preConversionEq" && (
-                <EqSettings filter="preConversionEq" title="変換前EQ" />
+                <EqSettings filter="preConversionEq" title={t("変換前EQ")} />
               )}
               {group === "postConversionEq" && <EqSettings />}
               {group === "noiseGate" && <NoiseGateSettings />}
@@ -92,11 +94,11 @@ export function SettingsPanel() {
               )}
               {group === "tone" && (
                 <>
-                  <EqSettings filter="inputEq" title="入力EQ" />
+                  <EqSettings filter="inputEq" title={t("入力EQ")} />
                   <RumbleSettings />
                   <LimiterSettings />
                   <CompressorSettings />
-                  <EqSettings filter="preConversionEq" title="変換前EQ" />
+                  <EqSettings filter="preConversionEq" title={t("変換前EQ")} />
                   <EqSettings />
                   <ReverbSettings />
                   <AutoLevelSettings />
