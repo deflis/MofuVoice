@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import styles from "../settings.module.css";
 import { pitchLatency } from "./latency";
 import { DetailsPopup } from "../DetailsPopup";
@@ -9,6 +10,7 @@ import * as v from "valibot";
 import { voiceSchema, type VoiceValues } from "./schema";
 
 export function VoiceSettings() {
+  const { t } = useTranslation();
   const {
     enabled,
     setEnabled,
@@ -51,20 +53,20 @@ export function VoiceSettings() {
   const pitchEstimatorId = useId();
   return (
     <section>
-      <h2>声の変換</h2>
+      <h2>{t("声の変換")}</h2>
       <label className={styles.check}>
         <input
           type="checkbox"
           checked={enabled}
           onChange={(event) => setEnabled(event.target.checked)}
         />
-        有効
+        {t("有効")}
       </label>
-      {!enabled && <p>バイパス中。変換量は保持されます。</p>}
+      {!enabled && <p>{t("バイパス中。変換量は保持されます。")}</p>}
       <fieldset className={styles.settings} disabled={!enabled}>
-        <DetailsPopup title="声の変換" buttonLabel="詳細設定">
+        <DetailsPopup title={t("声の変換")} buttonLabel={t("詳細設定")}>
           <label>
-            <span id={pitchAlgorithmId}>ピッチ変換方式</span>
+            <span id={pitchAlgorithmId}>{t("ピッチ変換方式")}</span>
             <select
               aria-labelledby={pitchAlgorithmId}
               value={pitchAlgorithm}
@@ -72,42 +74,46 @@ export function VoiceSettings() {
                 setPitchAlgorithm(v.parse(voiceSchema.entries.pitchAlgorithm, event.target.value))
               }
             >
-              <optgroup label="フェーズボコーダー">
-                <option value="phase-locked">位相ロック（標準）</option>
-                <option value="pvsola-sync">スペクトル位相同期</option>
+              <optgroup label={t("フェーズボコーダー")}>
+                <option value="phase-locked">{t("位相ロック（標準）")}</option>
+                <option value="pvsola-sync">{t("スペクトル位相同期")}</option>
               </optgroup>
               <optgroup label="PVSOLA">
                 <option value="pvsola">PVSOLA</option>
               </optgroup>
               <optgroup label="PSOLA">
-                <option value="td-psola">TD-PSOLA＋フェーズボコーダー</option>
-                <option value="td-psola-resampled">TD-PSOLA＋リサンプリング</option>
+                <option value="td-psola">{t("TD-PSOLA＋フェーズボコーダー")}</option>
+                <option value="td-psola-resampled">{t("TD-PSOLA＋リサンプリング")}</option>
                 <option value="fd-psola">FD-PSOLA</option>
               </optgroup>
             </select>
           </label>
           <p>
-            同じピッチとフォルマントの設定で聞き比べてください。変更は保存後、次の音声開始時に反映します。
+            {t(
+              "同じピッチとフォルマントの設定で聞き比べてください。変更は保存後、次の音声開始時に反映します。",
+            )}
           </p>
-          <p>{algorithmDescription(pitchAlgorithm)}</p>
+          <p>{algorithmDescription(pitchAlgorithm, t)}</p>
           {vocoder && (
             <>
               <WindowControls
-                title="ボコーダーのウィンドウ"
+                title={t("ボコーダーのウィンドウ")}
                 analysis={analysisWindow}
                 synthesis={synthesisWindow}
                 setAnalysis={setAnalysisWindow}
                 setSynthesis={setSynthesisWindow}
               />
               <p>
-                位相ロック（標準）・スペクトル位相同期と、TD-PSOLA＋フェーズボコーダー／FD-PSOLAのフォルマント補正に使います。
+                {t(
+                  "位相ロック（標準）・スペクトル位相同期と、TD-PSOLA＋フェーズボコーダー／FD-PSOLAのフォルマント補正に使います。",
+                )}
               </p>
             </>
           )}
           {psola && (
             <>
               <label>
-                <span id={pitchEstimatorId}>PSOLAのピッチ推定</span>
+                <span id={pitchEstimatorId}>{t("PSOLAのピッチ推定")}</span>
                 <select
                   aria-labelledby={pitchEstimatorId}
                   value={psolaPitchEstimator}
@@ -118,7 +124,7 @@ export function VoiceSettings() {
                   }
                 >
                   <optgroup label="YIN">
-                    <option value="yin">YIN（標準）</option>
+                    <option value="yin">{t("YIN（標準）")}</option>
                   </optgroup>
                   <optgroup label="MPM">
                     <option value="mpm">MPM</option>
@@ -130,60 +136,66 @@ export function VoiceSettings() {
                 </select>
               </label>
               <p>
-                声によって推定精度が変わります。低音や息の多い声で聞き比べてください。追加の解析待ちはありません。MPMは正規化相関、MPM＋FFTはFFT自己相関で、ウィンドウ長によって計算負荷が変わります。NCCFは過去の周期も参考にします。
+                {t(
+                  "声によって推定精度が変わります。低音や息の多い声で聞き比べてください。追加の解析待ちはありません。MPMは正規化相関、MPM＋FFTはFFT自己相関で、ウィンドウ長によって計算負荷が変わります。NCCFは過去の周期も参考にします。",
+                )}
               </p>
               <WindowControls
-                title="PSOLAのウィンドウ"
+                title={t("PSOLAのウィンドウ")}
                 analysis={psolaAnalysisWindow}
                 synthesis={psolaSynthesisWindow}
                 setAnalysis={setPsolaAnalysisWindow}
                 setSynthesis={setPsolaSynthesisWindow}
               />
               <p>
-                TD-PSOLA＋フェーズボコーダーとTD-PSOLA＋リサンプリングはピッチ周期（波形単位）を基準にウィンドウを適用し、FD-PSOLAは解析ウィンドウと合成ウィンドウのサイズを設定します。設定値によって遅延時間や音質が変化します。
+                {t(
+                  "TD-PSOLA＋フェーズボコーダーとTD-PSOLA＋リサンプリングはピッチ周期（波形単位）を基準にウィンドウを適用し、FD-PSOLAは解析ウィンドウと合成ウィンドウのサイズを設定します。設定値によって遅延時間や音質が変化します。",
+                )}
               </p>
             </>
           )}
           <p>
-            変換時のDSP遅延の合計：{((delay / sampleRate) * 1000).toFixed(1)}{" "}
-            ms。高さとフォルマントがともに0の場合は0
-            msです。入出力バッファーと機器の遅延は含みません。
+            {t("変換時のDSP遅延の合計：")}
+            {((delay / sampleRate) * 1000).toFixed(1)}{" "}
+            {t(
+              "ms。高さとフォルマントがともに0の場合は0 msです。入出力バッファーと機器の遅延は含みません。",
+            )}
           </p>
-          {pitchAlgorithm === "pvsola" && <p>PVSOLAのウィンドウ長は固定です。</p>}
+          {pitchAlgorithm === "pvsola" && <p>{t("PVSOLAのウィンドウ長は固定です。")}</p>}
         </DetailsPopup>
         <label>
-          ピッチの表示単位
+          {t("ピッチの表示単位")}
           <select
             value={pitchUnit}
             onChange={(event) =>
               setPitchUnit(v.parse(voiceSchema.entries.pitchUnit, event.target.value))
             }
           >
-            <option value="semitones">半音</option>
-            <option value="percent">パーセント</option>
+            <option value="semitones">{t("半音")}</option>
+            <option value="percent">{t("パーセント")}</option>
           </select>
         </label>
         {pitchUnit === "percent" && (
-          <p>100%が元の高さ、50%で1オクターブ下、200%で1オクターブ上です。</p>
+          <p>{t("100%が元の高さ、50%で1オクターブ下、200%で1オクターブ上です。")}</p>
         )}
         <SemitonesInput
           percent={pitchUnit === "percent"}
-          lowerLabel="低く"
-          upperLabel="高く"
-          label="声の高さ（ピッチ）"
+          lowerLabel={t("低く")}
+          upperLabel={t("高く")}
+          label={t("声の高さ（ピッチ）")}
           value={pitch}
           onChange={(value) => setPitch(value)}
         />
         <fieldset className={styles.settings} disabled={!preserveFormants}>
           <SemitonesInput
-            label="フォルマント"
-            lowerLabel="太く"
-            upperLabel="明るく"
+            label={t("フォルマント")}
+            lowerLabel={t("太く")}
+            upperLabel={t("明るく")}
             value={formantShift}
             onChange={(value) => setFormantShift(value)}
           />
         </fieldset>
-        <p>声の太さ・明るさです。残響（リバーブ）とは別の調整です。</p>
+        <p>{t("声の太さ・明るさです。残響（リバーブ）とは別の調整です。")}</p>
         <button
           type="button"
           onClick={() => {
@@ -191,7 +203,7 @@ export function VoiceSettings() {
             setFormantShift(0);
           }}
         >
-          元の声に戻す
+          {t("元の声に戻す")}
         </button>
         <label className={styles.check}>
           <input
@@ -205,27 +217,42 @@ export function VoiceSettings() {
               }
             }}
           />
-          フォルマントを独立して調整する
+          {t("フォルマントを独立して調整する")}
         </label>
       </fieldset>
     </section>
   );
 }
 
-function algorithmDescription(algorithm: string): string {
+function algorithmDescription(
+  algorithm: string,
+  t: ReturnType<typeof useTranslation>["t"],
+): string {
   switch (algorithm) {
     case "td-psola":
-      return "TD-PSOLA＋フェーズボコーダーは、TD-PSOLAで高さを変え、フォルマントの移動にはフェーズボコーダーを使います。DSP遅延はウィンドウ設定とフォルマント移動の有無で変わります。";
+      return t(
+        "TD-PSOLA＋フェーズボコーダーは、TD-PSOLAで高さを変え、フォルマントの移動にはフェーズボコーダーを使います。DSP遅延はウィンドウ設定とフォルマント移動の有無で変わります。",
+      );
     case "td-psola-resampled":
-      return "TD-PSOLA＋リサンプリングは、時間伸縮と帯域制限リサンプリングで高さとフォルマントを独立して変えます。DSP遅延はウィンドウ設定で変わります。";
+      return t(
+        "TD-PSOLA＋リサンプリングは、時間伸縮と帯域制限リサンプリングで高さとフォルマントを独立して変えます。DSP遅延はウィンドウ設定で変わります。",
+      );
     case "pvsola":
-      return "PVSOLAは位相ボコーダーで時間伸縮し、相互相関で整列した入力フレームを周期的に挿入してから再生速度を変えます。DSP遅延は48 kHzで約96 msです。フォルマントの保持と独立調整に対応します。";
+      return t(
+        "PVSOLAは位相ボコーダーで時間伸縮し、相互相関で整列した入力フレームを周期的に挿入してから再生速度を変えます。DSP遅延は48 kHzで約96 msです。フォルマントの保持と独立調整に対応します。",
+      );
     case "pvsola-sync":
-      return "スペクトル位相同期は、直接スペクトル変換で主要な周波数成分の相関を使って位相を補正します。DSP遅延は詳細設定の合成ウィンドウ長で変わります。";
+      return t(
+        "スペクトル位相同期は、直接スペクトル変換で主要な周波数成分の相関を使って位相を補正します。DSP遅延は詳細設定の合成ウィンドウ長で変わります。",
+      );
     case "fd-psola":
-      return "FD-PSOLAはピッチ同期フレームのスペクトルを変換します。「フォルマントを独立して調整する」をオンにすると、フォルマントの包絡を維持します。DSP遅延はウィンドウ設定とフォルマント移動の有無で変わります。";
+      return t(
+        "FD-PSOLAはピッチ同期フレームのスペクトルを変換します。「フォルマントを独立して調整する」をオンにすると、フォルマントの包絡を維持します。DSP遅延はウィンドウ設定とフォルマント移動の有無で変わります。",
+      );
     default:
-      return "位相ロック（標準）は周波数成分の位相関係を保ちながら高さを変えます。DSP遅延は合成ウィンドウ長で変わります。";
+      return t(
+        "位相ロック（標準）は周波数成分の位相関係を保ちながら高さを変えます。DSP遅延は合成ウィンドウ長で変わります。",
+      );
   }
 }
 
@@ -242,12 +269,13 @@ function WindowControls({
   setAnalysis: (value: VoiceValues["analysisWindow"]) => void;
   setSynthesis: (value: VoiceValues["synthesisWindow"]) => void;
 }) {
+  const { t } = useTranslation();
   const sampleRate = useSettingsStore((state) => state.devices.sampleRate);
   return (
     <fieldset className={styles.settings}>
       <legend>{title}</legend>
       <label>
-        解析ウィンドウ長
+        {t("解析ウィンドウ長")}
         <select
           value={analysis}
           onChange={(event) =>
@@ -256,13 +284,16 @@ function WindowControls({
         >
           {([1024, 2048, 4096, 8192] as const).map((size) => (
             <option key={size} value={size}>
-              {size}サンプル（{((size / sampleRate) * 1000).toFixed(1)} ms）
+              {t("{0}サンプル（{1} ms）", {
+                v0: size,
+                v1: ((size / sampleRate) * 1000).toFixed(1),
+              })}
             </option>
           ))}
         </select>
       </label>
       <label>
-        合成ウィンドウ長
+        {t("合成ウィンドウ長")}
         <select
           value={synthesis}
           onChange={(event) =>
@@ -273,7 +304,10 @@ function WindowControls({
             .filter((size) => size <= analysis)
             .map((size) => (
               <option key={size} value={size}>
-                {size}サンプル（{((size / sampleRate) * 1000).toFixed(1)} ms）
+                {t("{0}サンプル（{1} ms）", {
+                  v0: size,
+                  v1: ((size / sampleRate) * 1000).toFixed(1),
+                })}
               </option>
             ))}
         </select>
@@ -285,7 +319,7 @@ function WindowControls({
           setSynthesis(512);
         }}
       >
-        ウィンドウ長を既定値に戻す
+        {t("ウィンドウ長を既定値に戻す")}
       </button>
     </fieldset>
   );

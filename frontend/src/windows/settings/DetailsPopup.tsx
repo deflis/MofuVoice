@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import styles from "./DetailsPopup.module.css";
 import commonStyles from "./settings.module.css";
 import { Notifications } from "./Notifications";
@@ -16,6 +17,7 @@ export function DetailsPopup({
   onOpen?: () => void;
   buttonLabel: string;
 }) {
+  const { t } = useTranslation();
   const dialog = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   const locked = useSettingsLocked();
@@ -34,9 +36,7 @@ export function DetailsPopup({
       {createPortal(
         <dialog ref={dialog} className={styles["details-popup"]} aria-labelledby={titleId}>
           <header>
-            <h2 id={titleId}>
-              {title}の{buttonLabel}
-            </h2>
+            <h2 id={titleId}>{t("{0}の{1}", { v0: title, v1: buttonLabel })}</h2>
           </header>
           <Notifications />
           <fieldset className={commonStyles.settings} disabled={locked}>
@@ -44,7 +44,7 @@ export function DetailsPopup({
           </fieldset>
           <footer>
             <button type="button" onClick={() => dialog.current?.close()}>
-              閉じる
+              {t("閉じる")}
             </button>
           </footer>
         </dialog>,

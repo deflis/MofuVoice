@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import styles from "../settings.module.css";
 import eqStyles from "./EqSettings.module.css";
 import { useId } from "react";
@@ -12,6 +13,7 @@ type SimpleProps = {
   onChange: (value: number) => void;
 };
 export function EqSimpleBand({ title, left, right, value, onChange }: SimpleProps) {
+  const { t } = useTranslation();
   const id = useId();
   const valid = Number.isFinite(value) && Math.abs(value) <= 12;
   return (
@@ -29,7 +31,7 @@ export function EqSimpleBand({ title, left, right, value, onChange }: SimpleProp
       />
       <div className={styles["eq-scale"]}>
         <span>{left}</span>
-        <span>そのまま</span>
+        <span>{t("そのまま")}</span>
         <span>{right}</span>
       </div>
     </div>
@@ -44,12 +46,13 @@ type DetailsProps = {
   setQ: (value: number) => void;
 };
 export function EqBandDetails({ title, band, setFrequency, setGainDb, setQ }: DetailsProps) {
+  const { t } = useTranslation();
   return (
     <fieldset className={eqStyles["eq-pro-band"]}>
       <legend>{title}</legend>
       <div className={eqStyles["eq-fields"]}>
         <NumberField
-          label="周波数（Hz）"
+          label={t("周波数（Hz）")}
           value={band.frequency}
           onChange={setFrequency}
           min={40}
@@ -57,7 +60,7 @@ export function EqBandDetails({ title, band, setFrequency, setGainDb, setQ }: De
           step={1}
         />
         <NumberField
-          label="ゲイン（dB）"
+          label={t("ゲイン（dB）")}
           value={band.gainDb}
           onChange={setGainDb}
           min={-12}
@@ -65,7 +68,7 @@ export function EqBandDetails({ title, band, setFrequency, setGainDb, setQ }: De
           step={0.1}
         />
         <NumberField
-          label="帯域幅（Q値）"
+          label={t("帯域幅（Q値）")}
           value={band.q}
           onChange={setQ}
           min={0.2}

@@ -1,23 +1,25 @@
+import { useTranslation } from "react-i18next";
 import styles from "../settings.module.css";
 import { useSettingsStore } from "../store";
 import { NumberField } from "../NumberField";
 export function CompressorSettings() {
+  const { t } = useTranslation();
   const values = useSettingsStore((state) => state.compressor);
   return (
     <section>
-      <h2>前処理コンプレッサー</h2>
-      <p>声変換前の大きな声を抑えます。後処理の音量調整とは独立しています。</p>
+      <h2>{t("前処理コンプレッサー")}</h2>
+      <p>{t("声変換前の大きな声を抑えます。後処理の音量調整とは独立しています。")}</p>
       <label className={styles.check}>
         <input
           type="checkbox"
           checked={values.enabled}
           onChange={(event) => values.setEnabled(event.target.checked)}
         />
-        有効
+        {t("有効")}
       </label>
-      {!values.enabled && <p>バイパス中。設定値は保持されます。</p>}
+      {!values.enabled && <p>{t("バイパス中。設定値は保持されます。")}</p>}
       <NumberField
-        label="しきい値（dBFS）"
+        label={t("しきい値（dBFS）")}
         value={values.thresholdDb}
         onChange={values.setThresholdDb}
         min={-36}
@@ -25,7 +27,7 @@ export function CompressorSettings() {
         step="any"
       />
       <NumberField
-        label="圧縮比"
+        label={t("圧縮比")}
         value={values.ratio}
         onChange={values.setRatio}
         min={1}
@@ -33,7 +35,7 @@ export function CompressorSettings() {
         step="any"
       />
       <NumberField
-        label="アタック（ms）"
+        label={t("アタック（ms）")}
         value={values.attackMs}
         onChange={values.setAttackMs}
         min={0.1}
@@ -41,7 +43,7 @@ export function CompressorSettings() {
         step="any"
       />
       <NumberField
-        label="リリース（ms）"
+        label={t("リリース（ms）")}
         value={values.releaseMs}
         onChange={values.setReleaseMs}
         min={10}

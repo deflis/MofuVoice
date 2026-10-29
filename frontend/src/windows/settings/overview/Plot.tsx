@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import styles from "./overview.module.css";
 import { useId, type ReactNode } from "react";
 
@@ -43,9 +44,10 @@ export function TransferPlot({
   ratio: number;
   description: string;
 }) {
+  const { t } = useTranslation();
   const output = ratio === Infinity ? threshold : threshold + (0 - threshold) / ratio;
   return (
-    <Plot description={description} xLabel="入力 −60 → 0 dBFS" yLabel="出力 dBFS">
+    <Plot description={description} xLabel={t("入力 −60 → 0 dBFS")} yLabel={t("出力 dBFS")}>
       <path className={styles["filter-reference"]} d="M36 86L308 22" />
       <path
         className={styles["filter-curve"]}

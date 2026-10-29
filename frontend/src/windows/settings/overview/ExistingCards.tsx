@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import styles from "./overview.module.css";
 import * as v from "valibot";
 import { useSettingsStore } from "../store";
@@ -10,6 +11,7 @@ import { Plot, curvePath } from "./Plot";
 import { compressorOutputDb } from "./transfer";
 
 export function NoiseGateCard({ onSelect, locked }: CardProps) {
+  const { t } = useTranslation();
   const settings = useSettingsStore((state) => state.noise);
   const setEnabled = useSettingsStore((state) => state.noise.setEnabled);
   const valid = v.safeParse(noiseSchema, settings).success;
@@ -18,36 +20,41 @@ export function NoiseGateCard({ onSelect, locked }: CardProps) {
   return (
     <Card
       id="noiseGate"
-      title="ノイズゲート"
-      toggles={[{ label: "有効", enabled: settings.enabled, onChange: setEnabled }]}
+      title={t("ノイズゲート")}
+      toggles={[{ label: t("有効"), enabled: settings.enabled, onChange: setEnabled }]}
       onSelect={onSelect}
       locked={locked}
     >
       {valid ? (
         <>
           <Plot
-            description="ゲートが開いてから閉じるまでの時間応答の模式図。実際の検出レベルやゲインではありません。"
-            xLabel="時間（模式図）"
-            yLabel="開閉"
+            description={t(
+              "ゲートが開いてから閉じるまでの時間応答の模式図。実際の検出レベルやゲインではありません。",
+            )}
+            xLabel={t("時間（模式図）")}
+            yLabel={t("開閉")}
           >
             <path
               className={styles["filter-curve"]}
               d={`M36 86H68L${attackX} 24H${attackX + 50}L268 86H308`}
             />
             <text x="80" y="70">
-              開く
+              {t("開く")}
             </text>
             <text x="240" y="70">
-              閉じる
+              {t("閉じる")}
             </text>
           </Plot>
           <Value>
             {settings.thresholdMode === "auto"
-              ? "しきい値: 自動推定（実測値は表示しません）"
-              : `しきい値: ${num(settings.thresholdDb)} dBFS`}
+              ? t("しきい値: 自動推定（実測値は表示しません）")
+              : t("しきい値: {0} dBFS", { v0: num(settings.thresholdDb) })}
           </Value>
           <Value>
-            アタック {num(settings.attackMs)} ms · リリース {num(settings.releaseMs)} ms
+            {t("アタック")}
+            {num(settings.attackMs)}
+            {t("ms · リリース")}
+            {num(settings.releaseMs)} ms
           </Value>
         </>
       ) : (
@@ -58,6 +65,7 @@ export function NoiseGateCard({ onSelect, locked }: CardProps) {
 }
 
 export function DeesserCard({ onSelect, locked }: CardProps) {
+  const { t } = useTranslation();
   const settings = useSettingsStore((state) => state.deesser);
   const setEnabled = useSettingsStore((state) => state.deesser.setEnabled);
   const valid = v.safeParse(deesserSchema, settings).success;
@@ -65,17 +73,19 @@ export function DeesserCard({ onSelect, locked }: CardProps) {
   return (
     <Card
       id="deesser"
-      title="ディエッサー"
-      toggles={[{ label: "有効", enabled: settings.enabled, onChange: setEnabled }]}
+      title={t("ディエッサー")}
+      toggles={[{ label: t("有効"), enabled: settings.enabled, onChange: setEnabled }]}
       onSelect={onSelect}
       locked={locked}
     >
       {valid ? (
         <>
           <Plot
-            description="歯擦音の検出帯域と最大抑制量の模式図。固定EQの周波数応答ではありません。"
-            xLabel="1 → 20 kHz（対数・模式図）"
-            yLabel="検出帯域"
+            description={t(
+              "歯擦音の検出帯域と最大抑制量の模式図。固定EQの周波数応答ではありません。",
+            )}
+            xLabel={t("1 → 20 kHz（対数・模式図）")}
+            yLabel={t("検出帯域")}
           >
             <rect
               className={styles["filter-area"]}
@@ -86,16 +96,24 @@ export function DeesserCard({ onSelect, locked }: CardProps) {
             />
             <path className={styles["filter-curve"]} d={`M${frequencyX} 22V86`} />
             <text x="45" y="40">
-              最大 {num(settings.rangeDb)} dB 抑制
+              {t("最大")}
+              {num(settings.rangeDb)}
+              {t("dB 抑制")}
             </text>
           </Plot>
           <Value>
-            検出 {num(settings.frequencyHz)} Hz〜 · しきい値 {num(settings.thresholdDb)} dBFS
+            {t("検出")}
+            {num(settings.frequencyHz)}
+            {t("Hz〜 · しきい値")}
+            {num(settings.thresholdDb)} dBFS
           </Value>
           <Value>
-            アタック {num(settings.attackMs)} ms · リリース {num(settings.releaseMs)} ms
+            {t("アタック")}
+            {num(settings.attackMs)}
+            {t("ms · リリース")}
+            {num(settings.releaseMs)} ms
           </Value>
-          <small>声変換の前に歯擦音を抑えます。図は検出設定の目安です。</small>
+          <small>{t("声変換の前に歯擦音を抑えます。図は検出設定の目安です。")}</small>
         </>
       ) : (
         <InvalidGraph />
@@ -107,23 +125,26 @@ export function DeesserCard({ onSelect, locked }: CardProps) {
 const x = (shift: number) => 36 + ((shift + 12) / 24) * 272;
 
 export function VoiceCard({ onSelect, locked }: CardProps) {
+  const { t } = useTranslation();
   const settings = useSettingsStore((state) => state.voice);
   const setEnabled = useSettingsStore((state) => state.voice.setEnabled);
   const valid = v.safeParse(voiceSchema, settings).success;
   return (
     <Card
       id="voice"
-      title="ピッチ／フォルマント変換"
+      title={t("ピッチ／フォルマント変換")}
       onSelect={onSelect}
       locked={locked}
-      toggles={[{ label: "有効", enabled: settings.enabled, onChange: setEnabled }]}
+      toggles={[{ label: t("有効"), enabled: settings.enabled, onChange: setEnabled }]}
     >
       {valid ? (
         <>
           <Plot
-            description="ピッチと独立フォルマント調整の相対移動量。入力音声の基本周波数ではありません。"
-            xLabel="−12 → +12 半音（相対設定）"
-            yLabel="移動量"
+            description={t(
+              "ピッチと独立フォルマント調整の相対移動量。入力音声の基本周波数ではありません。",
+            )}
+            xLabel={t("−12 → +12 半音（相対設定）")}
+            yLabel={t("移動量")}
           >
             <path className={styles["filter-reference"]} d="M172 16V86" />
             <path
@@ -138,19 +159,25 @@ export function VoiceCard({ onSelect, locked }: CardProps) {
               r="4"
             />
             <text x="40" y="29">
-              ピッチ
+              {t("ピッチ")}
             </text>
             <text x="40" y="59">
-              フォルマント
+              {t("フォルマント")}
             </text>
           </Plot>
           <Value>
-            ピッチ {num(settings.pitch)} 半音（{num(100 * 2 ** (settings.pitch / 12))}%） ·
-            フォルマント {num(settings.formantShift)} 半音
+            {t("ピッチ")}
+            {num(settings.pitch)}
+            {t("半音（")}
+            {num(100 * 2 ** (settings.pitch / 12))}
+            {t("%） · フォルマント")}
+            {num(settings.formantShift)}
+            {t("半音")}
           </Value>
           <Value>
-            方式 {settings.pitchAlgorithm} · フォルマント独立調整{" "}
-            {settings.preserveFormants ? "有効" : "無効"}
+            {t("方式")}
+            {settings.pitchAlgorithm}
+            {t("· フォルマント独立調整")} {settings.preserveFormants ? t("有効") : t("無効")}
           </Value>
         </>
       ) : (
@@ -161,6 +188,7 @@ export function VoiceCard({ onSelect, locked }: CardProps) {
 }
 
 export function LevelCard({ onSelect, locked }: CardProps) {
+  const { t } = useTranslation();
   const settings = useSettingsStore((state) => state.level);
   const setAutoLevelEnabled = useSettingsStore((state) => state.level.setEnabled);
   const setCompressorEnabled = useSettingsStore((state) => state.level.setCompressorEnabled);
@@ -178,13 +206,13 @@ export function LevelCard({ onSelect, locked }: CardProps) {
   return (
     <Card
       id="level"
-      title="後処理の音量調整・コンプレッサー"
+      title={t("後処理の音量調整・コンプレッサー")}
       onSelect={onSelect}
       locked={locked}
       toggles={[
-        { label: "自動音量調整", enabled: settings.enabled, onChange: setAutoLevelEnabled },
+        { label: t("自動音量調整"), enabled: settings.enabled, onChange: setAutoLevelEnabled },
         {
-          label: "コンプレッサー",
+          label: t("コンプレッサー"),
           enabled: settings.compressorEnabled,
           onChange: setCompressorEnabled,
         },
@@ -194,27 +222,39 @@ export function LevelCard({ onSelect, locked }: CardProps) {
         <>
           {settings.enabled && (
             <Value>
-              目標 {num(settings.targetDb)} dBFS · 増幅上限 {num(settings.maxGainDb)} dB · 応答{" "}
-              {num(settings.responseMs)} ms
+              {t("目標")}
+              {num(settings.targetDb)}
+              {t("dBFS · 増幅上限")}
+              {num(settings.maxGainDb)}
+              {t("dB · 応答")} {num(settings.responseMs)} ms
             </Value>
           )}
           {settings.compressorEnabled && (
             <>
               <Plot
-                description="コンプレッサー単体の設定静特性。6 dBソフトニーを含みます。時間応答と内部ピークガードの効果は含みません。"
-                xLabel="入力 −60 → 0 dBFS"
-                yLabel="出力 dBFS"
+                description={t(
+                  "コンプレッサー単体の設定静特性。6 dBソフトニーを含みます。時間応答と内部ピークガードの効果は含みません。",
+                )}
+                xLabel={t("入力 −60 → 0 dBFS")}
+                yLabel={t("出力 dBFS")}
               >
                 <path className={styles["filter-reference"]} d="M36 86L308 22" />
                 <path className={styles["filter-curve"]} d={curvePath(points)} />
               </Plot>
               <Value>
-                圧縮しきい値 {num(settings.thresholdDb)} dBFS · 比率 {num(settings.ratio)}:1 ·
-                アタック {num(settings.attackMs)} ms · リリース {num(settings.releaseMs)} ms
+                {t("圧縮しきい値")}
+                {num(settings.thresholdDb)}
+                {t("dBFS · 比率")}
+                {num(settings.ratio)}
+                {t(":1 · アタック")}
+                {num(settings.attackMs)}
+                {t("ms · リリース")}
+                {num(settings.releaseMs)} ms
               </Value>
               <small>
-                図は圧縮の設定静特性です。有効な音量処理が動作する場合、内部ピークガード（−1
-                dBFS）を適用します。
+                {t(
+                  "図は圧縮の設定静特性です。有効な音量処理が動作する場合、内部ピークガード（−1 dBFS）を適用します。",
+                )}
               </small>
             </>
           )}
