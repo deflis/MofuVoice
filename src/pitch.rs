@@ -5,6 +5,7 @@
 //! The neutral setting bypasses exactly.
 #[cfg(test)]
 use crate::dsp::fft_kernel::FftKernel;
+use crate::dsp::formant_math as math;
 use crate::dsp::phase::wrap;
 use crate::dsp::{
     complex::Complex,
@@ -13,8 +14,6 @@ use crate::dsp::{
     window::hann,
 };
 use std::{error::Error, fmt};
-#[path = "pitch_math.rs"]
-mod math;
 #[path = "pitch_sync.rs"]
 mod sync;
 
