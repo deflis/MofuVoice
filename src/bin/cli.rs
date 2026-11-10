@@ -61,7 +61,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         &routing,
         DspSettings::from(&options),
     )?;
-    #[cfg(windows)]
     mofu_voice::spectrum::set_sample_rate(options.sample_rate);
     engine.print_latencies()?;
     println!("Pitch algorithm: {}", options.pitch.algorithm.name());

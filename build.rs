@@ -1,6 +1,8 @@
 fn main() {
-    #[cfg(feature = "desktop")]
-    tauri_build::build();
+    #[cfg(all(windows, feature = "desktop"))]
+    embed_resource::compile("resources/windows.rc", embed_resource::NONE)
+        .manifest_optional()
+        .expect("Cannot embed MofuVoice icon");
     #[cfg(feature = "asio")]
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         check_asio_sdk();
