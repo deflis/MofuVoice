@@ -1,10 +1,14 @@
 use super::*;
 impl SettingsView {
     pub(super) fn build_controls(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let edits = self.edits();
         self.controls.clear();
         self.subscriptions.clear();
         let percent = self.base.options().expect("validated settings").pitch_unit == "percent";
-        for field in draft::fields(&self.base) {
+        for mut field in draft::fields(&self.base) {
+            if let Some(text) = edits.get(&field.path) {
+                field.text = text.clone();
+            }
             let path = field.path.clone();
             let items = choices(&path, &field.text);
             let widget = if field.value.is_boolean() {

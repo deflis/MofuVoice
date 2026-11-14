@@ -52,6 +52,40 @@ fn directory() -> PathBuf {
 }
 
 #[gpui_kit::test]
+fn changing_eq_band_count_preserves_other_drafts_and_manual_gate_threshold(
+    cx: &mut TestAppContext,
+) {
+    let dir = directory();
+    let (model, window, view) = open(cx, &dir);
+    set(&view, window, "/noise/enabled", "true", cx);
+    set(&view, window, "/noise/thresholdMode", "manual", cx);
+    set(&view, window, "/noise/thresholdDb", "-35", cx);
+    set(&view, window, "/noise/thresholdMode", "auto", cx);
+    set(&view, window, "/voice/pitch", "7.50", cx);
+    for root in ["inputEq", "preConversionEq", "eq"] {
+        for add in [true, false] {
+            window
+                .update(cx, |_, w, cx| {
+                    view.update(cx, |v, cx| v.band_count(root, add, w, cx));
+                })
+                .unwrap();
+            cx.run_until_parked();
+            assert_eq!(
+                view.read_with(cx, |v, _| v.value("/noise/thresholdDb")),
+                "-35"
+            );
+            assert_eq!(view.read_with(cx, |v, _| v.value("/voice/pitch")), "7.50");
+        }
+    }
+    set(&view, window, "/noise/thresholdMode", "manual", cx);
+    assert_eq!(
+        view.read_with(cx, |v, _| v.options().unwrap().gate_threshold),
+        crate::gate::GateThreshold::Db(-35.)
+    );
+    cleanup(model, window, cx);
+}
+
+#[gpui_kit::test]
 fn input_survives_redraw_and_navigation_and_saves_to_shared_model(cx: &mut TestAppContext) {
     let directory = directory();
     std::fs::create_dir(&directory).unwrap();
