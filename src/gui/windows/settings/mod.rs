@@ -81,9 +81,18 @@ impl SettingsView {
             cx.notify();
             cx.defer(move |cx| {
                 let _ = handle.update(cx, |_, window, cx| {
-                    if changed {
-                        let _ = weak.update(cx, |view, cx| view.refresh_choices(window, cx));
-                    }
+                    let _ = weak.update(cx, |view, cx| {
+                        if changed {
+                            view.refresh_choices(window, cx);
+                        }
+                        if view.close != CloseTarget::None
+                            && !view.pending
+                            && !view.model.read(cx).busy
+                            && !view.model.read(cx).closing
+                        {
+                            view.save(view.close, cx);
+                        }
+                    });
                     window.refresh();
                 });
             });

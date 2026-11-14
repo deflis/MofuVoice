@@ -86,6 +86,61 @@ fn changing_eq_band_count_preserves_other_drafts_and_manual_gate_threshold(
 }
 
 #[gpui_kit::test]
+fn settings_close_retries_after_another_app_operation_and_saves_the_draft(cx: &mut TestAppContext) {
+    let dir = directory();
+    std::fs::create_dir(&dir).unwrap();
+    let (model, window, view) = open(cx, &dir);
+    set(&view, window, "/voice/pitch", "6.5", cx);
+    model.update(cx, |m, cx| {
+        m.busy = true;
+        cx.notify();
+    });
+    view.update(cx, |v, cx| v.save(CloseTarget::Settings, cx));
+    cx.run_until_parked();
+    assert!(model.read_with(cx, |m, _| m.settings.is_some()));
+    model.update(cx, |m, cx| {
+        m.busy = false;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(model.read_with(cx, |m, _| m.settings.is_none()));
+    assert_eq!(
+        crate::gui_settings::load(&dir.join("settings.ini"))
+            .unwrap()
+            .pitch
+            .semitones,
+        6.5
+    );
+    assert!(window.update(cx, |_, _, _| ()).is_err());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[gpui_kit::test]
+fn deferred_close_keeps_the_window_and_draft_when_saving_fails(cx: &mut TestAppContext) {
+    let dir = directory();
+    std::fs::write(&dir, "not a directory").unwrap();
+    let (model, window, view) = open(cx, &dir);
+    set(&view, window, "/voice/pitch", "6.5", cx);
+    model.update(cx, |m, cx| {
+        m.busy = true;
+        cx.notify();
+    });
+    view.update(cx, |v, cx| v.save(CloseTarget::Settings, cx));
+    model.update(cx, |m, cx| {
+        m.busy = false;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(model.read_with(cx, |m, _| m.settings.is_some() && !m.busy));
+    assert!(view.read_with(cx, |v, _| !v.error.is_empty()
+        && v.close == CloseTarget::None
+        && !v.pending));
+    assert_eq!(view.read_with(cx, |v, _| v.value("/voice/pitch")), "6.5");
+    cleanup(model, window, cx);
+    std::fs::remove_file(dir).unwrap();
+}
+
+#[gpui_kit::test]
 fn input_survives_redraw_and_navigation_and_saves_to_shared_model(cx: &mut TestAppContext) {
     let directory = directory();
     std::fs::create_dir(&directory).unwrap();
