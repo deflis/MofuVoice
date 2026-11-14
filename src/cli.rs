@@ -1,7 +1,7 @@
 use crate::gate::{validate_time_ms, GateThreshold};
 use std::error::Error;
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Options {
     pub input_eq: crate::eq::EqSettings,
     pub input_eq_mode: String,

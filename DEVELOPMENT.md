@@ -11,11 +11,11 @@
 ### 前提条件
 - **Rust**: ツールチェーン（Windows x64 MSVC推奨）
 - **mise**: 開発ツール・SDKマネージャー
-- **Node.js & pnpm**: フロントエンド（React / Tauri UI）ビルド用
+- **GUI**: Rust製GPUI Kit 0.9.1（WebView・Node.js・pnpmは不要）
 - **OS固有の要件**:
-  - **Windows**: Visual C++ Build Tools、Windows SDK、WebView2 Runtime、libclang
-  - **Linux**: ALSA開発パッケージ（Debian/Ubuntu: `libasound2-dev`）、WebKitGTKなど[Tauriの前提条件](https://v2.tauri.app/start/prerequisites/)
-  - **macOS**: Xcode Command Line Tools
+  - **Windows**: Windows 10以降、Visual Studio 2022 C++ Build Tools、Windows SDK、CMake、libclang（ASIO用）
+  - **Linux**: X11またはWayland、Vulkan対応ドライバ。Ubuntuでは `libasound2-dev libfontconfig-dev libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev libssl-dev libzstd-dev libvulkan-dev clang cmake`
+  - **macOS**: macOS 15以降、Xcode Command Line Tools
 
 ### Windows（ASIO対応）の標準セットアップ手順
 
@@ -26,11 +26,8 @@ ASIO SDK は `mise install` で自動的に Steinberg 公式から取得され�
 mise trust
 mise install
 
-# 2. フロントエンド依存関係のインストール
-pnpm install --frozen-lockfile
-
-# 3. リリースビルドの作成（GUI実行ファイル）
-pnpm desktop:build
+# 2. リリースビルドの作成（GUI実行ファイル）
+mise run build
 ```
 
 ビルドが完了すると、`target/release/MofuVoice.exe` に実行ファイルが生成されます。
@@ -54,15 +51,15 @@ pnpm desktop:build
 
 ## 2. 開発ワークフロー
 
-- **フロントエンド開発サーバーの起動**:
+- **GPUIアプリの起動**:
   ```powershell
-  pnpm desktop:dev
+  mise run dev
   ```
 - **コード整形（Formatter）**:
   ```powershell
   mise run fmt
   ```
-- **品質チェック（Linter & TypeCheck）**:
+- **品質チェック（Rust）**:
   ```powershell
   mise run check
   ```
@@ -72,6 +69,12 @@ pnpm desktop:build
   ```
 
 ---
+
+GUIの状態・操作テストは `cargo test --no-default-features --features desktop-tests,cpal-backend --lib gui:: --locked` で実行します。GPUIのヘッドレス操作テストと実機の描画・音声確認は別々に行ってください。
+
+GUIは `src/gui/windows/` の `main`・`settings`・`log`・`spectrum` に分割しています。共有アプリ状態は `src/gui/model.rs`、設定変換・検証は `src/gui/settings.rs` にあります。設定画面内もデバイス・音声・EQ・概要などのモジュールに分離しています。
+
+macOSの配布物は `cargo build --release --features desktop --locked --bin MofuVoice` 後に `bash scripts/package-macos.sh` で作成します。`.app`・DMG・tar.gzを生成し、ローカル用のアドホック署名を検証します。
 
 ## 3. CLIツール（`mofu-voice-cli`）
 
@@ -100,7 +103,7 @@ pnpm desktop:build
 
 ## 4. 設定ファイル（`settings.ini`）
 
-GUIの設定は、実行ファイルと同じディレクトリに `settings.ini`（UTF-8）として自動保存・復元されます。設定の変更はGUI上から行えるため、通常は手動で編集する必要はありません。設定を初期状態にリセットしたい場合は、`settings.ini` を削除してアプリを再起動してください。
+GUIの設定は、実行ファイルと同じディレクトリに `settings.ini`（UTF-8）として自動保存・復元されます。設定の変更はGUI上から行えるため、通常は手動で編集する必要はありません。言語と最後に開いた設定ページは、同じ場所の `ui.ini` に保存されます。設定を初期状態にリセットしたい場合は、`settings.ini` を削除してアプリを再起動してください。
 
 ---
 

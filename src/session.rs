@@ -261,7 +261,6 @@ fn run_audio(
         set_status(status, format!("Stopped before playback.\n{details}"));
         return Ok(());
     }
-    #[cfg(windows)]
     crate::spectrum::set_sample_rate(options.sample_rate);
     engine.start()?;
     let (input, output) = engine.latency_ms()?;

@@ -1,6 +1,0 @@
-/* Main Notifications styles. */
-
-.error {
-  color: var(--color-danger);
-  overflow-wrap: anywhere;
-}

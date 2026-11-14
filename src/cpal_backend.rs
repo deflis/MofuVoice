@@ -547,7 +547,6 @@ impl<I: Sample, O: Sample> Capture<I, O> {
                 return;
             };
             self.metrics.nonzero.fetch_add(nonzero, Ordering::Relaxed);
-            #[cfg(windows)]
             crate::spectrum::push_output_samples(&self.processed[..count]);
             if let Some(preview) = &mut self.preview {
                 for sample in &self.processed[..count] {
@@ -633,7 +632,6 @@ impl<O: Sample> ResampledCapture<O> {
                     metrics.faults.fetch_or(INVALID_BUFFER, Ordering::Relaxed);
                     return;
                 }
-                #[cfg(windows)]
                 crate::spectrum::push_output_samples(&output);
                 output_converter.push(output[0], |s| {
                     if let Some(preview) = preview.as_mut() {

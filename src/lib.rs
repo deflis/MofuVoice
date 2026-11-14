@@ -21,8 +21,6 @@ pub mod gui;
 mod gui_settings;
 pub mod level;
 pub mod limiter;
-#[cfg(windows)]
-pub mod native_spectrum;
 pub mod pitch;
 pub mod reverb;
 pub mod rumble;
