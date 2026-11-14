@@ -456,5 +456,14 @@
   "PSOLAのウィンドウ長を既定値に戻す": "Reset PSOLA windows",
   "選択したサンプリングレートには対応していません。": "The selected sample rate is not supported.",
   "CPALでは選択レートに非対応の入出力を自動でリサンプリングします。変換により遅延が追加されます。": "CPAL resamples devices that do not support the selected rate. Resampling adds latency.",
-  "小さくすると遅延が減ります。音切れする場合は大きくしてください。デバイスが対応するサイズを指定してください。": "Smaller buffers reduce latency. Increase the size if audio breaks up, and choose a size supported by your device."
+  "小さくすると遅延が減ります。音切れする場合は大きくしてください。デバイスが対応するサイズを指定してください。": "Smaller buffers reduce latency. Increase the size if audio breaks up, and choose a size supported by your device.",
+  "フォルマント独立調整": "Independent formant shift",
+  "プリディレイ": "Pre-delay",
+  "ヘッドルーム": "Headroom",
+  "リリース": "Release",
+  "増幅上限": "Maximum gain",
+  "応答": "Response",
+  "模式図": "schematic",
+  "減衰時間": "Decay time",
+  "無音判定": "Activity floor"
 }

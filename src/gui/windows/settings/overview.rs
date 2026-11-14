@@ -1,4 +1,6 @@
+mod preview;
 use super::*;
+use gpui_kit::base::TestSupportExt as _;
 pub(super) fn render(
     mut content: Stateful<Div>,
     model: &AppModel,
@@ -6,8 +8,8 @@ pub(super) fn render(
     cx: &Context<SettingsView>,
 ) -> Stateful<Div> {
     let t = |s: &str| model.text(s);
-    let options = view.options().ok();
-    content = content.child(div().text_lg().child(t("フィルタ構成")));
+    content = content.child(div().text_lg().child(t("フィルタ構成")))
+        .child(t("上から下が音声の処理順です。各チェックボックスで個別に切り替えられ、無効中は詳細を表示しません。図と値は個別設定と共通で、実測メーターではありません。"));
     for stage in crate::audio::FILTER_STAGES {
         let id = match stage.id() {
             "level" => "autoLevel",
@@ -72,34 +74,34 @@ pub(super) fn render(
             );
         }
         card = card.child(switches);
-        if let Some(options) = options.as_ref() {
-            let enabled = match stage {
-                crate::audio::FilterStage::InputEq => {
-                    options.input_eq.enabled || options.rumble_filter
+        // Validate each stage independently so an unfinished field in another
+        // page does not hide otherwise valid configured responses.
+        let section = match stage {
+            crate::audio::FilterStage::PostConversionEq => "postConversionEq",
+            crate::audio::FilterStage::Level => "autoLevel",
+            _ => stage.id(),
+        };
+        let edits = view
+            .edits()
+            .into_iter()
+            .filter(|(path, _)| {
+                draft::group(path, section)
+                    || (stage == crate::audio::FilterStage::Level && path.starts_with("/level/"))
+                    || path == "/devices/sampleRate"
+            })
+            .collect();
+        match draft::parse(&view.base, &edits) {
+            Ok(options) => {
+                card = card.child(t(if preview::enabled(stage, &options) { "有効" } else { "無効" }));
+                let preview = preview::build(stage, &options, &model.preferences);
+                for (i, graph) in preview.graphs.into_iter().enumerate() {
+                    card = card.child(div()
+                        .id(SharedString::from(format!("overview-plot:{}:{i}", stage.id())))
+                        .child(plots::render(graph, cx)).test_support());
                 }
-                crate::audio::FilterStage::Limiter => options.limiter.enabled,
-                crate::audio::FilterStage::NoiseGate => options.gate,
-                crate::audio::FilterStage::Dereverb => options.dereverb.enabled,
-                crate::audio::FilterStage::Deesser => options.deesser,
-                crate::audio::FilterStage::Compressor => options.compressor.enabled,
-                crate::audio::FilterStage::PreConversionEq => options.pre_conversion_eq.enabled,
-                crate::audio::FilterStage::Voice => options.voice_enabled,
-                crate::audio::FilterStage::PostConversionEq => options.eq.enabled,
-                crate::audio::FilterStage::Level => {
-                    options.level.enabled || options.level.compressor_enabled
-                }
-                crate::audio::FilterStage::Reverb => options.reverb.enabled,
-            };
-            card = card.child(t(if enabled { "有効" } else { "無効" }));
-            let eq = match stage {
-                crate::audio::FilterStage::InputEq => Some(&options.input_eq),
-                crate::audio::FilterStage::PreConversionEq => Some(&options.pre_conversion_eq),
-                crate::audio::FilterStage::PostConversionEq => Some(&options.eq),
-                _ => None,
-            };
-            if let Some(eq) = eq {
-                card = card.child(plots::eq_plot(eq, options.sample_rate, cx));
+                card = card.children(preview.values);
             }
+            Err(_) => card = card.child(t("設定値が不正または入力途中のため、図を表示できません。個別設定で確認してください。")),
         }
         content = content.child(card);
     }

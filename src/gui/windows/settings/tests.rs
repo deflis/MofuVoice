@@ -141,6 +141,68 @@ fn deferred_close_keeps_the_window_and_draft_when_saving_fails(cx: &mut TestAppC
 }
 
 #[gpui_kit::test]
+fn overview_renders_active_stages_and_isolates_unfinished_fields(cx: &mut TestAppContext) {
+    let dir = directory();
+    let (model, window, view) = open(cx, &dir);
+    for path in [
+        "/inputEq/enabled",
+        "/preConversionEq/enabled",
+        "/eq/enabled",
+        "/limiter/enabled",
+        "/noise/enabled",
+        "/dereverb/enabled",
+        "/deesser/enabled",
+        "/compressor/enabled",
+        "/level/enabled",
+        "/level/compressorEnabled",
+        "/reverb/enabled",
+    ] {
+        set(&view, window, path, "true", cx);
+    }
+    navigate(&model, window, "overview", cx);
+    window
+        .update(cx, |_, w, cx| {
+            w.render_frame(cx);
+            for stage in crate::audio::FILTER_STAGES {
+                assert!(
+                    w.try_find(gpui_kit::SharedString::from(format!(
+                        "overview-plot:{}:0",
+                        stage.id()
+                    )))
+                    .is_some(),
+                    "{}",
+                    stage.id()
+                );
+            }
+        })
+        .unwrap();
+    set(&view, window, "/compressor/ratio", "-", cx);
+    window
+        .update(cx, |_, w, cx| {
+            w.render_frame(cx);
+            assert!(w.try_find("overview-plot:compressor:0").is_none());
+            assert!(w.try_find("overview-plot:voice:0").is_some());
+        })
+        .unwrap();
+    set(&view, window, "/compressor/ratio", "3", cx);
+    set(&view, window, "/inputEq/enabled", "false", cx);
+    window
+        .update(cx, |_, w, cx| {
+            w.render_frame(cx);
+            assert!(w.try_find("overview-plot:inputEq:0").is_none());
+        })
+        .unwrap();
+    set(&view, window, "/noise/rumbleFilter", "true", cx);
+    window
+        .update(cx, |_, w, cx| {
+            w.render_frame(cx);
+            assert!(w.try_find("overview-plot:inputEq:0").is_some());
+        })
+        .unwrap();
+    cleanup(model, window, cx);
+}
+
+#[gpui_kit::test]
 fn input_survives_redraw_and_navigation_and_saves_to_shared_model(cx: &mut TestAppContext) {
     let directory = directory();
     std::fs::create_dir(&directory).unwrap();

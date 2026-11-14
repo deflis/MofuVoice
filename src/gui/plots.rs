@@ -1,5 +1,6 @@
 use crate::eq::EqSettings;
-use gpui_kit::*;
+mod diagram;
+pub use diagram::{render, Diagram};
 use std::f64::consts::PI;
 
 /// Small-signal response, including the DSP's reserved positive-gain headroom.
@@ -27,48 +28,85 @@ pub fn eq_response(settings: &EqSettings, rate: u32, frequency: f64) -> f64 {
     }
     db
 }
-pub fn eq_plot(settings: &EqSettings, rate: u32, cx: &App) -> impl IntoElement {
-    let palette = super::theme::palette(cx);
-    let values: Vec<f32> = (0..256)
-        .map(|i| eq_response(settings, rate, 20. * 1000f64.powf(i as f64 / 255.)) as f32)
-        .collect();
-    div()
-        .flex()
-        .flex_col()
-        .gap_1()
-        .text_color(palette.plot_label)
-        .child("dB · +12 / 0 / −36")
-        .child(
-            canvas(
-                |_, _, _| (),
-                move |bounds, _, window, _| {
-                    let mut path = PathBuilder::stroke(px(2.));
-                    for (i, value) in values.iter().enumerate() {
-                        let p = point(
-                            bounds.left() + bounds.size.width * (i as f32 / 255.),
-                            bounds.top()
-                                + bounds.size.height * ((12. - value.clamp(-36., 12.)) / 48.),
-                        );
-                        if i == 0 {
-                            path.move_to(p);
-                        } else {
-                            path.line_to(p);
-                        }
-                    }
-                    if let Ok(path) = path.build() {
-                        window.paint_path(path, palette.accent);
-                    }
-                },
+/// Bilinear-transform response of the existing 80 Hz Butterworth HPF.
+pub fn rumble_response(rate: u32, frequency: f64) -> f64 {
+    let ratio = (PI * frequency / rate as f64).tan() / (PI * 80. / rate as f64).tan();
+    -10. * (1. + ratio.powi(-4)).log10()
+}
+pub fn active_eq_response(settings: &EqSettings, rate: u32, frequency: f64, rumble: bool) -> f64 {
+    (if settings.enabled {
+        eq_response(settings, rate, frequency)
+    } else {
+        0.
+    }) + if rumble {
+        rumble_response(rate, frequency)
+    } else {
+        0.
+    }
+}
+pub fn eq_diagram(settings: &EqSettings, rate: u32, rumble: bool, description: String) -> Diagram {
+    let values: Vec<_> = (0..=120)
+        .map(|i| {
+            let frequency = 20. * 1000f64.powf(i as f64 / 120.);
+            (
+                frequency,
+                active_eq_response(settings, rate, frequency, rumble),
             )
-            .w_full()
-            .h(px(140.))
-            .bg(palette.surface),
-        )
-        .child("20 Hz                                 1 kHz                                 20 kHz")
+        })
+        .collect();
+    let min = (values.iter().map(|(_, db)| *db).fold(-12., f64::min) / 6.).floor() * 6.;
+    let max = (values.iter().map(|(_, db)| *db).fold(6., f64::max) / 6.).ceil() * 6.;
+    let x = |f: f64| 36. + (f / 20.).log10() / 3. * 272.;
+    let y = |db: f64| 86. - (db - min) / (max - min) * 64.;
+    let mut graph = Diagram::new(
+        description,
+        "20 Hz → 20 kHz (log)".into(),
+        format!("{min} … {max} dB"),
+    );
+    graph.references.push(vec![(36., y(0.)), (308., y(0.))]);
+    graph
+        .paths
+        .push(values.iter().map(|(f, db)| (x(*f), y(*db))).collect());
+    if settings.enabled {
+        graph.markers = settings
+            .bands
+            .iter()
+            .map(|b| {
+                (
+                    x(b.frequency),
+                    y(active_eq_response(settings, rate, b.frequency, rumble)),
+                )
+            })
+            .collect();
+    }
+    graph
 }
 #[cfg(test)]
 mod tests {
     use super::{eq_response, EqSettings};
+    #[test]
+    fn input_curve_combines_only_active_eq_and_high_pass() {
+        use super::{active_eq_response, rumble_response};
+        let mut eq = EqSettings::default();
+        eq.bands[0].gain_db = 6.;
+        for rate in [44100, 48000] {
+            eq.enabled = false;
+            assert_eq!(active_eq_response(&eq, rate, 80., false), 0.);
+            assert!((active_eq_response(&eq, rate, 80., true) + 3.01029995664).abs() < 1e-9);
+            assert!(rumble_response(rate, 20.) < -24.);
+            assert!(rumble_response(rate, 10000.).abs() < 1e-6);
+            eq.enabled = true;
+            for frequency in [20., 80., 250., 1000., 16000.] {
+                assert!(
+                    (active_eq_response(&eq, rate, frequency, true)
+                        - eq_response(&eq, rate, frequency)
+                        - rumble_response(rate, frequency))
+                    .abs()
+                        < 1e-9
+                );
+            }
+        }
+    }
     #[test]
     fn response_includes_trim_and_headroom() {
         let mut settings = EqSettings {
