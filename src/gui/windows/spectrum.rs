@@ -5,6 +5,7 @@ use gpui_kit::{
     *,
 };
 use std::{sync::Arc, time::Duration};
+mod meter;
 pub struct SpectrumView {
     controller: SpectrumController,
     model: Entity<AppModel>,
@@ -72,49 +73,45 @@ impl Render for SpectrumView {
         }
         let m = self.model.read(cx);
         let levels = self.controller.levels();
-        let mut body = layout::surface(cx)
-            .child(
-                div()
-                    .flex()
-                    .gap_2()
-                    .child(
-                        Button::new("wideband")
-                            .label(m.text("広帯域"))
-                            .selected(self.wide)
-                            .on_click(cx.listener(|v, _, _, cx| {
-                                v.wide = true;
-                                v.controller.set_wideband(true);
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        Button::new("narrowband")
-                            .label(m.text("狭帯域"))
-                            .selected(!self.wide)
-                            .on_click(cx.listener(|v, _, _, cx| {
-                                v.wide = false;
-                                v.controller.set_wideband(false);
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        Button::new("freeze")
-                            .label(m.text("フリーズ"))
-                            .selected(self.frozen)
-                            .on_click(cx.listener(|v, _, _, cx| {
-                                v.frozen = !v.frozen;
-                                v.controller.set_frozen(v.frozen);
-                                cx.notify();
-                            })),
-                    ),
-            )
-            .child(format!(
-                "RMS {:.1} dBFS     Peak {:.1} dBFS     Hold {:.1} dBFS",
-                levels.rms_db, levels.peak_db, levels.hold_db
-            ));
+        let body = layout::surface(cx).child(
+            div()
+                .flex()
+                .gap_2()
+                .child(
+                    Button::new("wideband")
+                        .label(m.text("広帯域"))
+                        .selected(self.wide)
+                        .on_click(cx.listener(|v, _, _, cx| {
+                            v.wide = true;
+                            v.controller.set_wideband(true);
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    Button::new("narrowband")
+                        .label(m.text("狭帯域"))
+                        .selected(!self.wide)
+                        .on_click(cx.listener(|v, _, _, cx| {
+                            v.wide = false;
+                            v.controller.set_wideband(false);
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    Button::new("freeze")
+                        .label(m.text("フリーズ"))
+                        .selected(self.frozen)
+                        .on_click(cx.listener(|v, _, _, cx| {
+                            v.frozen = !v.frozen;
+                            v.controller.set_frozen(v.frozen);
+                            cx.notify();
+                        })),
+                ),
+        );
+        let mut display = div().flex().flex_1().min_h_0().gap_3();
         if let Some(image) = &self.image {
-            body = body.child(
-                div().flex_1().min_h_0().child(
+            display = display.child(
+                div().flex_1().min_w_0().min_h_0().child(
                     img(image.clone())
                         .w_full()
                         .h_full()
@@ -122,7 +119,8 @@ impl Render for SpectrumView {
                 ),
             );
         }
-        body.child("8 kHz ↑ · 20 Hz ↓     −80 … 0 dBFS     ← history · now →")
+        body.child(display.child(meter::render(levels, cx)))
+            .child("8 kHz ↑ · 20 Hz ↓     −80 … 0 dBFS     ← history · now →")
     }
 }
 
