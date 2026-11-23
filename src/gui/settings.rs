@@ -635,8 +635,8 @@ mod tests {
         let mut controls = Settings::from_options(&options);
         assert_eq!(controls.options().unwrap(), options);
         let path = std::env::temp_dir().join(format!("mofu-gpui-level-{}.ini", std::process::id()));
-        gui_settings::save(&path, &controls.options().unwrap()).unwrap();
-        assert_eq!(gui_settings::load(&path).unwrap(), options);
+        gui_settings::save(&path, &controls.options().unwrap(), &Default::default()).unwrap();
+        assert_eq!(gui_settings::load(&path).unwrap().options, options);
         controls.level.enabled = false;
         assert!(controls.options().unwrap().level.compressor_enabled);
         assert_eq!(

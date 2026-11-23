@@ -107,6 +107,7 @@ fn settings_close_retries_after_another_app_operation_and_saves_the_draft(cx: &m
     assert_eq!(
         crate::gui_settings::load(&dir.join("settings.ini"))
             .unwrap()
+            .options
             .pitch
             .semitones,
         6.5
@@ -116,28 +117,24 @@ fn settings_close_retries_after_another_app_operation_and_saves_the_draft(cx: &m
 }
 
 #[gpui_kit::test]
-fn ui_preference_write_failure_keeps_audio_settings_save_and_close_working(
-    cx: &mut TestAppContext,
-) {
+fn settings_close_persists_ui_preferences_with_audio_options(cx: &mut TestAppContext) {
     let dir = directory();
-    std::fs::create_dir_all(dir.join("ui.ini")).unwrap();
     let (model, window, view) = open(cx, &dir);
     set(&view, window, "/voice/pitch", "6.5", cx);
+    model.update(cx, |m, cx| {
+        m.preferences.language = "ja".into();
+        m.preferences.section = "devices".into();
+        cx.notify();
+    });
 
     view.update(cx, |v, cx| v.save(CloseTarget::Settings, cx));
     cx.run_until_parked();
 
-    assert!(model.read_with(cx, |m, _| m.settings.is_none()
-        && m.preference_warning
-            .as_deref()
-            .is_some_and(|warning| warning.contains("ui.ini"))));
-    assert_eq!(
-        crate::gui_settings::load(&dir.join("settings.ini"))
-            .unwrap()
-            .pitch
-            .semitones,
-        6.5
-    );
+    let saved = crate::gui_settings::load(&dir.join("settings.ini")).unwrap();
+    assert_eq!(saved.options.pitch.semitones, 6.5);
+    assert_eq!(saved.ui.language.as_deref(), Some("ja"));
+    assert_eq!(saved.ui.section.as_deref(), Some("devices"));
+    assert!(model.read_with(cx, |m, _| m.settings.is_none()));
     assert!(window.update(cx, |_, _, _| ()).is_err());
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -284,6 +281,7 @@ fn input_survives_redraw_and_navigation_and_saves_to_shared_model(cx: &mut TestA
     assert_eq!(
         crate::gui_settings::load(&directory.join("settings.ini"))
             .unwrap()
+            .options
             .pitch
             .semitones,
         7.5
@@ -823,7 +821,9 @@ fn detailed_values_survive_disk_save_and_reopen_in_the_simple_page(cx: &mut Test
     cx.run_until_parked();
     view.update(cx, |v, cx| v.save(CloseTarget::Settings, cx));
     cx.run_until_parked();
-    let saved = crate::gui_settings::load(&dir.join("settings.ini")).unwrap();
+    let saved = crate::gui_settings::load(&dir.join("settings.ini"))
+        .unwrap()
+        .options;
     assert_eq!(saved.input_eq_mode, "pro");
     assert_eq!(saved.input_eq.bands[0].frequency, 380.);
     assert_eq!(saved.input_eq.bands[0].gain_db, -2.5);

@@ -1,4 +1,5 @@
-use std::{collections::BTreeMap, fs, io::ErrorKind, path::Path, sync::OnceLock};
+use crate::gui_settings::UiPreferences;
+use std::{collections::BTreeMap, sync::OnceLock};
 
 pub const SECTIONS: &[(&str, &str)] = &[
     ("overview", "フィルタ構成"),
@@ -34,42 +35,28 @@ impl Preferences {
             section: "voice".into(),
         }
     }
-    pub fn load(path: &Path) -> Result<Self, String> {
-        match fs::read_to_string(path) {
-            Ok(text) => Self::parse(&text).map_err(|e| format!("Invalid {}: {e}", path.display())),
-            Err(e) if e.kind() == ErrorKind::NotFound => Ok(Self::system()),
-            Err(e) => Err(format!("Cannot read {}: {e}", path.display())),
+    pub fn from_saved(ui: UiPreferences) -> Self {
+        let mut preferences = Self::system();
+        if let Some(language) = ui
+            .language
+            .filter(|language| matches!(language.as_str(), "ja" | "en"))
+        {
+            preferences.language = language;
         }
+        if let Some(section) = ui
+            .section
+            .filter(|section| SECTIONS.iter().any(|(id, _)| id == section))
+        {
+            preferences.section = section;
+        }
+        preferences
     }
-    fn parse(text: &str) -> Result<Self, String> {
-        let mut values = BTreeMap::new();
-        for line in text.lines().map(str::trim).filter(|s| !s.is_empty()) {
-            let (key, value) = line.split_once('=').ok_or("Invalid ui.ini entry")?;
-            if !["language", "section"].contains(&key) || values.insert(key, value).is_some() {
-                return Err(format!("Unknown or repeated ui.ini key: {key}"));
-            }
+
+    pub fn stored(&self) -> UiPreferences {
+        UiPreferences {
+            language: Some(self.language.clone()),
+            section: Some(self.section.clone()),
         }
-        let language = *values.get("language").ok_or("Missing ui.ini language")?;
-        let section = *values.get("section").ok_or("Missing ui.ini section")?;
-        if !["ja", "en"].contains(&language) || !SECTIONS.iter().any(|(id, _)| *id == section) {
-            return Err("Invalid ui.ini language or section".into());
-        }
-        Ok(Self {
-            language: language.into(),
-            section: section.into(),
-        })
-    }
-    pub fn save(&self, path: &Path) -> Result<(), String> {
-        let temporary = path.with_extension(format!("{}.tmp", std::process::id()));
-        let result = fs::write(
-            &temporary,
-            format!("language={}\nsection={}\n", self.language, self.section),
-        )
-        .and_then(|()| fs::rename(&temporary, path));
-        if result.is_err() {
-            let _ = fs::remove_file(&temporary);
-        }
-        result.map_err(|e| format!("Cannot save {}: {e}", path.display()))
     }
     pub fn text(&self, key: &str) -> String {
         if let Some((prefix, label)) = key.split_once(" · ") {
@@ -92,17 +79,22 @@ impl Preferences {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
-    fn preferences_are_strict_and_round_trip() {
-        let p = Preferences::parse("language=ja\nsection=devices\n").unwrap();
-        assert_eq!(p.language, "ja");
-        for text in [
-            "language=xx\nsection=voice",
-            "language=ja\nsection=missing",
-            "language=ja\nlanguage=en\nsection=voice",
-            "language=ja",
-        ] {
-            assert!(Preferences::parse(text).is_err());
-        }
+    fn missing_or_invalid_preferences_default_independently() {
+        let defaults = Preferences::system();
+        assert_eq!(Preferences::from_saved(UiPreferences::default()), defaults);
+        let preferences = Preferences::from_saved(UiPreferences {
+            language: Some("unknown".into()),
+            section: Some("devices".into()),
+        });
+        assert_eq!(preferences.language, defaults.language);
+        assert_eq!(preferences.section, "devices");
+        let preferences = Preferences::from_saved(UiPreferences {
+            language: Some("ja".into()),
+            section: Some("unknown".into()),
+        });
+        assert_eq!(preferences.language, "ja");
+        assert_eq!(preferences.section, defaults.section);
     }
 }
