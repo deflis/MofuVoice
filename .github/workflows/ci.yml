@@ -76,7 +76,7 @@ jobs:
         run: cargo clippy --no-default-features --features cpal-backend --all-targets --locked -- -D warnings
 
       - name: GUI state and interaction tests
-        run: cargo test --no-default-features --features desktop-tests,cpal-backend --locked --lib gui::
+        run: "cargo test --no-default-features --features desktop-tests,cpal-backend --locked --lib gui::"
 
       - name: cargo test
         run: cargo test --all-features --locked
