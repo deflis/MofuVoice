@@ -17,7 +17,7 @@ pub fn render(levels: MeterLevels, cx: &App) -> Div {
         .flex()
         .flex_col()
         .gap_2()
-        .child("Output 1 / dBFS")
+        .child("Output level (dBFS)")
         .child(div().flex().gap_3().child("RMS").child("Peak"))
         .child(
             div()
@@ -90,7 +90,7 @@ pub fn render(levels: MeterLevels, cx: &App) -> Div {
                 .id("spectrum-meter-hold")
                 .test_support()
                 .text_color(if clipped(levels) { clip_color } else { p.muted })
-                .child(format!("Hold {:.1}", levels.hold_db)),
+                .child(format!("Peak hold {:.1}", levels.hold_db)),
         )
 }
 
