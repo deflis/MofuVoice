@@ -9,7 +9,7 @@ pub(super) fn render(
 ) -> Stateful<Div> {
     let t = |s: &str| model.text(s);
     content = content.child(div().text_lg().child(t("フィルタ構成")))
-        .child(t("上から下が音声の処理順です。各チェックボックスで個別に切り替えられ、無効中は詳細を表示しません。図と値は個別設定と共通で、実測メーターではありません。"));
+        .child(t("上から下が音声の処理順です。各ボタンで個別に切り替えられ、無効中は詳細を表示しません。図と値は個別設定と共通で、実測メーターではありません。"));
     for stage in crate::audio::FILTER_STAGES {
         let id = match stage.id() {
             "level" => "autoLevel",
