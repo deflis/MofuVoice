@@ -125,7 +125,7 @@ impl Render for SpectrumView {
 }
 
 pub fn window_options() -> WindowOptions {
-    layout::window_options("スペアナ / Spectrum", 840., 560., 640., 400.)
+    layout::window_options("スペアナ / Spectrum", 840., 560., 640., 520.)
 }
 
 #[cfg(test)]
