@@ -29,12 +29,22 @@ impl SearchableListItem for Choice {
         &self.value
     }
 }
-pub(super) fn labeled_choices(path: &str, items: Vec<String>, prefs: &Preferences) -> Vec<Choice> {
+pub(super) fn labeled_choices(
+    path: &str,
+    items: Vec<String>,
+    prefs: &Preferences,
+    resolved_backend: backend::BackendKind,
+) -> Vec<Choice> {
     items
         .into_iter()
         .map(|value| {
             let key = match value.as_str() {
                 "" if path.ends_with("previewDevice") => "なし",
+                "" if path == "/devices/device"
+                    && resolved_backend == backend::BackendKind::Asio =>
+                {
+                    "デバイスを選択"
+                }
                 "" => "システムの既定",
                 "auto" => "自動",
                 "manual" => "手動",

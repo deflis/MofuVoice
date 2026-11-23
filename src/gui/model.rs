@@ -131,8 +131,12 @@ impl AppModel {
         self.error = error.to_string();
         cx.notify();
     }
+    pub fn needs_input_device(&self) -> bool {
+        self.saved.device.is_empty()
+            && backend::resolve(self.saved.backend) == backend::BackendKind::Asio
+    }
     pub fn start(&mut self, inspect: bool, cx: &mut Context<Self>) {
-        if self.locked() {
+        if self.locked() || self.needs_input_device() {
             return;
         }
         self.error.clear();

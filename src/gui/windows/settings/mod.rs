@@ -28,6 +28,7 @@ use gpui_kit::{
         slider::{Slider, SliderEvent, SliderState, SliderValue},
         Disableable, Selectable, WindowExt,
     },
+    prelude::FluentBuilder,
     *,
 };
 use std::collections::BTreeMap;
@@ -58,8 +59,10 @@ pub struct SettingsView {
     handle: AnyWindowHandle,
     generation: Generation,
     pending: bool,
+    discovery_deferred: bool,
     close: CloseTarget,
     error: String,
+    device_error: String,
     notice: String,
     rates: Option<backend::DeviceSampleRates>,
     language: String,
@@ -91,6 +94,8 @@ impl SettingsView {
                             && !view.model.read(cx).closing
                         {
                             view.save(view.close, cx);
+                        } else if view.discovery_deferred && !view.model.read(cx).locked() {
+                            view.discover(cx);
                         }
                     });
                     window.refresh();
@@ -107,8 +112,10 @@ impl SettingsView {
             handle: window.window_handle(),
             generation: Generation::default(),
             pending: false,
+            discovery_deferred: false,
             close: CloseTarget::None,
             error: String::new(),
+            device_error: String::new(),
             notice: String::new(),
             rates: None,
         };
@@ -267,6 +274,13 @@ impl Render for SettingsView {
                     .text_color(crate::gui::theme::palette(cx).danger)
                     .child(error),
             )
+            .when(!self.device_error.is_empty(), |body| {
+                body.child(
+                    div()
+                        .text_color(crate::gui::theme::palette(cx).danger)
+                        .child(t(&self.device_error)),
+                )
+            })
             .child(t(&notice))
             .child(
                 div()

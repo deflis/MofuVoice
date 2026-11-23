@@ -4,6 +4,7 @@ use gpui_kit::{
         button::{Button, ButtonVariants},
         Disableable,
     },
+    prelude::FluentBuilder,
     *,
 };
 pub struct MainView {
@@ -26,7 +27,7 @@ impl Render for MainView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let m = self.model.read(cx);
         let t = |s: &str| m.text(s);
-        let locked = m.locked();
+        let needs_input_device = m.needs_input_device();
         layout::surface(cx)
             .id("main-content")
             .overflow_y_scroll()
@@ -65,7 +66,7 @@ impl Render for MainView {
                         Button::new("start-audio")
                             .primary()
                             .label(t("音声を開始"))
-                            .disabled(locked)
+                            .disabled(m.locked() || needs_input_device)
                             .on_click(cx.listener(|v, _, _, cx| {
                                 v.model.update(cx, |m, cx| m.start(false, cx))
                             })),
@@ -81,7 +82,7 @@ impl Render for MainView {
                     .child(
                         Button::new("inspect-audio")
                             .label(t("デバイスを検査"))
-                            .disabled(locked)
+                            .disabled(m.locked() || needs_input_device)
                             .on_click(cx.listener(|v, _, _, cx| {
                                 v.model.update(cx, |m, cx| m.start(true, cx))
                             })),
@@ -126,6 +127,9 @@ impl Render for MainView {
                             })),
                     ),
             )
+            .when(needs_input_device, |body| {
+                body.child(t("最初に、入力・出力デバイスを設定してください。"))
+            })
             .child(div().child(format!(
                 "{} · {} Hz · {} frames",
                 t(if m.closing {

@@ -4,7 +4,14 @@ impl SettingsView {
         let edits = self.edits();
         self.controls.clear();
         self.subscriptions.clear();
-        let percent = self.base.options().expect("validated settings").pitch_unit == "percent";
+        let options = self.base.options().expect("validated settings");
+        let percent = options.pitch_unit == "percent";
+        let kind = edits
+            .get("/devices/backend")
+            .map_or(options.backend, |name| {
+                backend::BackendKind::parse(name).expect("backend selection")
+            });
+        let resolved_backend = backend::resolve(kind);
         for mut field in draft::fields(&self.base) {
             if let Some(text) = edits.get(&field.path) {
                 field.text = text.clone();
@@ -15,7 +22,12 @@ impl SettingsView {
                 Widget::Toggle
             } else if let Some(items) = items.clone() {
                 let value = field.text.clone();
-                let items = labeled_choices(&path, items, &self.model.read(cx).preferences);
+                let items = labeled_choices(
+                    &path,
+                    items,
+                    &self.model.read(cx).preferences,
+                    resolved_backend,
+                );
                 let select = cx.new(|cx| {
                     let mut s = SelectState::new(items, None, window, cx);
                     s.set_selected_value(&value, window, cx);
@@ -180,6 +192,7 @@ impl SettingsView {
     }
     pub(super) fn refresh_choices(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let prefs = self.model.read(cx).preferences.clone();
+        let resolved_backend = self.resolved_backend();
         for i in 0..self.controls.len() {
             let path = self.controls[i].field.path.clone();
             let Some(mut items) = self.controls[i].items.clone() else {
@@ -200,7 +213,11 @@ impl SettingsView {
             }
             if let Widget::Select(state) = &control.widget {
                 state.update(cx, |s, cx| {
-                    s.set_items(labeled_choices(&path, items, &prefs), window, cx);
+                    s.set_items(
+                        labeled_choices(&path, items, &prefs, resolved_backend),
+                        window,
+                        cx,
+                    );
                     s.set_selected_value(&current, window, cx);
                 });
             }
@@ -372,11 +389,13 @@ impl SettingsView {
             ] {
                 self.set_value(p, String::new(), window, cx);
             }
+            self.refresh_choices(window, cx);
         }
         if [
             "/devices/backend",
             "/devices/device",
             "/devices/outputDevice",
+            "/devices/previewDevice",
         ]
         .contains(&path)
         {

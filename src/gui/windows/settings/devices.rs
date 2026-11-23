@@ -1,13 +1,17 @@
 use super::*;
 impl SettingsView {
     pub fn discover(&mut self, cx: &mut Context<Self>) {
-        if self.pending || self.model.read(cx).locked() {
+        if self.pending {
+            return;
+        }
+        self.discovery_deferred = self.model.read(cx).locked();
+        if self.discovery_deferred {
             return;
         }
         let kind = match backend::BackendKind::parse(&self.value("/devices/backend")) {
             Ok(k) => k,
             Err(e) => {
-                self.error = e.to_string();
+                self.device_error = e.to_string();
                 cx.notify();
                 return;
             }
@@ -30,9 +34,14 @@ impl SettingsView {
             } else {
                 None
             };
-            let rates = backend::select(choices.resolved, &output)
-                .and_then(|s| s.supported_sample_rates(&device))
-                .map_err(|e| e.to_string());
+            let rates = if choices.resolved == backend::BackendKind::Asio && device.is_empty() {
+                Ok(None)
+            } else {
+                backend::select(choices.resolved, &output)
+                    .and_then(|s| s.supported_sample_rates(&device))
+                    .map(Some)
+                    .map_err(|e| e.to_string())
+            };
             Ok::<_, String>((choices, rates))
         });
         let model = self.model.clone();
@@ -49,6 +58,7 @@ impl SettingsView {
                         return;
                     }
                     v.pending = false;
+                    v.device_error.clear();
                     match result {
                         Ok((choices, rates)) => {
                             for (path, mut items) in [
@@ -59,7 +69,7 @@ impl SettingsView {
                                 items.insert(0, String::new());
                                 let current = v.value(path);
                                 if !items.contains(&current) {
-                                    v.error = format!("Device unavailable: {current}");
+                                    v.device_error = format!("Device unavailable: {current}");
                                     items.push(current.clone());
                                 }
                                 if let Some(control) =
@@ -71,6 +81,7 @@ impl SettingsView {
                                             path,
                                             items,
                                             &v.model.read(cx).preferences,
+                                            choices.resolved,
                                         );
                                         state.update(cx, |s, cx| {
                                             s.set_items(choices, window, cx);
@@ -80,11 +91,11 @@ impl SettingsView {
                                 }
                             }
                             match rates {
-                                Ok(rates) => v.rates = Some(rates),
-                                Err(e) => v.error = e,
+                                Ok(rates) => v.rates = rates,
+                                Err(e) => v.device_error = e,
                             }
                         }
-                        Err(e) => v.error = e,
+                        Err(e) => v.device_error = e,
                     }
                     let target = v.close;
                     cx.notify();
@@ -100,14 +111,18 @@ impl SettingsView {
 }
 
 impl SettingsView {
+    pub(super) fn resolved_backend(&self) -> backend::BackendKind {
+        backend::resolve(
+            backend::BackendKind::parse(&self.value("/devices/backend"))
+                .expect("backend selection"),
+        )
+    }
+
     pub(super) fn render_devices(&self, owner: Entity<Self>, cx: &App) -> AnyElement {
         use super::presentation::FieldStyle;
         let m = self.model.read(cx);
         let t = |s: &str| m.text(s);
-        let kind = backend::resolve(
-            backend::BackendKind::parse(&self.value("/devices/backend"))
-                .expect("backend selection"),
-        );
+        let kind = self.resolved_backend();
         let mut body = div().flex().flex_col().gap_3().child(self.render_field(
             "/devices/device",
             FieldStyle::Number,
@@ -236,7 +251,7 @@ impl SettingsView {
                     )),
                 );
             }
-        } else {
+        } else if kind != backend::BackendKind::Asio || !self.value("/devices/device").is_empty() {
             body = body.child(t(
                 "利用可能なチャンネルを確認中です。音声動作中は停止して確認してください。",
             ));
