@@ -8,7 +8,7 @@ use crate::{
 };
 use gpui_kit::*;
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -22,6 +22,7 @@ pub struct AppModel {
     pub log: Option<AudioLog>,
     pub status: String,
     pub error: String,
+    pub preference_warning: Option<String>,
     pub busy: bool,
     pub active: bool,
     pub closing: bool,
@@ -105,6 +106,7 @@ impl AppModel {
             log: None,
             status: String::new(),
             error: String::new(),
+            preference_warning: None,
             busy: false,
             active: false,
             closing: false,
@@ -342,16 +344,15 @@ impl AppModel {
         let options = self.saved.clone();
         let prefs = self.preferences.clone();
         let path = self.path.clone();
-        let task = cx.background_executor().spawn(async move {
-            prefs.save(&path.with_file_name("ui.ini"))?;
-            crate::gui_settings::save(&path, &options).map_err(|e| e.to_string())
-        });
+        let task = cx
+            .background_executor()
+            .spawn(async move { save_settings(&path, &options, &prefs) });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             _ = this.update(cx, |m, cx| {
                 m.busy = false;
                 match result {
-                    Ok(()) => m.shutdown(cx),
+                    Ok(warning) => m.shutdown(warning, cx),
                     Err(e) => {
                         m.quit_requested = false;
                         m.report(e, cx);
@@ -362,7 +363,7 @@ impl AppModel {
         .detach();
         cx.notify();
     }
-    pub fn shutdown(&mut self, cx: &mut Context<Self>) {
+    pub fn shutdown(&mut self, preference_warning: Option<String>, cx: &mut Context<Self>) {
         if self.closing {
             return;
         }
@@ -374,11 +375,23 @@ impl AppModel {
         });
         cx.spawn(async move |_, cx| {
             task.await;
+            if let Some(warning) = preference_warning {
+                super::show_message(&warning, true);
+            }
             cx.update(|cx| cx.quit());
         })
         .detach();
         cx.notify();
     }
+}
+
+pub fn save_settings(
+    path: &Path,
+    options: &Options,
+    preferences: &Preferences,
+) -> Result<Option<String>, String> {
+    crate::gui_settings::save(path, options).map_err(|e| e.to_string())?;
+    Ok(preferences.save(&path.with_file_name("ui.ini")).err())
 }
 
 pub struct DeviceChoices {

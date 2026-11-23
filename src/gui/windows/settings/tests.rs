@@ -116,6 +116,33 @@ fn settings_close_retries_after_another_app_operation_and_saves_the_draft(cx: &m
 }
 
 #[gpui_kit::test]
+fn ui_preference_write_failure_keeps_audio_settings_save_and_close_working(
+    cx: &mut TestAppContext,
+) {
+    let dir = directory();
+    std::fs::create_dir_all(dir.join("ui.ini")).unwrap();
+    let (model, window, view) = open(cx, &dir);
+    set(&view, window, "/voice/pitch", "6.5", cx);
+
+    view.update(cx, |v, cx| v.save(CloseTarget::Settings, cx));
+    cx.run_until_parked();
+
+    assert!(model.read_with(cx, |m, _| m.settings.is_none()
+        && m.preference_warning
+            .as_deref()
+            .is_some_and(|warning| warning.contains("ui.ini"))));
+    assert_eq!(
+        crate::gui_settings::load(&dir.join("settings.ini"))
+            .unwrap()
+            .pitch
+            .semitones,
+        6.5
+    );
+    assert!(window.update(cx, |_, _, _| ()).is_err());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[gpui_kit::test]
 fn deferred_close_keeps_the_window_and_draft_when_saving_fails(cx: &mut TestAppContext) {
     let dir = directory();
     std::fs::write(&dir, "not a directory").unwrap();

@@ -36,7 +36,7 @@ impl Preferences {
     }
     pub fn load(path: &Path) -> Result<Self, String> {
         match fs::read_to_string(path) {
-            Ok(text) => Self::parse(&text),
+            Ok(text) => Self::parse(&text).map_err(|e| format!("Invalid {}: {e}", path.display())),
             Err(e) if e.kind() == ErrorKind::NotFound => Ok(Self::system()),
             Err(e) => Err(format!("Cannot read {}: {e}", path.display())),
         }
@@ -60,11 +60,16 @@ impl Preferences {
         })
     }
     pub fn save(&self, path: &Path) -> Result<(), String> {
-        fs::write(
-            path,
+        let temporary = path.with_extension(format!("{}.tmp", std::process::id()));
+        let result = fs::write(
+            &temporary,
             format!("language={}\nsection={}\n", self.language, self.section),
         )
-        .map_err(|e| format!("Cannot save {}: {e}", path.display()))
+        .and_then(|()| fs::rename(&temporary, path));
+        if result.is_err() {
+            let _ = fs::remove_file(&temporary);
+        }
+        result.map_err(|e| format!("Cannot save {}: {e}", path.display()))
     }
     pub fn text(&self, key: &str) -> String {
         if let Some((prefix, label)) = key.split_once(" · ") {

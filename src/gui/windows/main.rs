@@ -152,6 +152,11 @@ impl Render for MainView {
                         m.error.clone()
                     }),
             )
+            .children(m.preference_warning.iter().map(|warning| {
+                div()
+                    .text_color(crate::gui::theme::palette(cx).danger)
+                    .child(warning.clone())
+            }))
     }
 }
 

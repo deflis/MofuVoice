@@ -149,10 +149,9 @@ impl SettingsView {
         let generation = self.generation.advance();
         let handle = self.handle;
         let model = self.model.clone();
-        let task = cx.background_executor().spawn(async move {
-            prefs.save(&path.with_file_name("ui.ini"))?;
-            crate::gui_settings::save(&path, &saved).map_err(|e| e.to_string())
-        });
+        let task = cx
+            .background_executor()
+            .spawn(async move { model::save_settings(&path, &saved, &prefs) });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             model.update(cx, |m, cx| {
@@ -166,15 +165,17 @@ impl SettingsView {
                     }
                     v.pending = false;
                     match result {
-                        Ok(()) => {
+                        Ok(warning) => {
+                            v.error = warning.clone().unwrap_or_default();
                             v.base = Settings::from_options(&options);
                             v.notice = "設定を保存しました。".into();
                             let target = v.close;
                             v.close = CloseTarget::None;
                             v.model.update(cx, |m, cx| {
                                 m.saved = options;
+                                m.preference_warning = warning.clone();
                                 if target == CloseTarget::Application {
-                                    m.shutdown(cx);
+                                    m.shutdown(warning, cx);
                                 } else if target == CloseTarget::Settings {
                                     m.settings = None;
                                 }

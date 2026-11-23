@@ -21,13 +21,21 @@ pub fn initial_options(args: impl IntoIterator<Item = String>) -> Result<Options
 }
 pub fn run(options: Options) -> Result<(), Box<dyn Error>> {
     let path = gui_settings::path()?;
-    let preferences = preferences::Preferences::load(&path.with_file_name("ui.ini"))?;
+    let (preferences, preference_error) =
+        match preferences::Preferences::load(&path.with_file_name("ui.ini")) {
+            Ok(preferences) => (preferences, None),
+            Err(error) => (preferences::Preferences::system(), Some(error)),
+        };
     gpui_kit::application()
         .with_assets(gpui_kit::assets::Assets)
         .run(move |cx| {
             gpui_kit::init(cx);
             theme::init(cx);
-            let model = cx.new(|cx| model::AppModel::new(options, path, preferences, cx));
+            let model = cx.new(|cx| {
+                let mut model = model::AppModel::new(options, path, preferences, cx);
+                model.preference_warning = preference_error;
+                model
+            });
             let quit_model = model.clone();
             cx.bind_keys([KeyBinding::new(
                 if cfg!(target_os = "macos") {
