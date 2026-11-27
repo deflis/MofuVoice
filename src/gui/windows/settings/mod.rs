@@ -67,7 +67,35 @@ pub struct SettingsView {
     device_error: String,
     notice: String,
     rates: Option<backend::DeviceSampleRates>,
+    observed: ObservedModel,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct ObservedModel {
     language: String,
+    section: String,
+    active: bool,
+    busy: bool,
+    closing: bool,
+    quit_requested: bool,
+    auto_backend: backend::BackendKind,
+}
+
+impl ObservedModel {
+    fn capture(model: &AppModel) -> Self {
+        Self {
+            language: model.preferences.language.clone(),
+            section: model.preferences.section.clone(),
+            active: model.active,
+            busy: model.busy,
+            closing: model.closing,
+            quit_requested: model.quit_requested,
+            auto_backend: model.resolve_backend(backend::BackendKind::Auto),
+        }
+    }
+    fn locked(&self) -> bool {
+        self.active || self.busy || self.closing || self.quit_requested
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -90,16 +118,28 @@ impl SettingsView {
         let base = Settings::from_options(&options);
         let handle = window.window_handle();
         let observe = cx.observe(&model, move |view, model, cx| {
-            let language = model.read(cx).preferences.language.clone();
-            let changed = view.language != language;
-            view.language = language;
+            let snapshot = ObservedModel::capture(model.read(cx));
+            let language_changed = view.observed.language != snapshot.language;
+            let backend_changed = view.observed.auto_backend != snapshot.auto_backend;
+            let model_changed = view.observed != snapshot;
+            let resume_close = view.close != CloseTarget::None
+                && !view.pending()
+                && !snapshot.busy
+                && !snapshot.closing;
+            let resume_discover = view.discovery_deferred && !snapshot.locked();
+            if !model_changed && !resume_close && !resume_discover {
+                return;
+            }
+            view.observed = snapshot;
             let weak = cx.weak_entity();
             cx.notify();
             cx.defer(move |cx| {
                 let _ = handle.update(cx, |_, window, cx| {
                     let _ = weak.update(cx, |view, cx| {
-                        if changed {
+                        if language_changed {
                             view.save_failed = false;
+                        }
+                        if language_changed || backend_changed {
                             view.refresh_choices(window, cx);
                         }
                         if view.close != CloseTarget::None
@@ -116,8 +156,9 @@ impl SettingsView {
                 });
             });
         });
+        let observed = ObservedModel::capture(model.read(cx));
         let mut this = Self {
-            language: model.read(cx).preferences.language.clone(),
+            observed,
             model,
             base,
             controls: Vec::new(),
