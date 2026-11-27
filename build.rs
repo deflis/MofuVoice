@@ -1,6 +1,6 @@
 fn main() {
     #[cfg(all(windows, feature = "desktop"))]
-    {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         println!("cargo:rerun-if-changed=resources/windows.rc");
         println!("cargo:rerun-if-changed=icons/icon.ico");
         let version = env!("CARGO_PKG_VERSION");
