@@ -128,6 +128,15 @@ impl Render for MainView {
             )
             .when(needs_input_device, |body| {
                 body.child(t("最初に、入力・出力デバイスを設定してください。"))
+                    .child(
+                        Button::new("device-settings")
+                            .label(t("入力・出力デバイスを確認する"))
+                            .disabled(m.closing)
+                            .on_click(cx.listener(|v, _, _, cx| {
+                                v.model
+                                    .update(cx, |m, cx| m.open_settings(Some("devices".into()), cx))
+                            })),
+                    )
             })
             .child(div().child(format!(
                 "{} · {} Hz · {} frames",
@@ -168,9 +177,7 @@ mod tests {
     use gpui_kit::{AppContext, TestAppContext};
 
     #[gpui_kit::test]
-    fn settings_button_opens_restored_section_and_voice_button_still_jumps_to_voice(
-        cx: &mut TestAppContext,
-    ) {
+    fn settings_button_restores_section_and_shortcuts_open_their_pages(cx: &mut TestAppContext) {
         use gpui_kit::test::TestWindowExt;
 
         let (main, model) = cx.update(|cx| {
@@ -178,7 +185,10 @@ mod tests {
             crate::gui::theme::init(cx);
             let model = cx.new(|cx| {
                 AppModel::new(
-                    crate::cli::Options::default(),
+                    crate::cli::Options {
+                        backend: crate::backend::BackendKind::Asio,
+                        ..Default::default()
+                    },
                     std::path::PathBuf::new(),
                     crate::gui::preferences::Preferences::from_saved(
                         crate::gui_settings::UiPreferences {
@@ -207,8 +217,16 @@ mod tests {
         main.update(cx, |_, window, cx| window.click("voice-settings", cx))
             .unwrap();
         cx.run_until_parked();
+        assert_eq!(
+            model.read_with(cx, |m, _| m.preferences.section.clone()),
+            "voice"
+        );
+
+        main.update(cx, |_, window, cx| window.click("device-settings", cx))
+            .unwrap();
+        cx.run_until_parked();
         model.update(cx, |m, _| {
-            assert_eq!(m.preferences.section, "voice");
+            assert_eq!(m.preferences.section, "devices");
             assert_eq!(m.settings.take().unwrap().0, settings);
         });
         settings
