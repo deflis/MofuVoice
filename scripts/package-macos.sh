@@ -11,7 +11,19 @@ cp target/release/MofuVoice "$app/Contents/MacOS/MofuVoice"
 version="$(cargo pkgid --offline | sed 's/.*#\([^@]*@\)\{0,1\}//')"
 case "$version" in *[!0-9.]*|'') echo "Cannot determine package version: $version" >&2; exit 1;; esac
 
-iconset="$(mktemp -d)/MofuVoice.iconset"
+iconset_root=""
+stage=""
+mount=""
+cleanup() {
+  if [ -n "$mount" ]; then
+    hdiutil detach "$mount" -force >/dev/null 2>&1 || true
+  fi
+  rm -rf "$stage" "$mount" "$iconset_root"
+}
+trap cleanup EXIT
+
+iconset_root="$(mktemp -d)"
+iconset="$iconset_root/MofuVoice.iconset"
 mkdir -p "$iconset"
 for pixels in 16 32 128 256 512; do
   sips -z "$pixels" "$pixels" icons/icon.png --out "$iconset/icon_${pixels}x${pixels}.png" >/dev/null
@@ -27,11 +39,6 @@ codesign --verify --deep --strict "$app"
 
 stage="$(mktemp -d)"
 mount="$(mktemp -d)"
-cleanup() {
-  hdiutil detach "$mount" -force >/dev/null 2>&1 || true
-  rm -rf "$stage" "$mount" "$(dirname "$iconset")"
-}
-trap cleanup EXIT
 ditto "$app" "$stage/MofuVoice.app"
 ln -s /Applications "$stage/Applications"
 arch="$(uname -m)"
