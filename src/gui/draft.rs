@@ -87,15 +87,17 @@ pub fn parse(settings: &Settings, edits: &BTreeMap<String, String>) -> Result<Op
                     text.parse()
                         .map_err(|_| format!("{path}: expected true/false"))?,
                 ),
-                Value::Array(_) => Value::Array(
+                Value::Array(_) => Value::Array(if text.trim().is_empty() {
+                    Vec::new()
+                } else {
                     text.split(',')
                         .map(|s| {
                             s.trim().parse::<u64>().map(Value::from).map_err(|_| {
                                 format!("{path}: enter channel numbers separated by commas")
                             })
                         })
-                        .collect::<Result<_, _>>()?,
-                ),
+                        .collect::<Result<_, _>>()?
+                }),
                 Value::Number(number) => {
                     let parsed = text
                         .parse::<f64>()
@@ -257,5 +259,13 @@ mod tests {
         let options = parse(&settings, &edits).unwrap();
         assert_eq!(options.pitch.semitones, 12.);
         assert_eq!(options.pitch.formant_shift, 3.);
+    }
+    #[test]
+    fn empty_output_channels_reports_channel_validation_error() {
+        let settings = Settings::from_options(&Options::default());
+        let edits = BTreeMap::from([("/devices/outputChannels".into(), String::new())]);
+        let error = parse(&settings, &edits).unwrap_err();
+        assert!(error.contains("output channel"), "{error}");
+        assert!(!error.contains("commas"), "{error}");
     }
 }

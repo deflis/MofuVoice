@@ -1011,3 +1011,27 @@ fn changing_theme_preserves_modal_input_and_updates_existing_and_new_windows(
     log.update(cx, |_, w, _| w.remove_window()).unwrap();
     cleanup(model, window, cx);
 }
+
+#[gpui_kit::test]
+fn pitch_unit_switch_rejects_out_of_range_semitones(cx: &mut TestAppContext) {
+    let dir = directory();
+    let (model, window, view) = open(cx, &dir);
+    for invalid in ["20", "-13", "12000"] {
+        set(&view, window, "/voice/pitch", invalid, cx);
+        window
+            .update(cx, |_, w, cx| {
+                view.update(cx, |v, cx| {
+                    v.changed("/voice/pitchUnit", "percent".into(), w, cx)
+                })
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(
+            view.read_with(cx, |v, _| v.value("/voice/pitchUnit")),
+            "semitones"
+        );
+        assert_eq!(view.read_with(cx, |v, _| v.value("/voice/pitch")), invalid);
+        assert!(view.read_with(cx, |v, _| !v.error.is_empty()));
+    }
+    cleanup(model, window, cx);
+}

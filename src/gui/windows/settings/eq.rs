@@ -7,7 +7,7 @@ impl SettingsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.model.read(cx).locked() {
+        if self.model.read(cx).locked() || self.pending() {
             return;
         }
         let mut options = self.base.options().expect("validated settings");

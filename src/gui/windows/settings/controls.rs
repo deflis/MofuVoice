@@ -314,7 +314,9 @@ impl SettingsView {
                     if self.percent() {
                         draft::percent_to_semitones(n)
                     } else {
-                        Ok(n)
+                        crate::pitch::pitch_ratio(n)
+                            .map(|_| n)
+                            .map_err(|error| error.to_string())
                     }
                 });
             match converted {
