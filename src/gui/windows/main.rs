@@ -1,4 +1,8 @@
-use crate::gui::{layout, model::AppModel};
+use crate::gui::{
+    layout,
+    model::AppModel,
+    preferences::{Language, Section},
+};
 use gpui_kit::{
     component::{
         button::{Button, ButtonVariants},
@@ -41,7 +45,7 @@ impl Render for MainView {
                     .child(div().text_xl().child(t("もふボイス")))
                     .child(
                         Button::new("language")
-                            .label(if m.preferences.language == "ja" {
+                            .label(if m.preferences.language == Language::Ja {
                                 "English"
                             } else {
                                 "日本語"
@@ -52,12 +56,7 @@ impl Render for MainView {
                                     if m.busy || m.shutting_down() {
                                         return;
                                     }
-                                    m.preferences.language = if m.preferences.language == "ja" {
-                                        "en"
-                                    } else {
-                                        "ja"
-                                    }
-                                    .into();
+                                    m.preferences.language = m.preferences.language.toggle();
                                     m.quit_save_failed = false;
                                     cx.notify();
                                 })
@@ -104,7 +103,7 @@ impl Render for MainView {
                             .disabled(m.shutting_down())
                             .on_click(cx.listener(|v, _, _, cx| {
                                 v.model
-                                    .update(cx, |m, cx| m.open_settings(Some("voice".into()), cx))
+                                    .update(cx, |m, cx| m.open_settings(Some(Section::Voice), cx))
                             })),
                     )
                     .child(
@@ -145,9 +144,9 @@ impl Render for MainView {
                             v.model.update(cx, |m, cx| {
                                 m.open_settings(
                                     Some(if unsaved_draft {
-                                        m.preferences.section.clone()
+                                        m.preferences.section
                                     } else {
-                                        "devices".into()
+                                        Section::Devices
                                     }),
                                     cx,
                                 )
@@ -220,7 +219,7 @@ mod tests {
             .unwrap();
         cx.run_until_parked();
         let settings = model.read_with(cx, |m, _| {
-            assert_eq!(m.preferences.section, "inputEq");
+            assert_eq!(m.preferences.section, super::Section::InputEq);
             m.settings.as_ref().unwrap().0
         });
 
@@ -228,15 +227,15 @@ mod tests {
             .unwrap();
         cx.run_until_parked();
         assert_eq!(
-            model.read_with(cx, |m, _| m.preferences.section.clone()),
-            "voice"
+            model.read_with(cx, |m, _| m.preferences.section),
+            super::Section::Voice
         );
 
         main.update(cx, |_, window, cx| window.click("device-settings", cx))
             .unwrap();
         cx.run_until_parked();
         model.update(cx, |m, _| {
-            assert_eq!(m.preferences.section, "devices");
+            assert_eq!(m.preferences.section, super::Section::Devices);
             assert_eq!(m.settings.take().unwrap().0, settings);
         });
         settings

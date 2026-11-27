@@ -1,13 +1,19 @@
-use crate::gui::{
-    layout,
-    model::{self, AppModel},
+use crate::{
+    backend::AudioTelemetry,
+    gui::{
+        layout,
+        model::{self, AppModel},
+    },
+    session::{AudioInfo, AudioLog},
 };
 use gpui_kit::component::{checkbox::Checkbox, Disableable};
 use gpui_kit::*;
+
 pub struct LogView {
     model: Entity<AppModel>,
     _observe: Subscription,
 }
+
 impl LogView {
     pub fn new(model: Entity<AppModel>, cx: &mut Context<Self>) -> Self {
         let observe = cx.observe(&model, |_, _, cx| cx.notify());
@@ -17,6 +23,7 @@ impl LogView {
         }
     }
 }
+
 impl Render for LogView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let m = self.model.read(cx);
@@ -27,11 +34,13 @@ impl Render for LogView {
             .flex()
             .flex_col()
             .gap_2();
-        for value in [
-            serde_json::to_value(&m.info).unwrap(),
-            serde_json::to_value(&m.log).unwrap(),
-        ] {
-            append_metrics(&value, &mut body, m);
+        for (label, value) in info_rows(&m.info, m) {
+            append_row(&mut body, label, value, m);
+        }
+        if let Some(log) = &m.log {
+            for (label, value) in log_rows(log) {
+                append_row(&mut body, label, value, m);
+            }
         }
         layout::surface(cx)
             .child(div().text_lg().child(m.text("ログ")))
@@ -47,95 +56,116 @@ impl Render for LogView {
             .child(body.child(m.status.clone()))
     }
 }
-fn append_metrics(value: &serde_json::Value, body: &mut Stateful<Div>, m: &AppModel) {
-    if let serde_json::Value::Object(map) = value {
-        for (key, value) in map {
-            if value.is_object() {
-                append_metrics(value, body, m);
-                continue;
-            }
-            let label = match key.as_str() {
-                "phase" => "状態",
-                "error" => "エラー",
-                "device" => "入力デバイス",
-                "backend" => "音声バックエンド",
-                "outputDevice" => "出力デバイス",
-                "sampleRate" => "サンプルレート",
-                "inputs" => "入力チャンネル",
-                "outputs" => "出力チャンネル",
-                "frames" => "バッファサイズ（サンプル）",
-                "periodMs" => "バッファ周期（ms）",
-                "dspMs" => "DSP遅延（ms）",
-                "inputLatencyMs" => "ドライバ報告の入力遅延（ms）",
-                "outputLatencyMs" => "ドライバ報告の出力遅延（ms）",
-                "elapsedSeconds" => "経過時間",
-                "blocks" => "処理ブロック",
-                "nonzeroSamples" => "非ゼロ入力サンプル",
-                "maxCallbackUs" => "最大コールバック",
-                "deadlineMisses" => "期限超過",
-                "timestampBlocks" => "タイムスタンプブロック",
-                "samplePositionGaps" => "サンプル位置の欠落",
-                "faultFlags" => "エラーフラグ",
-                "outputBlocks" => "出力コールバック",
-                "underruns" => "アンダーラン",
-                "overruns" => "オーバーラン",
-                "queueFrames" => "現在のキュー",
-                "observedInputFrames" => "観測した最大入力バッファ",
-                "observedOutputFrames" => "観測した最大出力バッファ",
-                "queuePeakFrames" => "キューの最大量",
-                "startupQueueFrames" => "開始時のキュー目標",
-                "queueCapacityFrames" => "キュー容量",
-                "maxInputCallbackUs" => "最大入力コールバック",
-                "maxOutputCallbackUs" => "最大出力コールバック",
-                _ => key,
-            };
-            let text = format_metric_value(key, value, m);
-            let row = div()
-                .flex()
-                .gap_3()
-                .child(div().w(px(290.)).child(m.text(label)))
-                .child(text);
-            body.extend([row.into_any_element()]);
-        }
-    }
+
+fn append_row(body: &mut Stateful<Div>, label: &str, value: String, m: &AppModel) {
+    let row = div()
+        .flex()
+        .gap_3()
+        .child(div().w(px(290.)).child(m.text(label)))
+        .child(value);
+    body.extend([row.into_any_element()]);
 }
 
-fn format_metric_value(key: &str, value: &serde_json::Value, m: &AppModel) -> String {
-    if value.is_null() {
-        return "—".into();
-    }
-    match key {
-        "phase" => value
-            .as_str()
-            .map(|phase| m.text(model::phase_label(phase)))
-            .unwrap_or_else(|| value.to_string()),
-        "elapsedSeconds" => value
-            .as_f64()
-            .map(|seconds| format!("{seconds:.1} s"))
-            .unwrap_or_else(|| value.to_string()),
-        "maxCallbackUs" | "maxInputCallbackUs" | "maxOutputCallbackUs" => value
-            .as_f64()
-            .map(|us| format!("{us:.2} µs"))
-            .unwrap_or_else(|| value.to_string()),
-        "periodMs" | "dspMs" | "inputLatencyMs" | "outputLatencyMs" => value
-            .as_f64()
-            .map(|ms| format!("{ms:.2}"))
-            .unwrap_or_else(|| value.to_string()),
-        "faultFlags" => value
-            .as_u64()
-            .map(|flags| format!("0x{flags:x}"))
-            .unwrap_or_else(|| value.to_string()),
-        "queueFrames"
-        | "observedInputFrames"
-        | "observedOutputFrames"
-        | "queuePeakFrames"
-        | "startupQueueFrames"
-        | "queueCapacityFrames" => format!("{value} frames"),
-        _ => match value {
-            serde_json::Value::String(s) => s.clone(),
-            _ => value.to_string(),
+fn dash() -> String {
+    "—".into()
+}
+
+fn opt_display<T: ToString>(value: Option<T>) -> String {
+    value.map_or_else(dash, |v| v.to_string())
+}
+
+fn opt_ms(value: Option<f64>) -> String {
+    value.map_or_else(dash, |ms| format!("{ms:.2}"))
+}
+
+fn opt_us(value: Option<f64>) -> String {
+    value.map_or_else(dash, |us| format!("{us:.2} µs"))
+}
+
+fn opt_frames(value: Option<usize>) -> String {
+    value.map_or_else(dash, |frames| format!("{frames} frames"))
+}
+
+fn info_rows(info: &AudioInfo, m: &AppModel) -> Vec<(&'static str, String)> {
+    let output_device = match info.backend.as_deref() {
+        Some("asio") => info.device.clone().unwrap_or_else(dash),
+        Some("cpal") => match info.output_device.as_deref() {
+            Some("") => m.text("システムの既定"),
+            Some(name) => name.into(),
+            None => dash(),
         },
+        _ => info
+            .output_device
+            .as_deref()
+            .filter(|name| !name.is_empty())
+            .map(String::from)
+            .unwrap_or_else(dash),
+    };
+    vec![
+        ("状態", m.text(model::phase_label(info.phase))),
+        ("エラー", info.error.clone().unwrap_or_else(dash)),
+        ("入力デバイス", info.device.clone().unwrap_or_else(dash)),
+        (
+            "音声バックエンド",
+            info.backend.clone().unwrap_or_else(dash),
+        ),
+        ("出力デバイス", output_device),
+        ("サンプルレート", opt_display(info.sample_rate)),
+        ("入力チャンネル", opt_display(info.inputs)),
+        ("出力チャンネル", opt_display(info.outputs)),
+        ("バッファサイズ（サンプル）", opt_display(info.frames)),
+        ("バッファ周期（ms）", opt_ms(info.period_ms)),
+        ("DSP遅延（ms）", opt_ms(info.dsp_ms)),
+        (
+            "ドライバ報告の入力遅延（ms）",
+            opt_ms(info.input_latency_ms),
+        ),
+        (
+            "ドライバ報告の出力遅延（ms）",
+            opt_ms(info.output_latency_ms),
+        ),
+    ]
+}
+
+fn log_rows(log: &AudioLog) -> Vec<(&'static str, String)> {
+    let mut rows = vec![(
+        "経過時間",
+        log.elapsed_seconds
+            .map_or_else(dash, |seconds| format!("{seconds:.1} s")),
+    )];
+    if let Some(t) = &log.telemetry {
+        rows.extend(telemetry_rows(t));
     }
+    rows
+}
+
+fn telemetry_rows(t: &AudioTelemetry) -> Vec<(&'static str, String)> {
+    vec![
+        ("処理ブロック", t.blocks.to_string()),
+        ("非ゼロ入力サンプル", t.nonzero_samples.to_string()),
+        ("最大コールバック", format!("{:.2} µs", t.max_callback_us)),
+        ("期限超過", t.deadline_misses.to_string()),
+        ("タイムスタンプブロック", opt_display(t.timestamp_blocks)),
+        ("サンプル位置の欠落", opt_display(t.sample_position_gaps)),
+        ("エラーフラグ", format!("0x{:x}", t.fault_flags)),
+        ("出力コールバック", opt_display(t.output_blocks)),
+        ("アンダーラン", opt_display(t.underruns)),
+        ("オーバーラン", opt_display(t.overruns)),
+        ("現在のキュー", opt_frames(t.queue_frames)),
+        (
+            "観測した最大入力バッファ",
+            opt_frames(t.observed_input_frames),
+        ),
+        (
+            "観測した最大出力バッファ",
+            opt_frames(t.observed_output_frames),
+        ),
+        ("キューの最大量", opt_frames(t.queue_peak_frames)),
+        ("開始時のキュー目標", opt_frames(t.startup_queue_frames)),
+        ("キュー容量", opt_frames(t.queue_capacity_frames)),
+        ("最大入力コールバック", opt_us(t.max_input_callback_us)),
+        ("最大出力コールバック", opt_us(t.max_output_callback_us)),
+    ]
 }
 
 pub fn window_options() -> WindowOptions {
@@ -144,8 +174,12 @@ pub fn window_options() -> WindowOptions {
 
 #[cfg(all(test, feature = "desktop-tests"))]
 mod tests {
-    use super::AppModel;
-    use crate::gui::preferences::Preferences;
+    use super::{info_rows, log_rows, AppModel};
+    use crate::{
+        backend::AudioTelemetry,
+        gui::preferences::{Language, Preferences, Section},
+        session::{AudioInfo, AudioLog},
+    };
     use gpui_kit::{test::TestWindowExt, AppContext, TestAppContext};
 
     #[gpui_kit::test]
@@ -183,49 +217,49 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn metric_values_format_numbers_flags_units_and_phases(cx: &mut TestAppContext) {
+    fn metric_rows_format_numbers_flags_units_and_phases(cx: &mut TestAppContext) {
         let model = cx.update(|cx| {
             cx.new(|cx| {
                 AppModel::new(
                     Default::default(),
                     Default::default(),
                     Preferences {
-                        language: "ja".into(),
-                        section: "voice".into(),
+                        language: Language::Ja,
+                        section: Section::Voice,
                     },
                     cx,
                 )
             })
         });
+        let info = AudioInfo {
+            phase: "running",
+            backend: Some("cpal".into()),
+            output_device: Some(String::new()),
+            period_ms: Some(10.666666),
+            ..AudioInfo::default()
+        };
+        let log = AudioLog {
+            elapsed_seconds: Some(12.345),
+            telemetry: Some(AudioTelemetry {
+                max_callback_us: 123.456,
+                fault_flags: 26,
+                queue_frames: Some(512),
+                ..AudioTelemetry::default()
+            }),
+        };
         model.read_with(cx, |m, _| {
-            assert_eq!(
-                super::format_metric_value("phase", &serde_json::json!("running"), m),
-                "動作中"
-            );
-            assert_eq!(
-                super::format_metric_value("elapsedSeconds", &serde_json::json!(12.345), m),
-                "12.3 s"
-            );
-            assert_eq!(
-                super::format_metric_value("maxCallbackUs", &serde_json::json!(123.456), m),
-                "123.46 µs"
-            );
-            assert_eq!(
-                super::format_metric_value("periodMs", &serde_json::json!(10.666666), m),
-                "10.67"
-            );
-            assert_eq!(
-                super::format_metric_value("faultFlags", &serde_json::json!(26), m),
-                "0x1a"
-            );
-            assert_eq!(
-                super::format_metric_value("queueFrames", &serde_json::json!(512), m),
-                "512 frames"
-            );
-            assert_eq!(
-                super::format_metric_value("error", &serde_json::Value::Null, m),
-                "—"
-            );
+            let info_map: std::collections::HashMap<_, _> =
+                info_rows(&info, m).into_iter().collect();
+            assert_eq!(info_map["状態"], "動作中");
+            assert_eq!(info_map["エラー"], "—");
+            assert_eq!(info_map["出力デバイス"], "システムの既定");
+            assert_eq!(info_map["バッファ周期（ms）"], "10.67");
+
+            let log_map: std::collections::HashMap<_, _> = log_rows(&log).into_iter().collect();
+            assert_eq!(log_map["経過時間"], "12.3 s");
+            assert_eq!(log_map["最大コールバック"], "123.46 µs");
+            assert_eq!(log_map["エラーフラグ"], "0x1a");
+            assert_eq!(log_map["現在のキュー"], "512 frames");
         });
     }
 }

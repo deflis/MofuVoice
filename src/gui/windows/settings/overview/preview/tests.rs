@@ -1,9 +1,10 @@
 use super::*;
 
 fn preferences() -> Preferences {
+    use crate::gui::preferences::{Language, Section};
     Preferences {
-        language: "en".into(),
-        section: "overview".into(),
+        language: Language::En,
+        section: Section::Overview,
     }
 }
 fn enabled_options() -> Options {

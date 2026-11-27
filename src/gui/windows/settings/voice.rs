@@ -1,4 +1,4 @@
-use crate::{cli::Options, gui::model::AppModel};
+use crate::{cli::Options, gui::model::AppModel, pitch::PitchAlgorithm};
 
 pub(super) fn display_percent(text: &str) -> String {
     match text.parse::<f64>().ok().filter(|n| n.is_finite()) {
@@ -9,9 +9,19 @@ pub(super) fn display_percent(text: &str) -> String {
         None => text.into(),
     }
 }
-pub(super) fn uses_vocoder(algorithm: &str, formant: f64) -> bool {
-    ["phase-locked", "pvsola-sync"].contains(&algorithm)
-        || (["td-psola", "fd-psola"].contains(&algorithm) && formant != 0.)
+
+pub(super) fn uses_vocoder(algorithm: PitchAlgorithm, formant: f64) -> bool {
+    matches!(
+        algorithm,
+        PitchAlgorithm::PhaseLocked | PitchAlgorithm::PvsolaSync
+    ) || (matches!(algorithm, PitchAlgorithm::TdPsola | PitchAlgorithm::FdPsola) && formant != 0.)
+}
+
+pub(super) fn uses_psola(algorithm: PitchAlgorithm) -> bool {
+    matches!(
+        algorithm,
+        PitchAlgorithm::TdPsola | PitchAlgorithm::TdPsolaResampled | PitchAlgorithm::FdPsola
+    )
 }
 
 pub(super) fn latency(options: &Options, model: &AppModel) -> String {

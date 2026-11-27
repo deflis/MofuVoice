@@ -72,7 +72,7 @@ mise run build
 
 GUIの状態・操作テストは `cargo test --no-default-features --features desktop-tests,cpal-backend --lib gui:: --locked` で実行します。GPUIのヘッドレス操作テストと実機の描画・音声確認は別々に行ってください。
 
-GUIは `src/gui/windows/` の `main`・`settings`・`log`・`spectrum` に分割しています。共有アプリ状態は `src/gui/model.rs`、設定変換・検証は `src/gui/settings.rs` にあります。設定画面内もデバイス・音声・EQ・概要などのモジュールに分離しています。
+GUIは `src/gui/windows/` の `main`・`settings`・`log`・`spectrum` に分割しています。共有アプリ状態は `src/gui/model.rs`、設定ドラフト・変換・検証は `src/gui/draft.rs` にあります。設定画面内もデバイス・音声・EQ・概要などのモジュールに分離しています。
 
 macOSの配布物は `cargo build --release --features desktop --locked --bin MofuVoice` 後に `bash scripts/package-macos.sh` で作成します。`.app`・DMG・tar.gzを生成し、ローカル用のアドホック署名を検証します。
 

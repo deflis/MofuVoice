@@ -7,7 +7,6 @@ mod layout;
 mod model;
 mod plots;
 mod preferences;
-mod settings;
 mod theme;
 mod windows;
 gpui_kit::actions!(mofuvoice, [Quit]);

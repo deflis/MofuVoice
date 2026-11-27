@@ -4419,7 +4419,6 @@ dependencies = [
  "embed-resource",
  "gpui-kit",
  "image",
- "serde",
  "serde_json",
  "sys-locale",
  "windows 0.62.2",

@@ -1,5 +1,8 @@
 use super::{
-    draft::Generation, preferences::Preferences, windows, windows::settings::SettingsView,
+    draft::Generation,
+    preferences::{Preferences, Section},
+    windows,
+    windows::settings::SettingsView,
 };
 use crate::{
     backend,
@@ -106,7 +109,7 @@ impl AppModel {
         Self {
             session,
             saved,
-            persisted_preferences: preferences.clone(),
+            persisted_preferences: preferences,
             preferences,
             path,
             info: AudioInfo::default(),
@@ -269,7 +272,7 @@ impl AppModel {
         self.session.lock().expect("session control lock").stop();
         cx.notify();
     }
-    pub fn open_settings(&mut self, section: Option<String>, cx: &mut Context<Self>) {
+    pub fn open_settings(&mut self, section: Option<Section>, cx: &mut Context<Self>) {
         if self.shutting_down() || self.opening_settings {
             return;
         }
@@ -496,7 +499,7 @@ impl AppModel {
         }
         self.busy = true;
         let options = self.saved.clone();
-        let persisted = self.preferences.clone();
+        let persisted = self.preferences;
         let prefs = persisted.stored();
         let path = self.path.clone();
         let task = cx.background_executor().spawn(async move {
@@ -726,8 +729,8 @@ mod tests {
                     Options::default(),
                     settings_path.clone(),
                     super::Preferences {
-                        language: "en".into(),
-                        section: "voice".into(),
+                        language: crate::gui::preferences::Language::En,
+                        section: super::Section::Voice,
                     },
                     cx,
                 )
@@ -743,15 +746,15 @@ mod tests {
                     Options::default(),
                     settings_path,
                     super::Preferences {
-                        language: "en".into(),
-                        section: "voice".into(),
+                        language: crate::gui::preferences::Language::En,
+                        section: super::Section::Voice,
                     },
                     cx,
                 )
             })
         });
         modified.update(cx, |m, cx| {
-            m.preferences.language = "ja".into();
+            m.preferences.language = crate::gui::preferences::Language::Ja;
             m.request_quit(cx);
         });
         cx.run_until_parked();
