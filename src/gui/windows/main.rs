@@ -122,8 +122,7 @@ impl Render for MainView {
                             .label(t("設定"))
                             .disabled(m.closing)
                             .on_click(cx.listener(|v, _, _, cx| {
-                                v.model
-                                    .update(cx, |m, cx| m.open_settings(Some("devices".into()), cx))
+                                v.model.update(cx, |m, cx| m.open_settings(None, cx))
                             })),
                     ),
             )
@@ -161,4 +160,61 @@ impl Render for MainView {
 
 pub fn window_options() -> WindowOptions {
     layout::window_options("もふボイス", 560., 310., 420., 240.)
+}
+
+#[cfg(all(test, feature = "desktop-tests"))]
+mod tests {
+    use super::{window_options, AppModel, MainView};
+    use gpui_kit::{AppContext, TestAppContext};
+
+    #[gpui_kit::test]
+    fn settings_button_opens_restored_section_and_voice_button_still_jumps_to_voice(
+        cx: &mut TestAppContext,
+    ) {
+        use gpui_kit::test::TestWindowExt;
+
+        let (main, model) = cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::gui::theme::init(cx);
+            let model = cx.new(|cx| {
+                AppModel::new(
+                    crate::cli::Options::default(),
+                    std::path::PathBuf::new(),
+                    crate::gui::preferences::Preferences::from_saved(
+                        crate::gui_settings::UiPreferences {
+                            language: Some("en".into()),
+                            section: Some("inputEq".into()),
+                        },
+                    ),
+                    cx,
+                )
+            });
+            model.update(cx, |m, _| m.busy = true);
+            let (main, _) = gpui_kit::open_window(window_options(), cx, |window, cx| {
+                cx.new(|cx| MainView::new(model.clone(), window, cx))
+            })
+            .unwrap();
+            (main, model)
+        });
+        main.update(cx, |_, window, cx| window.click("settings", cx))
+            .unwrap();
+        cx.run_until_parked();
+        let settings = model.read_with(cx, |m, _| {
+            assert_eq!(m.preferences.section, "inputEq");
+            m.settings.as_ref().unwrap().0
+        });
+
+        main.update(cx, |_, window, cx| window.click("voice-settings", cx))
+            .unwrap();
+        cx.run_until_parked();
+        model.update(cx, |m, _| {
+            assert_eq!(m.preferences.section, "voice");
+            assert_eq!(m.settings.take().unwrap().0, settings);
+        });
+        settings
+            .update(cx, |_, window, _| window.remove_window())
+            .unwrap();
+        main.update(cx, |_, window, _| window.remove_window())
+            .unwrap();
+    }
 }
