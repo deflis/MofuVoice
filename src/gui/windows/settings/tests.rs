@@ -353,6 +353,37 @@ fn failed_save_keeps_the_draft_and_cancels_application_close(cx: &mut TestAppCon
 }
 
 #[gpui_kit::test]
+fn application_close_activates_settings_when_draft_is_invalid(cx: &mut TestAppContext) {
+    let dir = directory();
+    let (model, settings, view) = open(cx, &dir);
+    let (main, _) = cx
+        .update(|cx| {
+            gpui_kit::open_window(
+                crate::gui::windows::main::window_options(),
+                cx,
+                |window, cx| {
+                    cx.new(|cx| crate::gui::windows::main::MainView::new(model.clone(), window, cx))
+                },
+            )
+        })
+        .unwrap();
+    set(&view, settings, "/voice/pitch", "", cx);
+    main.update(cx, |_, window, _| window.activate_window())
+        .unwrap();
+    assert_eq!(cx.update(|cx| cx.active_window()), Some(main));
+
+    model.update(cx, |m, cx| m.request_quit(cx));
+    cx.run_until_parked();
+
+    assert_eq!(cx.update(|cx| cx.active_window()), Some(settings));
+    assert!(view.read_with(cx, |v, _| !v.error.is_empty()));
+    assert!(model.read_with(cx, |m, _| !m.quit_requested && !m.closing));
+    cleanup(model, settings, cx);
+    main.update(cx, |_, window, _| window.remove_window())
+        .unwrap();
+}
+
+#[gpui_kit::test]
 fn settings_window_is_reused_and_can_be_closed_and_reopened(cx: &mut TestAppContext) {
     let directory = directory();
     std::fs::create_dir(&directory).unwrap();

@@ -135,12 +135,19 @@ impl SettingsView {
         let options = match self.options() {
             Ok(o) => o,
             Err(e) => {
+                let application_close = self.close == CloseTarget::Application;
                 self.error = e;
                 self.close = CloseTarget::None;
                 self.model.update(cx, |m, cx| {
                     m.quit_requested = false;
                     cx.notify();
                 });
+                if application_close {
+                    let handle = self.handle;
+                    cx.defer(move |cx| {
+                        _ = handle.update(cx, |_, window, _| window.activate_window());
+                    });
+                }
                 cx.notify();
                 return;
             }
