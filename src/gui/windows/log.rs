@@ -1,4 +1,5 @@
 use crate::gui::{layout, model::AppModel};
+use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::*;
 pub struct LogView {
     model: Entity<AppModel>,
@@ -31,6 +32,14 @@ impl Render for LogView {
         }
         layout::surface(cx)
             .child(div().text_lg().child(m.text("ログ")))
+            .child(
+                Checkbox::new("processing-log")
+                    .label(m.text("処理ログを表示"))
+                    .checked(m.logging)
+                    .on_click(cx.listener(|view, enabled: &bool, _, cx| {
+                        view.model.update(cx, |m, cx| m.set_logging(*enabled, cx));
+                    })),
+            )
             .child(body.child(m.status.clone()))
     }
 }
@@ -102,4 +111,45 @@ fn append_metrics(value: &serde_json::Value, body: &mut Stateful<Div>, m: &AppMo
 
 pub fn window_options() -> WindowOptions {
     layout::window_options("ログ / Log", 760., 580., 600., 360.)
+}
+
+#[cfg(all(test, feature = "desktop-tests"))]
+mod tests {
+    use super::AppModel;
+    use crate::gui::preferences::Preferences;
+    use gpui_kit::{test::TestWindowExt, AppContext, TestAppContext};
+
+    #[gpui_kit::test]
+    fn opening_log_leaves_telemetry_off_until_enabled(cx: &mut TestAppContext) {
+        let model = cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::gui::theme::init(cx);
+            cx.new(|cx| {
+                AppModel::new(
+                    Default::default(),
+                    Default::default(),
+                    Preferences::system(),
+                    cx,
+                )
+            })
+        });
+        model.update(cx, |m, cx| m.open_log(cx));
+        cx.run_until_parked();
+        let window = model.read_with(cx, |m, _| {
+            assert!(!m.logging);
+            assert!(m.session.lock().unwrap().log_info().is_none());
+            m.log_window.unwrap()
+        });
+        for enabled in [true, false] {
+            window
+                .update(cx, |_, w, cx| w.click("processing-log", cx))
+                .unwrap();
+            cx.run_until_parked();
+            model.read_with(cx, |m, _| {
+                assert_eq!(m.logging, enabled);
+                assert_eq!(m.session.lock().unwrap().log_info().is_some(), enabled);
+            });
+        }
+        window.update(cx, |_, w, _| w.remove_window()).unwrap();
+    }
 }

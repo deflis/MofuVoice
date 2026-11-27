@@ -20,6 +20,7 @@ pub struct AppModel {
     pub path: PathBuf,
     pub info: AudioInfo,
     pub log: Option<AudioLog>,
+    pub logging: bool,
     pub status: String,
     pub error: String,
     pub busy: bool,
@@ -77,12 +78,12 @@ impl AppModel {
                     if m.active != snapshot.0
                         || m.info != snapshot.1
                         || m.status != snapshot.2
-                        || m.log != snapshot.3
+                        || (m.logging && m.log != snapshot.3)
                     {
                         m.active = snapshot.0;
                         m.info = snapshot.1;
                         m.status = snapshot.2;
-                        m.log = snapshot.3;
+                        m.log = if m.logging { snapshot.3 } else { None };
                         cx.notify();
                     }
                     if m.quit_requested && !m.busy {
@@ -105,6 +106,7 @@ impl AppModel {
             log: None,
             status: String::new(),
             error: String::new(),
+            logging: false,
             busy: false,
             active: false,
             closing: false,
@@ -245,11 +247,7 @@ impl AppModel {
                 window.on_window_should_close(cx, move |_, cx| {
                     close.update(cx, |m, cx| {
                         m.log_window = None;
-                        m.session
-                            .lock()
-                            .expect("session control lock")
-                            .set_logging(false);
-                        cx.notify();
+                        m.set_logging(false, cx);
                     });
                     true
                 });
@@ -259,11 +257,8 @@ impl AppModel {
                 m.opening_log = false;
                 match result {
                     Ok((handle, _)) => {
+                        m.set_logging(false, cx);
                         m.log_window = Some(handle);
-                        m.session
-                            .lock()
-                            .expect("session control lock")
-                            .set_logging(true);
                     }
                     Err(e) => m.error = e.to_string(),
                 };
@@ -299,6 +294,17 @@ impl AppModel {
                     return;
                 }
             };
+    pub fn set_logging(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.session
+            .lock()
+            .expect("session control lock")
+            .set_logging(enabled);
+        self.logging = enabled;
+        if !enabled {
+            self.log = None;
+        }
+        cx.notify();
+    }
             let close = model.clone();
             let observed = model.clone();
             let result =

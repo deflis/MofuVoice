@@ -294,14 +294,16 @@ fn run_audio(
                 return Err("No audio callbacks for 2 seconds".into());
             }
             if logging.load(Ordering::Acquire) {
-                let (input, output) = engine.latency_ms()?;
+                let latency = engine.latency_ms();
                 let mut info = info.lock().unwrap();
                 *log.lock().unwrap() = AudioLog {
                     elapsed_seconds: Some(started.elapsed().as_secs_f64()),
                     telemetry: Some(engine.telemetry()),
                 };
-                info.input_latency_ms = input;
-                info.output_latency_ms = output;
+                if let Ok((input, output)) = latency {
+                    info.input_latency_ms = input;
+                    info.output_latency_ms = output;
+                }
             }
             thread::sleep(Duration::from_millis(100));
         }
