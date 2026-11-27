@@ -37,8 +37,6 @@ impl Drop for ComApartment {
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
-#[cfg_attr(feature = "desktop", derive(serde::Serialize))]
-#[cfg_attr(feature = "desktop", serde(rename_all = "camelCase"))]
 pub struct AudioInfo {
     pub phase: &'static str,
     pub error: Option<String>,
@@ -56,8 +54,6 @@ pub struct AudioInfo {
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
-#[cfg_attr(feature = "desktop", derive(serde::Serialize))]
-#[cfg_attr(feature = "desktop", serde(rename_all = "camelCase"))]
 pub struct AudioLog {
     pub elapsed_seconds: Option<f64>,
     pub telemetry: Option<backend::AudioTelemetry>,

@@ -11,19 +11,25 @@ mod presentation;
 mod tests;
 mod voice;
 use crate::gui::{
-    draft::{self, Field, Generation},
+    draft::{
+        DeviceSlot, DraftError, EqBandField, EqKind, ErrorField, GateThresholdMode, Generation,
+        NumberField, PitchUnit, ResetTarget, SelectField, SettingsDraft, ToggleField, UiMode,
+    },
     layout,
     model::{self, AppModel},
     plots,
-    preferences::SECTIONS,
-    settings::Settings,
+    preferences::{Language, Section},
 };
-use crate::{backend, cli::Options};
-use fields::{choices, field_label, labeled_choices, Choice};
+use crate::{
+    backend::{self, BackendKind},
+    cli::Options,
+    pitch::{MathPrecision, PitchAlgorithm, PitchEstimator},
+};
+use fields::Choice;
 use gpui_kit::{
     component::{
         button::{Button, ButtonVariants},
-        input::{Input, InputEvent, InputState, NumberInput, NumberInputEvent, StepAction},
+        input::{InputEvent, InputState, NumberInput, NumberInputEvent, StepAction},
         select::{Select, SelectEvent, SelectState},
         slider::{Slider, SliderEvent, SliderState, SliderValue},
         Disableable, Selectable, WindowExt,
@@ -39,23 +45,61 @@ pub enum CloseTarget {
     Settings,
     Application,
 }
-enum Widget {
-    Input(Entity<InputState>),
-    Select(Entity<SelectState<Vec<Choice>>>),
-    Toggle,
-}
-struct Control {
-    field: Field,
-    widget: Widget,
-    slider: Option<Entity<SliderState>>,
-    items: Option<Vec<String>>,
+
+struct DeviceSelect {
+    state: Entity<SelectState<Vec<Choice<String>>>>,
+    items: Vec<String>,
     missing: Option<String>,
 }
+
+struct SelectControls {
+    backend: Entity<SelectState<Vec<Choice<BackendKind>>>>,
+    input_device: DeviceSelect,
+    output_device: DeviceSelect,
+    preview_device: DeviceSelect,
+    sample_rate: Entity<SelectState<Vec<Choice<u32>>>>,
+    pitch_unit: Entity<SelectState<Vec<Choice<PitchUnit>>>>,
+    math_precision: Entity<SelectState<Vec<Choice<MathPrecision>>>>,
+    pitch_algorithm: Entity<SelectState<Vec<Choice<PitchAlgorithm>>>>,
+    psola_pitch_estimator: Entity<SelectState<Vec<Choice<PitchEstimator>>>>,
+    analysis_window: Entity<SelectState<Vec<Choice<usize>>>>,
+    synthesis_window: Entity<SelectState<Vec<Choice<usize>>>>,
+    psola_analysis_window: Entity<SelectState<Vec<Choice<usize>>>>,
+    psola_synthesis_window: Entity<SelectState<Vec<Choice<usize>>>>,
+    gate_threshold_mode: Entity<SelectState<Vec<Choice<GateThresholdMode>>>>,
+}
+
+impl SelectControls {
+    fn device(&self, slot: DeviceSlot) -> &DeviceSelect {
+        match slot {
+            DeviceSlot::Input => &self.input_device,
+            DeviceSlot::Output => &self.output_device,
+            DeviceSlot::Preview => &self.preview_device,
+        }
+    }
+
+    fn device_mut(&mut self, slot: DeviceSlot) -> &mut DeviceSelect {
+        match slot {
+            DeviceSlot::Input => &mut self.input_device,
+            DeviceSlot::Output => &mut self.output_device,
+            DeviceSlot::Preview => &mut self.preview_device,
+        }
+    }
+}
+
+struct NumberControl {
+    input: Entity<InputState>,
+    slider: Option<Entity<SliderState>>,
+    _subscriptions: Vec<Subscription>,
+}
+
 pub struct SettingsView {
     model: Entity<AppModel>,
-    base: Settings,
-    controls: Vec<Control>,
-    subscriptions: Vec<Subscription>,
+    base: Options,
+    draft: SettingsDraft,
+    selects: SelectControls,
+    numbers: BTreeMap<NumberField, NumberControl>,
+    _select_subscriptions: Vec<Subscription>,
     _observe: Subscription,
     handle: AnyWindowHandle,
     generation: Generation,
@@ -63,36 +107,37 @@ pub struct SettingsView {
     discovery_deferred: bool,
     discard_target: CloseTarget,
     close: CloseTarget,
-    error: String,
+    error: Option<DraftError>,
     device_error: String,
     notice: String,
     rates: Option<backend::DeviceSampleRates>,
     observed: ObservedModel,
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct ObservedModel {
-    language: String,
-    section: String,
+    language: Language,
+    section: Section,
     active: bool,
     busy: bool,
     closing: bool,
     quit_requested: bool,
-    auto_backend: backend::BackendKind,
+    auto_backend: BackendKind,
 }
 
 impl ObservedModel {
     fn capture(model: &AppModel) -> Self {
         Self {
-            language: model.preferences.language.clone(),
-            section: model.preferences.section.clone(),
+            language: model.preferences.language,
+            section: model.preferences.section,
             active: model.active,
             busy: model.busy,
             closing: model.closing,
             quit_requested: model.quit_requested,
-            auto_backend: model.resolve_backend(backend::BackendKind::Auto),
+            auto_backend: model.resolve_backend(BackendKind::Auto),
         }
     }
+
     fn locked(&self) -> bool {
         self.active || self.busy || self.closing || self.quit_requested
     }
@@ -115,11 +160,12 @@ impl SettingsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let base = Settings::from_options(&options);
+        let draft = SettingsDraft::from_options(&options);
         let handle = window.window_handle();
         let observe = cx.observe(&model, move |view, model, cx| {
             let snapshot = ObservedModel::capture(model.read(cx));
             let language_changed = view.observed.language != snapshot.language;
+            let section_changed = view.observed.section != snapshot.section;
             let backend_changed = view.observed.auto_backend != snapshot.auto_backend;
             let model_changed = view.observed != snapshot;
             let resume_close = view.close != CloseTarget::None
@@ -136,7 +182,7 @@ impl SettingsView {
             cx.defer(move |cx| {
                 let _ = handle.update(cx, |_, window, cx| {
                     let _ = weak.update(cx, |view, cx| {
-                        if language_changed {
+                        if language_changed || section_changed {
                             view.discard_target = CloseTarget::None;
                         }
                         if language_changed || backend_changed {
@@ -157,12 +203,17 @@ impl SettingsView {
             });
         });
         let observed = ObservedModel::capture(model.read(cx));
+        let prefs = model.read(cx).preferences;
+        let (selects, select_subscriptions) =
+            Self::build_selects(&draft, &prefs, observed.auto_backend, window, cx);
         let mut this = Self {
             observed,
             model,
-            base,
-            controls: Vec::new(),
-            subscriptions: Vec::new(),
+            base: options,
+            draft,
+            selects,
+            numbers: BTreeMap::new(),
+            _select_subscriptions: select_subscriptions,
             _observe: observe,
             handle: window.window_handle(),
             generation: Generation::default(),
@@ -170,14 +221,19 @@ impl SettingsView {
             discovery_deferred: false,
             discard_target: CloseTarget::None,
             close: CloseTarget::None,
-            error: String::new(),
+            error: None,
             device_error: String::new(),
             notice: String::new(),
             rates: None,
         };
-        this.build_controls(window, cx);
+        for field in this.draft.number_fields() {
+            let control = this.create_number_control(field, window, cx);
+            this.numbers.insert(field, control);
+        }
+        this.refresh_choices(window, cx);
         this
     }
+
     fn finish_close(
         &mut self,
         target: CloseTarget,
@@ -224,7 +280,7 @@ impl SettingsView {
         if model.busy || model.closing {
             return;
         }
-        let options = self.draft_options().and_then(|options| {
+        let options = self.draft.to_options().and_then(|options| {
             if self.close == CloseTarget::None || options != model.saved {
                 self.validate_discovered_rates(&options)?;
             }
@@ -234,7 +290,7 @@ impl SettingsView {
             Ok(o) => o,
             Err(e) => {
                 let application_close = self.close == CloseTarget::Application;
-                self.error = e;
+                self.error = Some(e);
                 self.discard_target = self.close;
                 self.close = CloseTarget::None;
                 self.model.update(cx, |m, cx| {
@@ -262,7 +318,7 @@ impl SettingsView {
         }
         self.discard_target = CloseTarget::None;
         let path = model.path.clone();
-        let persisted = model.preferences.clone();
+        let persisted = model.preferences;
         let prefs = persisted.stored();
         let saved = options.clone();
         self.operation = Some(Operation::Save);
@@ -290,16 +346,20 @@ impl SettingsView {
                     v.operation = None;
                     match result {
                         Ok(()) => {
-                            v.error.clear();
+                            v.error = None;
                             v.discard_target = CloseTarget::None;
-                            v.base = Settings::from_options(&options);
+                            v.base = options.clone();
                             v.notice = "設定を保存しました。".into();
                             let target = v.close;
                             v.model.update(cx, |m, cx| {
+                                let options_changed = m.saved != options;
                                 m.saved = options;
                                 m.persisted_preferences = persisted;
                                 m.quit_save_failed = false;
-                                if target != CloseTarget::Application {
+                                if target != CloseTarget::Application
+                                    && !m.active
+                                    && options_changed
+                                {
                                     m.check_saved_devices(cx);
                                 }
                                 cx.notify();
@@ -307,7 +367,7 @@ impl SettingsView {
                             v.finish_close(target, Some(window), cx);
                         }
                         Err(e) => {
-                            v.error = e;
+                            v.error = Some(DraftError::plain(e));
                             v.discard_target = v.close;
                             v.close = CloseTarget::None;
                             v.model.update(cx, |m, cx| {
@@ -329,7 +389,7 @@ impl SettingsView {
 impl Render for SettingsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let model = self.model.read(cx);
-        let section = model.preferences.section.clone();
+        let section = model.preferences.section;
         let locked = model.locked() || self.pending();
         let t = |s: &str| model.text(s);
         let mut nav = div()
@@ -340,19 +400,18 @@ impl Render for SettingsView {
             .flex_col()
             .gap_2()
             .overflow_y_scroll();
-        for (id, label) in SECTIONS {
-            let id = id.to_string();
-            let selected = section == id;
+        for item in Section::ALL {
+            let selected = section == item;
             nav = nav.child(
-                Button::new(SharedString::from(format!("nav-{id}")))
-                    .label(t(label))
+                Button::new(SharedString::from(format!("nav-{}", item.id())))
+                    .label(t(item.label()))
                     .selected(selected)
                     .disabled(model.shutting_down())
                     .on_click(cx.listener(move |v, _, _, cx| {
                         let mut changed = false;
                         v.model.update(cx, |m, cx| {
-                            if !m.shutting_down() && m.preferences.section != id {
-                                m.preferences.section = id.clone();
+                            if !m.shutting_down() && m.preferences.section != item {
+                                m.preferences.section = item;
                                 m.quit_save_failed = false;
                                 changed = true;
                                 cx.notify();
@@ -372,10 +431,10 @@ impl Render for SettingsView {
             .flex_col()
             .gap_3()
             .overflow_y_scroll();
-        if section == "overview" {
+        if section == Section::Overview {
             content = overview::render(content, model, self, cx);
         } else {
-            content = content.child(self.render_page(&section, cx.entity(), cx));
+            content = content.child(self.render_page(section, cx.entity(), cx));
         }
 
         let error = self.error_text(cx);

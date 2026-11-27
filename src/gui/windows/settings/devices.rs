@@ -1,5 +1,6 @@
 use super::*;
 use gpui_kit::base::TestSupportExt as _;
+
 impl SettingsView {
     pub fn discover(&mut self, cx: &mut Context<Self>) {
         if self.pending() {
@@ -9,14 +10,7 @@ impl SettingsView {
         if self.discovery_deferred {
             return;
         }
-        let kind = match backend::BackendKind::parse(&self.value("/devices/backend")) {
-            Ok(k) => k,
-            Err(e) => {
-                self.device_error = e.to_string();
-                cx.notify();
-                return;
-            }
-        };
+        let kind = self.draft.backend;
         self.operation = Some(Operation::Discover);
         self.rates = None;
         self.device_error.clear();
@@ -24,18 +18,18 @@ impl SettingsView {
             m.busy = true;
             cx.notify();
         });
-        let device = self.value("/devices/device");
-        let output = self.value("/devices/outputDevice");
+        let device = self.draft.device.clone();
+        let output = self.draft.output_device.clone();
         let generation = self.generation.advance();
         let handle = self.handle;
         let task = cx.background_executor().spawn(async move {
             let choices = model::device_choices(kind)?;
             let rates = (|| {
-                if choices.resolved == backend::BackendKind::Asio && device.is_empty() {
+                if choices.resolved == BackendKind::Asio && device.is_empty() {
                     return Ok(None);
                 }
                 #[cfg(all(windows, feature = "asio"))]
-                let _apartment = if choices.resolved == backend::BackendKind::Asio {
+                let _apartment = if choices.resolved == BackendKind::Asio {
                     Some(crate::session::ComApartment::initialize().map_err(|e| e.to_string())?)
                 } else {
                     None
@@ -93,15 +87,18 @@ impl SettingsView {
         self.device_error.clear();
         match result {
             Ok((choices, rates)) => {
-                for (path, mut items) in [
-                    ("/devices/device", choices.inputs),
-                    ("/devices/outputDevice", choices.outputs.clone()),
-                    ("/devices/previewDevice", choices.outputs),
+                if self.draft.backend == BackendKind::Auto {
+                    self.observed.auto_backend = choices.resolved;
+                }
+                let prefs = self.model.read(cx).preferences;
+                for (slot, mut items) in [
+                    (DeviceSlot::Input, choices.inputs),
+                    (DeviceSlot::Output, choices.outputs.clone()),
+                    (DeviceSlot::Preview, choices.outputs),
                 ] {
                     items.insert(0, String::new());
-                    let current = self.value(path);
-                    let used =
-                        path == "/devices/device" || choices.resolved == backend::BackendKind::Cpal;
+                    let current = self.draft.device(slot).to_string();
+                    let used = slot == DeviceSlot::Input || choices.resolved == BackendKind::Cpal;
                     let missing = (used && !current.is_empty() && !items.contains(&current))
                         .then(|| current.clone());
                     if missing.is_some() {
@@ -112,23 +109,20 @@ impl SettingsView {
                     if !current.is_empty() && !items.contains(&current) {
                         items.push(current.clone());
                     }
-                    if let Some(control) = self.controls.iter_mut().find(|c| c.field.path == path) {
-                        control.missing = missing.clone();
-                        if let Widget::Select(state) = &control.widget {
-                            control.items = Some(items.clone());
-                            let choices = labeled_choices(
-                                path,
-                                items,
-                                &self.model.read(cx).preferences,
-                                choices.resolved,
-                                missing.as_deref(),
-                            );
-                            state.update(cx, |s, cx| {
-                                s.set_items(choices, window, cx);
-                                s.set_selected_value(&current, window, cx);
-                            });
-                        }
-                    }
+                    let select = self.selects.device_mut(slot);
+                    select.missing = missing.clone();
+                    select.items = items.clone();
+                    let labeled = fields::device_choices(
+                        slot,
+                        &items,
+                        &prefs,
+                        choices.resolved,
+                        missing.as_deref(),
+                    );
+                    select.state.update(cx, |s, cx| {
+                        s.set_items(labeled, window, cx);
+                        s.set_selected_value(&current, window, cx);
+                    });
                 }
                 match rates {
                     Ok(rates) => self.rates = rates,
@@ -142,40 +136,28 @@ impl SettingsView {
             Err(e) => self.device_error = e,
         }
     }
-}
 
-impl SettingsView {
-    pub(super) fn resolved_backend(&self, cx: &App) -> backend::BackendKind {
-        self.model.read(cx).resolve_backend(
-            backend::BackendKind::parse(&self.value("/devices/backend"))
-                .expect("backend selection"),
-        )
+    pub(super) fn resolved_backend(&self, cx: &App) -> BackendKind {
+        self.model.read(cx).resolve_backend(self.draft.backend)
     }
 
     pub(super) fn render_devices(&self, owner: Entity<Self>, cx: &App) -> AnyElement {
-        use super::presentation::FieldStyle;
         let m = self.model.read(cx);
         let t = |s: &str| m.text(s);
         let kind = self.resolved_backend(cx);
-        let mut body = div().flex().flex_col().gap_3().child(self.render_field(
-            "/devices/device",
-            FieldStyle::Number,
-            owner.clone(),
-            cx,
-        ));
-        if kind == backend::BackendKind::Cpal {
-            for path in ["/devices/outputDevice", "/devices/previewDevice"] {
-                body = body.child(self.render_field(path, FieldStyle::Number, owner.clone(), cx));
-            }
+        let mut body = div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(self.render_select(SelectField::Device(DeviceSlot::Input), cx));
+        if kind == BackendKind::Cpal {
+            body = body
+                .child(self.render_select(SelectField::Device(DeviceSlot::Output), cx))
+                .child(self.render_select(SelectField::Device(DeviceSlot::Preview), cx));
         }
-        body = body.child(self.render_field(
-            "/devices/sampleRate",
-            FieldStyle::Number,
-            owner.clone(),
-            cx,
-        ));
+        body = body.child(self.render_select(SelectField::SampleRate, cx));
         if let Some(rates) = &self.rates {
-            if kind == backend::BackendKind::Cpal {
+            if kind == BackendKind::Cpal {
                 body = body
                     .child(format!(
                         "{} {}",
@@ -193,22 +175,16 @@ impl SettingsView {
                 t("入出力で変換なしに使えるレート"),
                 format_rates(&rates.common)
             ));
-            let rate = self
-                .value("/devices/sampleRate")
-                .parse::<u32>()
-                .unwrap_or(0);
+            let rate = self.draft.sample_rate;
             if !rates.common.contains(&rate) {
-                body=body.child(t(if kind==backend::BackendKind::Cpal{"CPALでは選択レートに非対応の入出力を自動でリサンプリングします。変換により遅延が追加されます。"}else{"選択したサンプリングレートには対応していません。"}));
+                body = body.child(t(if kind == BackendKind::Cpal {
+                    "CPALでは選択レートに非対応の入出力を自動でリサンプリングします。変換により遅延が追加されます。"
+                } else {
+                    "選択したサンプリングレートには対応していません。"
+                }));
             }
-            let input = self
-                .value("/devices/inputChannel")
-                .parse::<usize>()
-                .unwrap_or(0);
-            let selected = self
-                .value("/devices/outputChannels")
-                .split(',')
-                .filter_map(|s| s.trim().parse::<usize>().ok())
-                .collect::<Vec<_>>();
+            let input = self.draft.input_channel;
+            let selected = &self.draft.output_channels;
             let required = selected.iter().copied().max().unwrap_or(1);
             let at_rate: Vec<_> = rates
                 .channels
@@ -251,9 +227,7 @@ impl SettingsView {
                         .selected(input == channel)
                         .disabled(m.locked() || self.pending())
                         .on_click(move |_, w, cx| {
-                            owner.update(cx, |v, cx| {
-                                v.changed("/devices/inputChannel", channel.to_string(), w, cx)
-                            })
+                            owner.update(cx, |v, cx| v.set_input_channel(channel, w, cx))
                         }),
                 );
             }
@@ -275,11 +249,6 @@ impl SettingsView {
                     next.push(channel);
                 }
                 next.sort_unstable();
-                let next = next
-                    .iter()
-                    .map(usize::to_string)
-                    .collect::<Vec<_>>()
-                    .join(",");
                 let label = if channel > selectable_outputs {
                     format!("{channel}ch{}", t("（利用不可）"))
                 } else {
@@ -291,9 +260,7 @@ impl SettingsView {
                         .selected(selected.contains(&channel))
                         .disabled(m.locked() || self.pending())
                         .on_click(move |_, w, cx| {
-                            owner.update(cx, |v, cx| {
-                                v.changed("/devices/outputChannels", next.clone(), w, cx)
-                            })
+                            owner.update(cx, |v, cx| v.set_output_channels(next.clone(), w, cx))
                         }),
                 );
             }
@@ -340,7 +307,7 @@ impl SettingsView {
                     .test_support()
                     .child(t("対応レートを確認中…")),
             );
-        } else if kind == backend::BackendKind::Asio && self.value("/devices/device").is_empty() {
+        } else if kind == BackendKind::Asio && self.draft.device.is_empty() {
             body = body.child(
                 div()
                     .id("device-select-hint")
@@ -356,7 +323,7 @@ impl SettingsView {
                     .disabled(m.locked() || self.pending())
                     .on_click(move |_, _, cx| refresh.update(cx, |v, cx| v.discover(cx))),
             )
-            .child(self.detail_button("devices", owner, cx));
+            .child(self.detail_button(Section::Devices, owner, cx));
         body.into_any_element()
     }
 }

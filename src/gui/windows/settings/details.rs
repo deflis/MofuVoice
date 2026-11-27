@@ -1,49 +1,51 @@
 use super::presentation::FieldStyle;
 use super::*;
+use crate::audio::FilterStage;
 use gpui_kit::base::TestSupportExt as _;
+
 impl SettingsView {
     pub(super) fn open_details(
         &mut self,
-        section: &str,
+        section: Section,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.pending() || self.model.read(cx).locked() || !self.section_enabled(section) {
+        if self.pending() || self.model.read(cx).locked() || !self.draft.section_enabled(section) {
             return;
         }
-        let root = match section {
-            "postConversionEq" => "eq",
-            s => s,
-        };
-        if ["eq", "inputEq", "preConversionEq", "deesser"].contains(&root) {
-            let mode_path = format!("/{root}/mode");
-            if self.value(&mode_path) != "pro" {
-                self.set_value(&mode_path, "pro".into(), window, cx);
-                self.discard_target = CloseTarget::None;
-                self.notice.clear();
-                self.notify_host(cx);
+        let mode_changed = if let Some(kind) = EqKind::from_section(section) {
+            let eq = self.draft.eq_mut(kind);
+            if eq.mode != UiMode::Pro {
+                eq.mode = UiMode::Pro;
+                true
+            } else {
+                false
             }
+        } else if section == Section::Deesser && self.draft.deesser_mode != UiMode::Pro {
+            self.draft.deesser_mode = UiMode::Pro;
+            true
+        } else {
+            false
+        };
+        if mode_changed {
+            self.discard_target = CloseTarget::None;
+            self.notice.clear();
+            self.notify_host(cx);
         }
         let weak = cx.weak_entity();
-        let section = section.to_string();
         window.open_dialog(cx, move |dialog, _, cx| {
             let owner = weak.upgrade().expect("settings window owns its modal");
             let view = owner.read(cx);
             let model = view.model.read(cx);
-            let title = SECTIONS
-                .iter()
-                .find(|(id, _)| *id == section)
-                .map(|(_, label)| *label)
-                .unwrap();
             dialog
                 .title(format!(
                     "{} · {}",
-                    model.text(title),
+                    model.text(section.label()),
                     model.text("詳細設定")
                 ))
                 .width(px(650.))
                 .overlay_closable(false)
-                .child(view.render_details(&section, owner.clone(), cx))
+                .child(view.render_details(section, owner.clone(), cx))
                 .footer(
                     Button::new("close-details")
                         .label(model.text("閉じる"))
@@ -53,7 +55,8 @@ impl SettingsView {
         window.refresh();
         cx.notify();
     }
-    fn render_details(&self, section: &str, owner: Entity<Self>, cx: &App) -> AnyElement {
+
+    fn render_details(&self, section: Section, owner: Entity<Self>, cx: &App) -> AnyElement {
         let mut body = div()
             .id("details-content")
             .max_h(px(500.))
@@ -62,197 +65,212 @@ impl SettingsView {
             .flex_col()
             .gap_3();
         let model = self.model.read(cx);
-        if section == "deesser" {
-            if self.deesser_custom() {
-                body = body.child(model.text(
-                    "詳細設定で調整した設定を使っています。ここでは抑える強さだけを変えます。",
-                ));
+        match section {
+            Section::Devices => {
+                body = body
+                    .child(self.render_select(SelectField::Backend, cx))
+                    .child(self.render_number(NumberField::Frames, FieldStyle::Number, cx));
             }
-            body=body.child(model.text("まだ刺さるときは右へ。声がこもるときは左へ。「さしすせそ」と話し、オン・オフで聞き比べてください。"))
-                .child(model.text("高域の音量と、音全体に対する高域の割合を検出し、高域だけを動的に減衰します。圧縮比は4:1、先読みはありません。"));
-        }
-        if ["inputEq", "preConversionEq", "postConversionEq"].contains(&section) {
-            body=body.child(model.text("ピーキングEQです。帯域幅（Q値）が小さいほど広い帯域、大きいほど狭い帯域に効きます。"));
-        }
-        if section == "noiseGate" && self.value("/noise/thresholdMode") == "auto" {
-            body = body.child(model.text("背景ノイズに合わせてしきい値を自動調整します。"));
-        }
-        let mut paths: Vec<String> = match section {
-            "devices" => vec!["/devices/backend", "/devices/frames"],
-            "voice" => vec!["/voice/mathPrecision", "/voice/pitchAlgorithm"],
-            "deesser" => vec![
-                "/deesser/frequencyHz",
-                "/deesser/thresholdDb",
-                "/deesser/rangeDb",
-                "/deesser/attackMs",
-                "/deesser/releaseMs",
-            ],
-            "noiseGate" => vec![
-                "/noise/thresholdMode",
-                "/noise/thresholdDb",
-                "/noise/attackMs",
-                "/noise/releaseMs",
-            ],
-            "autoLevel" => vec![
-                "/level/targetDb",
-                "/level/maxGainDb",
-                "/level/floorDb",
-                "/level/responseMs",
-            ],
-            "postCompressor" => vec![
-                "/level/thresholdDb",
-                "/level/ratio",
-                "/level/attackMs",
-                "/level/releaseMs",
-            ],
-            _ => Vec::new(),
-        }
-        .into_iter()
-        .map(str::to_string)
-        .collect();
-        if section == "voice" {
-            let algorithm = self.value("/voice/pitchAlgorithm");
-            let formant = self
-                .value("/voice/formantShift")
-                .parse::<f64>()
-                .unwrap_or(0.);
-            let vocoder = voice::uses_vocoder(&algorithm, formant);
-            if vocoder {
-                paths.extend(
-                    ["/voice/analysisWindow", "/voice/synthesisWindow"].map(str::to_string),
-                );
-            }
-            if algorithm.starts_with("td-psola") || algorithm == "fd-psola" {
-                paths.extend(
-                    [
-                        "/voice/psolaPitchEstimator",
-                        "/voice/psolaAnalysisWindow",
-                        "/voice/psolaSynthesisWindow",
-                    ]
-                    .map(str::to_string),
-                );
-            }
-        }
-        if ["inputEq", "preConversionEq", "postConversionEq"].contains(&section) {
-            let root = if section == "postConversionEq" {
-                "eq"
-            } else {
-                section
-            };
-            paths = self
-                .controls
-                .iter()
-                .filter(|c| c.field.path.starts_with(&format!("/{root}/bands/")))
-                .map(|c| c.field.path.clone())
-                .collect();
-            paths.push(format!("/{root}/outputDb"));
-        }
-        for path in paths {
-            if path == "/noise/thresholdDb" && self.value("/noise/thresholdMode") == "auto" {
-                continue;
-            }
-            body = body.child(self.render_field(&path, FieldStyle::Number, owner.clone(), cx));
-        }
-        let model = self.model.read(cx);
-        if section == "voice" {
-            if let Ok(options) = self.options() {
-                body = body.child(voice::latency(&options, model));
-            }
-            for (id, label) in [
-                ("voice-windows", "ウィンドウ長を既定値に戻す"),
-                ("psola-windows", "PSOLAのウィンドウ長を既定値に戻す"),
-            ] {
-                let psola = id == "psola-windows";
-                let algorithm = self.value("/voice/pitchAlgorithm");
-                if (psola && (algorithm.starts_with("td-psola") || algorithm == "fd-psola"))
-                    || (!psola
-                        && voice::uses_vocoder(
-                            &algorithm,
-                            self.value("/voice/formantShift")
-                                .parse::<f64>()
-                                .unwrap_or(0.),
-                        ))
-                {
-                    body = body.child(self.reset_button(id, label, owner.clone(), cx));
+            Section::Voice => {
+                let algorithm = self.draft.pitch_algorithm;
+                let formant = self.draft.formant_shift.parse::<f64>().unwrap_or(0.);
+                let vocoder = voice::uses_vocoder(algorithm, formant);
+                let psola = voice::uses_psola(algorithm);
+                body = body
+                    .child(self.render_select(SelectField::MathPrecision, cx))
+                    .child(self.render_select(SelectField::PitchAlgorithm, cx));
+                if vocoder {
+                    body = body
+                        .child(self.render_select(SelectField::AnalysisWindow, cx))
+                        .child(self.render_select(SelectField::SynthesisWindow, cx));
+                }
+                if psola {
+                    body = body
+                        .child(self.render_select(SelectField::PsolaPitchEstimator, cx))
+                        .child(self.render_select(SelectField::PsolaAnalysisWindow, cx))
+                        .child(self.render_select(SelectField::PsolaSynthesisWindow, cx));
+                }
+                if let Ok(options) = self.draft.to_stage_options(FilterStage::Voice, &self.base) {
+                    body = body.child(voice::latency(&options, model));
+                }
+                if vocoder {
+                    body = body.child(self.reset_button(
+                        ResetTarget::VoiceWindows,
+                        "ウィンドウ長を既定値に戻す",
+                        owner.clone(),
+                        cx,
+                    ));
+                }
+                if psola {
+                    body = body.child(self.reset_button(
+                        ResetTarget::PsolaWindows,
+                        "PSOLAのウィンドウ長を既定値に戻す",
+                        owner.clone(),
+                        cx,
+                    ));
+                }
+                if algorithm == PitchAlgorithm::Pvsola {
+                    body = body.child(model.text("PVSOLAのウィンドウ長は固定です。"));
                 }
             }
-            if self.value("/voice/pitchAlgorithm") == "pvsola" {
-                body = body.child(model.text("PVSOLAのウィンドウ長は固定です。"));
+            Section::Deesser => {
+                if self.deesser_custom() {
+                    body = body.child(model.text(
+                        "詳細設定で調整した設定を使っています。ここでは抑える強さだけを変えます。",
+                    ));
+                }
+                body = body
+                    .child(model.text(
+                        "まだ刺さるときは右へ。声がこもるときは左へ。「さしすせそ」と話し、オン・オフで聞き比べてください。",
+                    ))
+                    .child(model.text(
+                        "高域の音量と、音全体に対する高域の割合を検出し、高域だけを動的に減衰します。圧縮比は4:1、先読みはありません。",
+                    ))
+                    .child(self.render_number(
+                        NumberField::DeesserFrequencyHz,
+                        FieldStyle::Number,
+                        cx,
+                    ))
+                    .child(self.render_number(
+                        NumberField::DeesserThresholdDb,
+                        FieldStyle::Number,
+                        cx,
+                    ))
+                    .child(self.render_number(NumberField::DeesserRangeDb, FieldStyle::Number, cx))
+                    .child(self.render_number(
+                        NumberField::DeesserAttackMs,
+                        FieldStyle::Number,
+                        cx,
+                    ))
+                    .child(self.render_number(
+                        NumberField::DeesserReleaseMs,
+                        FieldStyle::Number,
+                        cx,
+                    ))
+                    .child(self.reset_button(
+                        ResetTarget::Deesser,
+                        "ディエッサーを標準に戻す",
+                        owner,
+                        cx,
+                    ));
             }
-        }
-        if ["inputEq", "preConversionEq", "postConversionEq"].contains(&section) {
-            let root = if section == "postConversionEq" {
-                "eq"
-            } else {
-                section
-            };
-            let gain = self
-                .controls
-                .iter()
-                .filter(|c| {
-                    c.field.path.starts_with(&format!("/{root}/bands/"))
-                        && c.field.path.ends_with("/gainDb")
-                })
-                .map(|c| c.field.text.parse::<f64>())
-                .collect::<Result<Vec<_>, _>>();
-            if let Ok(gains) = gain {
-                let headroom: f64 = gains.iter().map(|v| v.max(0.)).sum();
-                body = body.child(format!(
-                    "{} {:.1} dB",
-                    model.text("クリップ防止の出力調整："),
-                    -headroom
+            Section::NoiseGate => {
+                if self.draft.gate_threshold_mode == GateThresholdMode::Auto {
+                    body = body.child(model.text("背景ノイズに合わせてしきい値を自動調整します。"));
+                }
+                body = body.child(self.render_select(SelectField::GateThresholdMode, cx));
+                if self.draft.gate_threshold_mode == GateThresholdMode::Manual {
+                    body = body.child(self.render_number(
+                        NumberField::GateThresholdDb,
+                        FieldStyle::Number,
+                        cx,
+                    ));
+                }
+                body = body
+                    .child(self.render_number(NumberField::GateAttackMs, FieldStyle::Number, cx))
+                    .child(self.render_number(NumberField::GateReleaseMs, FieldStyle::Number, cx));
+            }
+            Section::AutoLevel => {
+                body = body
+                    .child(self.render_number(NumberField::LevelTargetDb, FieldStyle::Number, cx))
+                    .child(self.render_number(NumberField::LevelMaxGainDb, FieldStyle::Number, cx))
+                    .child(self.render_number(NumberField::LevelFloorDb, FieldStyle::Number, cx))
+                    .child(self.render_number(NumberField::LevelResponseMs, FieldStyle::Number, cx))
+                    .child(self.reset_button(ResetTarget::AutoLevel, "標準に戻す", owner, cx));
+            }
+            Section::PostCompressor => {
+                body = body
+                    .child(self.render_number(
+                        NumberField::PostCompressorThresholdDb,
+                        FieldStyle::Number,
+                        cx,
+                    ))
+                    .child(self.render_number(
+                        NumberField::PostCompressorRatio,
+                        FieldStyle::Number,
+                        cx,
+                    ))
+                    .child(self.render_number(
+                        NumberField::PostCompressorAttackMs,
+                        FieldStyle::Number,
+                        cx,
+                    ))
+                    .child(self.render_number(
+                        NumberField::PostCompressorReleaseMs,
+                        FieldStyle::Number,
+                        cx,
+                    ))
+                    .child(self.reset_button(ResetTarget::PostCompressor, "標準に戻す", owner, cx));
+            }
+            Section::InputEq | Section::PreConversionEq | Section::PostConversionEq => {
+                let kind = EqKind::from_section(section).expect("EQ section");
+                let eq = self.draft.eq(kind);
+                body = body.child(model.text(
+                    "ピーキングEQです。帯域幅（Q値）が小さいほど広い帯域、大きいほど狭い帯域に効きます。",
                 ));
+                for index in 0..eq.bands.len() {
+                    for field in EqBandField::ALL {
+                        body = body.child(self.render_number(
+                            NumberField::EqBand(kind, index, field),
+                            FieldStyle::Number,
+                            cx,
+                        ));
+                    }
+                }
+                body = body.child(self.render_number(
+                    NumberField::EqOutputDb(kind),
+                    FieldStyle::Number,
+                    cx,
+                ));
+                let gains = eq
+                    .bands
+                    .iter()
+                    .map(|band| band.gain_db.parse::<f64>())
+                    .collect::<Result<Vec<_>, _>>();
+                if let Ok(gains) = gains {
+                    let headroom: f64 = gains.iter().map(|v| v.max(0.)).sum();
+                    body = body.child(format!(
+                        "{} {:.1} dB",
+                        model.text("クリップ防止の出力調整："),
+                        -headroom
+                    ));
+                }
+                body = body.child(self.reset_button(
+                    ResetTarget::Eq(kind),
+                    "EQの補正量を0に戻す",
+                    owner.clone(),
+                    cx,
+                ));
+                let count = eq.bands.len();
+                let locked = model.locked() || self.pending();
+                let add_owner = owner.clone();
+                let remove_owner = owner;
+                body = body.child(
+                    div()
+                        .flex()
+                        .gap_2()
+                        .child(
+                            Button::new("add-band")
+                                .label(model.text("バンドを追加"))
+                                .disabled(locked || count >= crate::eq::MAX_BANDS)
+                                .on_click(move |_, w, cx| {
+                                    add_owner.update(cx, |v, cx| v.band_count(kind, true, w, cx))
+                                }),
+                        )
+                        .child(
+                            Button::new("remove-band")
+                                .label(model.text("バンドを削除"))
+                                .disabled(locked || count <= 1)
+                                .on_click(move |_, w, cx| {
+                                    remove_owner
+                                        .update(cx, |v, cx| v.band_count(kind, false, w, cx))
+                                }),
+                        ),
+                );
             }
-            body = body.child(self.reset_button(section, "EQの補正量を0に戻す", owner.clone(), cx));
-            let root = root.to_string();
-            let remove_root = root.clone();
-            let add_owner = owner.clone();
-            let remove_owner = owner.clone();
-            let count = self
-                .controls
-                .iter()
-                .filter(|c| {
-                    c.field.path.starts_with(&format!("/{root}/bands/"))
-                        && c.field.path.ends_with("/gainDb")
-                })
-                .count();
-            let locked = model.locked() || self.pending();
-            body = body.child(
-                div()
-                    .flex()
-                    .gap_2()
-                    .child(
-                        Button::new("add-band")
-                            .label(model.text("バンドを追加"))
-                            .disabled(locked || count >= crate::eq::MAX_BANDS)
-                            .on_click(move |_, w, cx| {
-                                add_owner.update(cx, |v, cx| v.band_count(&root, true, w, cx))
-                            }),
-                    )
-                    .child(
-                        Button::new("remove-band")
-                            .label(model.text("バンドを削除"))
-                            .disabled(locked || count <= 1)
-                            .on_click(move |_, w, cx| {
-                                remove_owner
-                                    .update(cx, |v, cx| v.band_count(&remove_root, false, w, cx))
-                            }),
-                    ),
-            );
+            _ => {}
         }
-        if ["deesser", "autoLevel", "postCompressor"].contains(&section) {
-            body = body.child(self.reset_button(
-                section,
-                if section == "deesser" {
-                    "ディエッサーを標準に戻す"
-                } else {
-                    "標準に戻す"
-                },
-                owner,
-                cx,
-            ));
-        }
-        if !self.error.is_empty() {
+        if self.error.is_some() {
             body = body.child(
                 div()
                     .text_color(crate::gui::theme::palette(cx).danger)
@@ -261,95 +279,106 @@ impl SettingsView {
         }
         body.test_support().into_any_element()
     }
+
     pub(super) fn reset_button(
         &self,
-        target: &str,
+        target: ResetTarget,
         label: &str,
         owner: Entity<Self>,
         cx: &App,
     ) -> AnyElement {
-        let target = target.to_string();
-        let section = match target.as_str() {
-            "voice-windows" | "psola-windows" => "voice",
-            s => s,
-        };
-        Button::new(SharedString::from(format!("reset:{target}")))
+        Button::new(SharedString::from(format!("reset:{}", target.id())))
             .label(self.model.read(cx).text(label))
             .disabled(
-                self.model.read(cx).locked() || self.pending() || !self.section_enabled(section),
+                self.model.read(cx).locked()
+                    || self.pending()
+                    || !self.draft.section_enabled(target.section()),
             )
-            .on_click(move |_, w, cx| owner.update(cx, |v, cx| v.reset(&target, w, cx)))
+            .on_click(move |_, w, cx| owner.update(cx, |v, cx| v.reset(target, w, cx)))
             .into_any_element()
     }
-    pub(super) fn reset(&mut self, target: &str, w: &mut Window, cx: &mut Context<Self>) {
+
+    pub(super) fn reset(&mut self, target: ResetTarget, w: &mut Window, cx: &mut Context<Self>) {
         if self.model.read(cx).locked() || self.pending() {
             return;
         }
-        let defaults = draft::fields(&Settings::from_options(&Options::default()));
-        let paths: Vec<String> = match target {
-            "voice" => vec!["/voice/pitch".into(), "/voice/formantShift".into()],
-            "voice-windows" => vec![
-                "/voice/analysisWindow".into(),
-                "/voice/synthesisWindow".into(),
-            ],
-            "psola-windows" => vec![
-                "/voice/psolaAnalysisWindow".into(),
-                "/voice/psolaSynthesisWindow".into(),
-            ],
-            "deesser" => [
-                "frequencyHz",
-                "thresholdDb",
-                "rangeDb",
-                "attackMs",
-                "releaseMs",
-            ]
-            .map(|k| format!("/deesser/{k}"))
-            .to_vec(),
-            "autoLevel" => ["targetDb", "maxGainDb", "floorDb", "responseMs"]
-                .map(|k| format!("/level/{k}"))
-                .to_vec(),
-            "postCompressor" => ["thresholdDb", "ratio", "attackMs", "releaseMs"]
-                .map(|k| format!("/level/{k}"))
-                .to_vec(),
-            section => {
-                let root = if section == "postConversionEq" {
-                    "eq"
-                } else {
-                    section
-                };
-                self.controls
-                    .iter()
-                    .filter(|c| {
-                        c.field.path.starts_with(&format!("/{root}/"))
-                            && (c.field.path.ends_with("/gainDb")
-                                || c.field.path.ends_with("/outputDb"))
-                    })
-                    .map(|c| c.field.path.clone())
-                    .collect()
-            }
-        };
-        for path in paths {
-            let value = if target == "voice" {
-                if path == "/voice/pitch" && self.percent() {
-                    "100"
-                } else {
-                    "0"
+        let defaults = Options::default();
+        match target {
+            ResetTarget::Voice => {
+                match self.draft.pitch_unit {
+                    PitchUnit::Percent => {
+                        self.draft.pitch = "100".into();
+                        self.draft.pitch_exact_semitones = Some(0.0);
+                    }
+                    PitchUnit::Semitones => {
+                        self.draft.pitch = "0".into();
+                        self.draft.pitch_exact_semitones = None;
+                    }
                 }
-                .into()
-            } else if ["inputEq", "preConversionEq", "postConversionEq"].contains(&target) {
-                "0".into()
-            } else {
-                defaults
-                    .iter()
-                    .find(|f| f.path == path)
-                    .expect("default field")
-                    .text
-                    .clone()
-            };
-            self.set_value(&path, value, w, cx);
+                self.sync_number_widgets(NumberField::Pitch, w, cx);
+                self.draft
+                    .set_number_text(NumberField::FormantShift, "0".into());
+                self.sync_number_widgets(NumberField::FormantShift, w, cx);
+            }
+            ResetTarget::VoiceWindows => {
+                self.draft.analysis_window = defaults.pitch.windows.analysis;
+                self.draft.synthesis_window = defaults.pitch.windows.synthesis;
+            }
+            ResetTarget::PsolaWindows => {
+                self.draft.psola_analysis_window = defaults.pitch.psola_windows.analysis;
+                self.draft.psola_synthesis_window = defaults.pitch.psola_windows.synthesis;
+            }
+            ResetTarget::Deesser => {
+                let d = defaults.deesser_parameters;
+                for (field, value) in [
+                    (NumberField::DeesserFrequencyHz, d.frequency_hz),
+                    (NumberField::DeesserThresholdDb, d.threshold_db),
+                    (NumberField::DeesserRangeDb, d.range_db),
+                    (NumberField::DeesserAttackMs, d.attack_ms),
+                    (NumberField::DeesserReleaseMs, d.release_ms),
+                ] {
+                    self.draft.set_number_text(field, value.to_string());
+                    self.sync_number_widgets(field, w, cx);
+                }
+            }
+            ResetTarget::AutoLevel => {
+                let l = defaults.level;
+                for (field, value) in [
+                    (NumberField::LevelTargetDb, l.target_db),
+                    (NumberField::LevelMaxGainDb, l.max_gain_db),
+                    (NumberField::LevelFloorDb, l.floor_db),
+                    (NumberField::LevelResponseMs, l.response_ms),
+                ] {
+                    self.draft.set_number_text(field, value.to_string());
+                    self.sync_number_widgets(field, w, cx);
+                }
+            }
+            ResetTarget::PostCompressor => {
+                let l = defaults.level;
+                for (field, value) in [
+                    (NumberField::PostCompressorThresholdDb, l.threshold_db),
+                    (NumberField::PostCompressorRatio, l.ratio),
+                    (NumberField::PostCompressorAttackMs, l.attack_ms),
+                    (NumberField::PostCompressorReleaseMs, l.release_ms),
+                ] {
+                    self.draft.set_number_text(field, value.to_string());
+                    self.sync_number_widgets(field, w, cx);
+                }
+            }
+            ResetTarget::Eq(kind) => {
+                let band_count = self.draft.eq(kind).bands.len();
+                for index in 0..band_count {
+                    let field = NumberField::EqBand(kind, index, EqBandField::GainDb);
+                    self.draft.set_number_text(field, "0".into());
+                    self.sync_number_widgets(field, w, cx);
+                }
+                let output = NumberField::EqOutputDb(kind);
+                self.draft.set_number_text(output, "0".into());
+                self.sync_number_widgets(output, w, cx);
+            }
         }
         self.refresh_choices(w, cx);
-        self.error.clear();
+        self.error = None;
         self.notice.clear();
         self.discard_target = CloseTarget::None;
         w.refresh();

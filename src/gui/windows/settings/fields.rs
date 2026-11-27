@@ -1,197 +1,196 @@
-use crate::backend;
-use crate::gui::preferences::Preferences;
+use crate::{
+    backend::BackendKind,
+    gui::{
+        draft::{DeviceSlot, GateThresholdMode, PitchUnit},
+        preferences::Preferences,
+    },
+    pitch::{MathPrecision, PitchAlgorithm, PitchEstimator},
+};
 use gpui_kit::{component::searchable_list::SearchableListItem, SharedString};
 
-pub(super) fn help(path: &str) -> Option<&'static str> {
-    match path {
-        "/deesser/frequencyHz"=>Some("この周波数より高い音を中心に抑えます。"),
-        "/deesser/thresholdDb"=>Some("低くするほど、小さいサ行にも反応します。"),
-        "/deesser/rangeDb"=>Some("大きくするほど強く抑えます。0で補正なし。"),
-        "/deesser/attackMs"=>Some("小さくするほど素早く抑え始めます。"),
-        "/deesser/releaseMs"=>Some("大きくするほど、ゆっくり元の音に戻ります。"),
-        "/noise/thresholdDb"=>Some("0 dBFSに近づけるほど、より大きな声を出さないと音が出なくなります（雑音を強力に遮断します）。"),
-        "/devices/frames"=>Some("小さくすると遅延が減ります。音切れする場合は大きくしてください。デバイスが対応するサイズを指定してください。"),
-        _=>None,
-    }
-}
+pub(super) const ANALYSIS_WINDOWS: [usize; 4] = [1024, 2048, 4096, 8192];
+pub(super) const SYNTHESIS_WINDOWS: [usize; 4] = [256, 512, 1024, 2048];
+pub(super) const SAMPLE_RATES: [u32; 2] = [44100, 48000];
 
 #[derive(Clone)]
-pub(super) struct Choice {
-    pub value: String,
+pub(super) struct Choice<T: Clone + PartialEq> {
+    pub value: T,
     pub label: SharedString,
 }
-impl SearchableListItem for Choice {
-    type Value = String;
+
+impl<T: Clone + PartialEq> SearchableListItem for Choice<T> {
+    type Value = T;
     fn title(&self) -> SharedString {
         self.label.clone()
     }
-    fn value(&self) -> &String {
+    fn value(&self) -> &T {
         &self.value
     }
 }
-pub(super) fn labeled_choices(
-    path: &str,
-    items: Vec<String>,
-    prefs: &Preferences,
-    resolved_backend: backend::BackendKind,
-    missing: Option<&str>,
-) -> Vec<Choice> {
-    items
+
+pub(super) fn backend_choices(prefs: &Preferences) -> Vec<Choice<BackendKind>> {
+    [BackendKind::Auto, BackendKind::Cpal, BackendKind::Asio]
         .into_iter()
+        .filter(|kind| kind.available())
         .map(|value| {
-            if missing == Some(value.as_str()) {
-                return Choice {
-                    label: format!("{value}{}", prefs.text("（未検出）")).into(),
-                    value,
-                };
-            }
-            let key = match value.as_str() {
-                "" if path.ends_with("previewDevice") => "なし",
-                "" if path == "/devices/device"
-                    && resolved_backend == backend::BackendKind::Asio =>
-                {
-                    "デバイスを選択"
-                }
-                "" => "システムの既定",
-                "auto" => "自動",
-                "manual" => "手動",
-                "cpal" => "標準",
-                "asio" => "ASIO",
-                "semitones" => "半音",
-                "percent" => "パーセント",
-                "standard" => "標準（高速近似）",
-                "accurate" => "精度優先",
-                "phase-locked" => "位相ロック（標準）",
-                "pvsola-sync" => "スペクトル位相同期",
-                "pvsola" => "PVSOLA",
-                "td-psola" => "TD-PSOLA＋フェーズボコーダー",
-                "td-psola-resampled" => "TD-PSOLA＋リサンプリング",
-                "fd-psola" => "FD-PSOLA",
-                "yin" => "YIN（標準）",
-                "mpm" => "MPM",
-                "mpm-fft" => "MPM＋FFT",
-                "nccf" => "NCCF",
-                _ => &value,
+            let label = match value {
+                BackendKind::Auto => prefs.text("自動"),
+                BackendKind::Cpal => prefs.text("標準"),
+                BackendKind::Asio => "ASIO".into(),
             };
             Choice {
-                label: prefs.text(key).into(),
                 value,
+                label: label.into(),
             }
         })
         .collect()
 }
-pub(super) fn choices(path: &str, current: &str) -> Option<Vec<String>> {
-    let key = path.rsplit('/').next()?;
-    let values: Vec<String> = match key {
-        "backend" => [
-            backend::BackendKind::Auto,
-            backend::BackendKind::Cpal,
-            backend::BackendKind::Asio,
-        ]
-        .into_iter()
-        .filter(|k| k.available())
-        .map(|k| k.name().into())
-        .collect(),
-        "device" | "outputDevice" | "previewDevice" => {
-            if current.is_empty() {
-                vec![String::new()]
+
+pub(super) fn device_choices(
+    slot: DeviceSlot,
+    items: &[String],
+    prefs: &Preferences,
+    resolved_backend: BackendKind,
+    missing: Option<&str>,
+) -> Vec<Choice<String>> {
+    items
+        .iter()
+        .map(|value| {
+            let label = if missing == Some(value.as_str()) {
+                format!("{value}{}", prefs.text("（未検出）"))
+            } else if value.is_empty() {
+                let key = match slot {
+                    DeviceSlot::Preview => "なし",
+                    DeviceSlot::Input if resolved_backend == BackendKind::Asio => "デバイスを選択",
+                    DeviceSlot::Input | DeviceSlot::Output => "システムの既定",
+                };
+                prefs.text(key)
             } else {
-                vec![String::new(), current.into()]
+                value.clone()
+            };
+            Choice {
+                value: value.clone(),
+                label: label.into(),
             }
-        }
-        "pitchAlgorithm" => crate::pitch::PitchAlgorithm::ALL
-            .iter()
-            .map(|a| a.name().into())
-            .collect(),
-        "psolaPitchEstimator" => crate::pitch::PitchEstimator::ALL
-            .iter()
-            .map(|a| a.name().into())
-            .collect(),
-        "pitchUnit" => vec!["semitones".into(), "percent".into()],
-        "mathPrecision" => vec!["standard".into(), "accurate".into()],
-        "mode" => vec!["simple".into(), "pro".into()],
-        "thresholdMode" => vec!["auto".into(), "manual".into()],
-        "sampleRate" => vec!["44100".into(), "48000".into()],
-        "analysisWindow" | "psolaAnalysisWindow" => [1024, 2048, 4096, 8192]
-            .into_iter()
-            .map(|n| n.to_string())
-            .collect(),
-        "synthesisWindow" | "psolaSynthesisWindow" => [256, 512, 1024, 2048]
-            .into_iter()
-            .map(|n| n.to_string())
-            .collect(),
-        _ => return None,
-    };
-    Some(values)
+        })
+        .collect()
 }
-pub(super) fn field_label(path: &str) -> String {
-    if let Some(label) = match path {
-        "/deesser/frequencyHz" => Some("分割周波数（Hz）"),
-        "/deesser/thresholdDb" | "/noise/thresholdDb" | "/compressor/thresholdDb" => {
-            Some("しきい値（dBFS）")
-        }
-        "/deesser/rangeDb" => Some("最大減衰量（dB）"),
-        "/voice/preserveFormants" => Some("フォルマントを独立して調整する"),
-        "/level/targetDb" => Some("目標音量（dBFS・RMS）"),
-        "/level/maxGainDb" => Some("最大増幅量（dB）"),
-        "/level/floorDb" => Some("音声検出しきい値（dBFS）"),
-        "/level/responseMs" => Some("音量調整の応答時間（ms）"),
-        "/level/thresholdDb" => Some("圧縮しきい値（dBFS）"),
-        "/level/ratio" | "/compressor/ratio" => Some("圧縮比"),
-        "/reverb/decayMs" => Some("減衰時間（ms・公称RT60）"),
-        _ => None,
-    } {
-        return label.into();
+
+pub(super) fn sample_rate_choices(current: u32) -> Vec<Choice<u32>> {
+    let mut values = SAMPLE_RATES.to_vec();
+    if !values.contains(&current) {
+        values.push(current);
     }
-    let key = path.rsplit('/').next().unwrap_or_default();
-    let label = match key {
-        "enabled" => "有効",
-        "compressorEnabled" => "コンプレッサー",
-        "backend" => "音声バックエンド",
-        "device" => "入力デバイス",
-        "outputDevice" => "出力デバイス",
-        "previewDevice" => "モニター出力デバイス",
-        "inputChannel" => "入力チャンネル",
-        "outputChannels" => "出力チャンネル（カンマ区切り）",
-        "frames" => "バッファサイズ（サンプル）",
-        "sampleRate" => "サンプルレート",
-        "pitchUnit" => "ピッチの表示単位",
-        "mathPrecision" => "ボコーダーの計算精度",
-        "psolaPitchEstimator" => "PSOLAのピッチ推定",
-        "psolaAnalysisWindow" => "PSOLA解析窓",
-        "psolaSynthesisWindow" => "PSOLA合成窓",
-        "analysisWindow" => "ボコーダー解析窓",
-        "synthesisWindow" => "ボコーダー合成窓",
-        "pitchAlgorithm" => "ピッチ変換方式",
-        "pitch" => "声の高さ（半音）",
-        "formantShift" => "フォルマント（半音）",
-        "preserveFormants" => "フォルマントを保持",
-        "rumbleFilter" => "低域ノイズ除去（80 Hz）",
-        "thresholdMode" => "しきい値の設定",
-        "thresholdDb" => "しきい値（dB）",
-        "attackMs" => "アタック（ms）",
-        "releaseMs" => "リリース（ms）",
-        "frequencyHz" | "frequency" => "周波数（Hz）",
-        "rangeDb" => "最大抑制量（dB）",
-        "gainDb" => "ゲイン（dB）",
-        "q" => "Q",
-        "mode" => "モード",
-        "outputDb" => "出力トリム（dB）",
-        "targetDb" => "目標音量（dB RMS）",
-        "maxGainDb" => "最大ゲイン（dB）",
-        "floorDb" => "動作下限（dB）",
-        "responseMs" => "応答時間（ms）",
-        "ratio" => "比率",
-        "ceilingDb" => "上限（dBFS）",
-        "amount" => "低減量",
-        "decayMs" => "減衰時間（ms）",
-        "mix" => "ミックス",
-        "preDelayMs" => "プリディレイ（ms）",
-        _ => key,
-    };
-    if let Some(index) = path.split('/').nth(3).and_then(|s| s.parse::<usize>().ok()) {
-        format!("{} · {label}", index + 1)
-    } else {
-        label.into()
+    values
+        .into_iter()
+        .map(|value| Choice {
+            value,
+            label: value.to_string().into(),
+        })
+        .collect()
+}
+
+pub(super) fn pitch_unit_choices(prefs: &Preferences) -> Vec<Choice<PitchUnit>> {
+    PitchUnit::ALL
+        .into_iter()
+        .map(|value| Choice {
+            value,
+            label: prefs.text(value.label()).into(),
+        })
+        .collect()
+}
+
+pub(super) fn math_precision_choices(prefs: &Preferences) -> Vec<Choice<MathPrecision>> {
+    [MathPrecision::Standard, MathPrecision::Accurate]
+        .into_iter()
+        .map(|value| {
+            let key = match value {
+                MathPrecision::Standard => "標準（高速近似）",
+                MathPrecision::Accurate => "精度優先",
+            };
+            Choice {
+                value,
+                label: prefs.text(key).into(),
+            }
+        })
+        .collect()
+}
+
+pub(super) fn pitch_algorithm_choices(prefs: &Preferences) -> Vec<Choice<PitchAlgorithm>> {
+    PitchAlgorithm::ALL
+        .into_iter()
+        .map(|value| {
+            let label = match value {
+                PitchAlgorithm::PhaseLocked => prefs.text("位相ロック（標準）"),
+                PitchAlgorithm::PvsolaSync => prefs.text("スペクトル位相同期"),
+                PitchAlgorithm::Pvsola => "PVSOLA".into(),
+                PitchAlgorithm::TdPsola => prefs.text("TD-PSOLA＋フェーズボコーダー"),
+                PitchAlgorithm::TdPsolaResampled => prefs.text("TD-PSOLA＋リサンプリング"),
+                PitchAlgorithm::FdPsola => "FD-PSOLA".into(),
+            };
+            Choice {
+                value,
+                label: label.into(),
+            }
+        })
+        .collect()
+}
+
+pub(super) fn pitch_estimator_choices(prefs: &Preferences) -> Vec<Choice<PitchEstimator>> {
+    PitchEstimator::ALL
+        .into_iter()
+        .map(|value| {
+            let label = match value {
+                PitchEstimator::Yin => prefs.text("YIN（標準）"),
+                PitchEstimator::Mpm => "MPM".into(),
+                PitchEstimator::MpmFft => prefs.text("MPM＋FFT"),
+                PitchEstimator::Nccf => "NCCF".into(),
+            };
+            Choice {
+                value,
+                label: label.into(),
+            }
+        })
+        .collect()
+}
+
+pub(super) fn analysis_window_choices(current: usize) -> Vec<Choice<usize>> {
+    let mut values = ANALYSIS_WINDOWS.to_vec();
+    if !values.contains(&current) {
+        values.push(current);
     }
+    values
+        .into_iter()
+        .map(|value| Choice {
+            value,
+            label: value.to_string().into(),
+        })
+        .collect()
+}
+
+pub(super) fn synthesis_window_choices(analysis: usize, current: usize) -> Vec<Choice<usize>> {
+    let mut values: Vec<usize> = SYNTHESIS_WINDOWS
+        .into_iter()
+        .filter(|&size| size <= analysis)
+        .collect();
+    if !values.contains(&current) {
+        values.push(current);
+    }
+    values
+        .into_iter()
+        .map(|value| Choice {
+            value,
+            label: value.to_string().into(),
+        })
+        .collect()
+}
+
+pub(super) fn gate_threshold_mode_choices(prefs: &Preferences) -> Vec<Choice<GateThresholdMode>> {
+    GateThresholdMode::ALL
+        .into_iter()
+        .map(|value| Choice {
+            value,
+            label: prefs.text(value.label()).into(),
+        })
+        .collect()
 }
