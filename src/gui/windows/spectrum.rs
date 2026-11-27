@@ -3,7 +3,7 @@ use crate::spectrum::{
     MeterLevels, SpectrumController, BYTES_PER_PIXEL, IMAGE_HEIGHT, IMAGE_WIDTH,
 };
 use gpui_kit::{
-    component::{button::Button, Selectable},
+    component::{button::Button, Disableable, Selectable},
     *,
 };
 use std::{sync::Arc, time::Duration};
@@ -91,6 +91,7 @@ impl Render for SpectrumView {
                     Button::new("wideband")
                         .label(m.text("広帯域"))
                         .selected(self.wide)
+                        .disabled(m.shutting_down())
                         .on_click(cx.listener(|v, _, _, cx| {
                             v.wide = true;
                             v.controller.set_wideband(true);
@@ -101,6 +102,7 @@ impl Render for SpectrumView {
                     Button::new("narrowband")
                         .label(m.text("狭帯域"))
                         .selected(!self.wide)
+                        .disabled(m.shutting_down())
                         .on_click(cx.listener(|v, _, _, cx| {
                             v.wide = false;
                             v.controller.set_wideband(false);
@@ -111,6 +113,7 @@ impl Render for SpectrumView {
                     Button::new("freeze")
                         .label(m.text("フリーズ"))
                         .selected(self.frozen)
+                        .disabled(m.shutting_down())
                         .on_click(cx.listener(|v, _, _, cx| {
                             v.frozen = !v.frozen;
                             v.controller.set_frozen(v.frozen);
