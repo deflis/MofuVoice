@@ -319,11 +319,19 @@ impl SettingsView {
         Ok(options)
     }
 
-    pub fn blocks_audio_start(&self, saved: &Options) -> bool {
+    pub fn audio_start_block_reason(&self, saved: &Options) -> Option<&'static str> {
         match self.options() {
-            Ok(options) => options != *saved,
-            Err(_) => true,
+            Ok(options) if options != *saved => Some("設定を保存してから音声を開始してください。"),
+            Ok(_) => None,
+            Err(error) if error.field == Some(ErrorField::SampleRate) => {
+                Some("選択したサンプリングレートには対応していません。")
+            }
+            Err(_) => Some("設定を保存してから音声を開始してください。"),
         }
+    }
+
+    pub fn blocks_audio_start(&self, saved: &Options) -> bool {
+        self.audio_start_block_reason(saved).is_some()
     }
 
     pub(super) fn notify_host(&self, cx: &mut Context<Self>) {

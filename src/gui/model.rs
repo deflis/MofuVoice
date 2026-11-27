@@ -170,14 +170,15 @@ impl AppModel {
             .is_some_and(|(_, view)| view.read(cx).blocks_audio_start(&self.saved))
     }
     pub fn start_blocked_message(&self, cx: &App) -> Option<&'static str> {
-        if self.has_unsaved_audio_draft(cx) {
-            Some("設定を保存してから音声を開始してください。")
-        } else {
-            self.device_warning.map(DeviceWarning::message).or_else(|| {
-                self.needs_input_device()
-                    .then_some("最初に、入力・出力デバイスを設定してください。")
-            })
+        if let Some((_, view)) = &self.settings {
+            if let Some(message) = view.read(cx).audio_start_block_reason(&self.saved) {
+                return Some(message);
+            }
         }
+        self.device_warning.map(DeviceWarning::message).or_else(|| {
+            self.needs_input_device()
+                .then_some("最初に、入力・出力デバイスを設定してください。")
+        })
     }
     pub fn check_saved_devices(&mut self, cx: &mut Context<Self>) {
         let options = self.saved.clone();

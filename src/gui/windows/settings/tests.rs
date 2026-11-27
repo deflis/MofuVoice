@@ -1739,12 +1739,23 @@ fn asio_unsupported_sample_rate_rejects_options(cx: &mut TestAppContext) {
     });
     let error = view.read_with(cx, |v, _| v.options().unwrap_err());
     assert_eq!(error.field, Some(ErrorField::SampleRate));
+    assert_eq!(
+        model.read_with(cx, |m, cx| m.start_blocked_message(cx)),
+        Some("選択したサンプリングレートには対応していません。")
+    );
+    assert!(model.read_with(cx, |m, cx| {
+        m.has_unsaved_audio_draft(cx) && !m.can_start(cx)
+    }));
 
     view.update(cx, |v, cx| v.save(CloseTarget::Settings, cx));
     assert!(view.read_with(cx, |v, _| v.discard_target == CloseTarget::Settings));
 
     let saved = view.read_with(cx, |v, _| v.draft.to_options().unwrap());
     model.update(cx, |m, _| m.saved = saved);
+    assert_eq!(
+        model.read_with(cx, |m, cx| m.start_blocked_message(cx)),
+        Some("選択したサンプリングレートには対応していません。")
+    );
     view.update(cx, |v, cx| v.save(CloseTarget::Settings, cx));
     cx.run_until_parked();
     assert!(model.read_with(cx, |m, _| m.settings.is_none()));
