@@ -103,7 +103,7 @@ macOSの配布物は `cargo build --release --features desktop --locked --bin Mo
 
 ## 4. 設定ファイル（`settings.ini`）
 
-GUIの設定は、実行ファイルと同じディレクトリに `settings.ini`（UTF-8）として自動保存・復元されます。設定の変更はGUI上から行えるため、通常は手動で編集する必要はありません。表示言語と設定ページも、同じファイルの `ui_language` と `ui_section` に保存されます。設定を初期状態にリセットしたい場合は、`settings.ini` を削除してアプリを再起動してください。
+GUIの設定は、Windows / Linux では実行ファイルと同じディレクトリの `settings.ini`、macOS では `~/Library/Application Support/MofuVoice/settings.ini`（UTF-8）として自動保存・復元されます。設定の変更はGUI上から行えるため、通常は手動で編集する必要はありません。表示言語と設定ページも、同じファイルの `ui_language` と `ui_section` に保存されます。設定を初期状態にリセットしたい場合は、`settings.ini` を削除してアプリを再起動してください。
 
 ---
 

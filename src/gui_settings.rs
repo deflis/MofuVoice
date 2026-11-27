@@ -1,14 +1,33 @@
 //! GUI preferences only; never read or written from an audio callback.
 use crate::{cli::Options, gate::GateThreshold};
-#[cfg(feature = "desktop")]
+#[cfg(any(feature = "desktop", test))]
 use std::path::PathBuf;
 use std::{error::Error, fs, io::ErrorKind, path::Path};
 
+#[cfg(any(all(feature = "desktop", target_os = "macos"), test))]
+fn macos_path(home: Option<std::ffi::OsString>) -> Result<PathBuf, Box<dyn Error>> {
+    let home = home
+        .filter(|value| !value.is_empty())
+        .ok_or("Cannot locate user home directory: HOME is unset")?;
+    Ok(PathBuf::from(home)
+        .join("Library")
+        .join("Application Support")
+        .join("MofuVoice")
+        .join("settings.ini"))
+}
+
 #[cfg(feature = "desktop")]
 pub(crate) fn path() -> Result<PathBuf, Box<dyn Error>> {
-    Ok(std::env::current_exe()
-        .map_err(|error| format!("Cannot locate GUI executable: {error}"))?
-        .with_file_name("settings.ini"))
+    #[cfg(target_os = "macos")]
+    {
+        macos_path(std::env::var_os("HOME"))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(std::env::current_exe()
+            .map_err(|error| format!("Cannot locate GUI executable: {error}"))?
+            .with_file_name("settings.ini"))
+    }
 }
 
 fn threshold_text(threshold: GateThreshold) -> String {
@@ -206,7 +225,14 @@ fn decode(text: &str) -> Result<SavedSettings, Box<dyn Error>> {
             .ok_or_else(|| format!("Missing GUI setting '{key}'"))
     };
     let device = value("device")?;
-    if device.contains('\0') {
+    if device.contains('\0')
+        || values
+            .get("output_device")
+            .is_some_and(|name| name.contains('\0'))
+        || values
+            .get("preview_device")
+            .is_some_and(|name| name.contains('\0'))
+    {
         return Err("Device name cannot contain NUL".into());
     }
     let formant = match value("preserve_formants")? {
@@ -411,6 +437,7 @@ pub(crate) fn merge(saved: &Options, args: Vec<String>) -> Result<Options, Box<d
             "--device",
             "--backend",
             "--output-device",
+            "--preview-device",
             "--input-channel",
             "--output-channels",
             "--frames",
@@ -497,6 +524,7 @@ pub(crate) fn save(
     Options::parse_gui(arguments(options))?;
     if options.device.contains(['\r', '\n', '\0'])
         || options.output_device.contains(['\r', '\n', '\0'])
+        || options.preview_device.contains(['\r', '\n', '\0'])
     {
         return Err("Device name cannot contain line breaks or NUL".into());
     }
@@ -620,6 +648,21 @@ mod tests {
     }
 
     #[test]
+    fn macos_settings_path_uses_application_support_and_rejects_missing_home() {
+        let path = super::macos_path(Some(std::ffi::OsString::from("/Users/mofu"))).unwrap();
+        assert_eq!(
+            path,
+            PathBuf::from("/Users/mofu")
+                .join("Library")
+                .join("Application Support")
+                .join("MofuVoice")
+                .join("settings.ini")
+        );
+        assert!(super::macos_path(None).is_err());
+        assert!(super::macos_path(Some(std::ffi::OsString::new())).is_err());
+    }
+
+    #[test]
     fn ui_preferences_round_trip_in_gui_ini_without_changing_audio_options() {
         let path =
             std::env::temp_dir().join(format!("mofu-ui-settings-{}.ini", std::process::id()));
@@ -669,6 +712,20 @@ mod tests {
         save(&path, &options).unwrap();
         assert_eq!(load(&path).unwrap(), options);
         assert_eq!(merge(&options, vec![]).unwrap(), options);
+        assert_eq!(
+            merge(
+                &Options::parse_gui(["--backend", "cpal"].map(String::from)).unwrap(),
+                ["--preview-device", "Headphones"].map(String::from).into(),
+            )
+            .unwrap()
+            .preview_device,
+            "Headphones"
+        );
+        let mut invalid_preview = options.clone();
+        invalid_preview.preview_device = "Head\nphones".into();
+        assert!(save(&path, &invalid_preview).is_err());
+        let saved_text = fs::read_to_string(&path).unwrap();
+        assert!(decode(&saved_text.replace("Headphones", "Head\0phones")).is_err());
         assert!(Options::parse_gui(
             ["--backend", "asio", "--preview-device", "Headphones"].map(String::from)
         )
