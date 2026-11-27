@@ -1,4 +1,5 @@
 use super::*;
+use gpui_kit::base::TestSupportExt as _;
 impl SettingsView {
     pub fn discover(&mut self, cx: &mut Context<Self>) {
         if self.pending {
@@ -18,6 +19,7 @@ impl SettingsView {
         };
         self.pending = true;
         self.rates = None;
+        self.device_error.clear();
         self.model.update(cx, |m, cx| {
             m.busy = true;
             cx.notify();
@@ -251,10 +253,22 @@ impl SettingsView {
                     )),
                 );
             }
-        } else if kind != backend::BackendKind::Asio || !self.value("/devices/device").is_empty() {
-            body = body.child(t(
-                "利用可能なチャンネルを確認中です。音声動作中は停止して確認してください。",
-            ));
+        } else if !self.device_error.is_empty() && !self.pending {
+            body = body.child(
+                div()
+                    .id("device-discovery-failed")
+                    .test_support()
+                    .child(t("対応レートを取得できませんでした。")),
+            );
+        } else if self.discovery_deferred {
+            body = body.child(t("音声を停止すると対応レートを確認できます。"));
+        } else if self.pending && self.device_error.is_empty() {
+            body = body.child(
+                div()
+                    .id("device-discovery-pending")
+                    .test_support()
+                    .child(t("対応レートを確認中…")),
+            );
         }
         let refresh = owner.clone();
         body = body

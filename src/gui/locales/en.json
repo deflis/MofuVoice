@@ -151,6 +151,7 @@
   "Hz は対応していません。対応レートを選び直してください。": " Hz is unsupported. Select a supported rate.",
   "アプリで選択できるレートの対応状況です。チャンネルとバッファサイズは開始時に確認します。": "Shows support for rates available in the app. Channels and buffer size are checked when audio starts.",
   "対応レートを取得できませんでした：": "Could not retrieve supported rates: ",
+  "対応レートを取得できませんでした。": "Could not retrieve supported rates.",
   "対応レートを確認中…": "Checking supported rates…",
   "音声を停止すると対応レートを確認できます。": "Stop audio to check supported rates.",
   "デバイスを選ぶと対応レートを表示します。": "Select a device to see supported rates.",

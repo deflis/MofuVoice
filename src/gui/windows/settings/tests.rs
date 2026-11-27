@@ -52,6 +52,39 @@ pub(super) fn directory() -> PathBuf {
 }
 
 #[gpui_kit::test]
+fn failed_device_discovery_replaces_pending_status(cx: &mut TestAppContext) {
+    let dir = directory();
+    let (model, window, view) = open(cx, &dir);
+    model.update(cx, |m, cx| {
+        m.preferences.section = "devices".into();
+        cx.notify();
+    });
+    view.update(cx, |v, cx| {
+        v.pending = true;
+        cx.notify();
+    });
+    window
+        .update(cx, |_, w, cx| {
+            w.render_frame(cx);
+            assert!(w.try_find("device-discovery-pending").is_some());
+        })
+        .unwrap();
+    view.update(cx, |v, cx| {
+        v.pending = false;
+        v.device_error = "device disconnected".into();
+        cx.notify();
+    });
+    window
+        .update(cx, |_, w, cx| {
+            w.render_frame(cx);
+            assert!(w.try_find("device-discovery-pending").is_none());
+            assert!(w.try_find("device-discovery-failed").is_some());
+        })
+        .unwrap();
+    cleanup(model, window, cx);
+}
+
+#[gpui_kit::test]
 fn changing_eq_band_count_preserves_other_drafts_and_manual_gate_threshold(
     cx: &mut TestAppContext,
 ) {
