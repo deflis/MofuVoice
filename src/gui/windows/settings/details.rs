@@ -16,7 +16,12 @@ impl SettingsView {
             s => s,
         };
         if ["eq", "inputEq", "preConversionEq", "deesser"].contains(&root) {
-            self.set_value(&format!("/{root}/mode"), "pro".into(), window, cx);
+            let mode_path = format!("/{root}/mode");
+            if self.value(&mode_path) != "pro" {
+                self.set_value(&mode_path, "pro".into(), window, cx);
+                self.save_failed = false;
+                self.notice.clear();
+            }
         }
         let weak = cx.weak_entity();
         let section = section.to_string();

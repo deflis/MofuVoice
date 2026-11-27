@@ -1497,3 +1497,28 @@ fn asio_unselected_shows_rate_hint_and_preview_device_change_skips_rediscovery(
     cleanup(model, window, cx);
 }
 
+#[gpui_kit::test]
+fn opening_details_clears_save_failed_and_notice_when_switching_mode(cx: &mut TestAppContext) {
+    let dir = directory();
+    let (model, window, view) = open(cx, &dir);
+    set(&view, window, "/inputEq/enabled", "true", cx);
+    navigate(&model, window, "inputEq", cx);
+    view.update(cx, |v, _| {
+        v.save_failed = true;
+        v.notice = "設定を保存しました。".into();
+    });
+    window
+        .update(cx, |_, w, cx| w.click("details:inputEq", cx))
+        .unwrap();
+    cx.run_until_parked();
+    view.read_with(cx, |v, _| {
+        assert_eq!(v.value("/inputEq/mode"), "pro");
+        assert!(!v.save_failed);
+        assert!(v.notice.is_empty());
+    });
+    window
+        .update(cx, |_, w, cx| w.click("close-details", cx))
+        .unwrap();
+    cx.run_until_parked();
+    cleanup(model, window, cx);
+}
