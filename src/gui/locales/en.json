@@ -267,5 +267,7 @@
   "設定を確認する": "Review settings",
   "変更を破棄して閉じる": "Discard changes and close",
   "変更を破棄して終了": "Discard changes and quit",
-  "音声デバイスを再検出する": "Detect audio devices again"
+  "音声デバイスを再検出する": "Detect audio devices again",
+  "ドライバー報告値です。実測の往復遅延とは異なります。": "These are driver-reported values, not a measured round-trip latency.",
+  "CPALではドライバー遅延を取得できません。往復遅延は未測定です。": "CPAL cannot report driver latency. Round-trip latency is unmeasured."
 }

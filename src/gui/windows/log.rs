@@ -37,6 +37,12 @@ impl Render for LogView {
         for (label, value) in info_rows(&m.info, m) {
             append_row(&mut body, label, value, m);
         }
+        if let Some(note) = latency_note(m.info.backend.as_deref()) {
+            body.extend([div()
+                .text_color(crate::gui::theme::palette(cx).muted)
+                .child(m.text(note))
+                .into_any_element()]);
+        }
         if let Some(log) = &m.log {
             for (label, value) in log_rows(log) {
                 append_row(&mut body, label, value, m);
@@ -54,6 +60,14 @@ impl Render for LogView {
                     })),
             )
             .child(body.child(m.status.clone()))
+    }
+}
+
+fn latency_note(backend: Option<&str>) -> Option<&'static str> {
+    match backend {
+        Some("cpal") => Some("CPALではドライバー遅延を取得できません。往復遅延は未測定です。"),
+        Some(_) => Some("ドライバー報告値です。実測の往復遅延とは異なります。"),
+        None => None,
     }
 }
 
@@ -174,7 +188,7 @@ pub fn window_options() -> WindowOptions {
 
 #[cfg(all(test, feature = "desktop-tests"))]
 mod tests {
-    use super::{info_rows, log_rows, AppModel};
+    use super::{info_rows, latency_note, log_rows, AppModel};
     use crate::{
         backend::AudioTelemetry,
         gui::preferences::{Language, Preferences, Section},
@@ -261,5 +275,14 @@ mod tests {
             assert_eq!(log_map["エラーフラグ"], "0x1a");
             assert_eq!(log_map["現在のキュー"], "512 frames");
         });
+        assert_eq!(
+            latency_note(Some("cpal")),
+            Some("CPALではドライバー遅延を取得できません。往復遅延は未測定です。")
+        );
+        assert_eq!(
+            latency_note(Some("asio")),
+            Some("ドライバー報告値です。実測の往復遅延とは異なります。")
+        );
+        assert_eq!(latency_note(None), None);
     }
 }
