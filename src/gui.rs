@@ -36,6 +36,7 @@ pub fn run(
         options,
         preferences,
     }: Startup,
+    on_window_error: impl FnOnce(String) + 'static,
 ) -> Result<(), Box<dyn Error>> {
     let path = gui_settings::path()?;
     gpui_kit::application()
@@ -66,7 +67,7 @@ pub fn run(
             }) {
                 Ok(_) => cx.activate(true),
                 Err(error) => {
-                    show_message(&format!("Cannot open main window: {error}"), true);
+                    on_window_error(format!("Cannot open main window: {error}"));
                     cx.quit();
                 }
             }

@@ -12,7 +12,10 @@ fn main() -> ExitCode {
             );
             Ok(())
         } else {
-            gui::run(startup)
+            gui::run(startup, |error| {
+                gui::show_message(&error, true);
+                std::process::exit(1);
+            })
         }
     });
     match result {
