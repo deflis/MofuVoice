@@ -100,12 +100,16 @@ impl SettingsView {
                 ] {
                     items.insert(0, String::new());
                     let current = self.value(path);
-                    let missing =
-                        (!current.is_empty() && !items.contains(&current)).then(|| current.clone());
+                    let used =
+                        path == "/devices/device" || choices.resolved == backend::BackendKind::Cpal;
+                    let missing = (used && !current.is_empty() && !items.contains(&current))
+                        .then(|| current.clone());
                     if missing.is_some() {
                         self.device_error =
                             "前回使った音声機器が見つかりません。入力・出力デバイスを確認してください。"
                                 .into();
+                    }
+                    if !current.is_empty() && !items.contains(&current) {
                         items.push(current.clone());
                     }
                     if let Some(control) = self.controls.iter_mut().find(|c| c.field.path == path) {

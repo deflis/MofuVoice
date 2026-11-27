@@ -406,18 +406,7 @@ impl SettingsView {
             self.refresh_choices(window, cx);
         }
         if path == "/devices/backend" {
-            for p in [
-                "/devices/device",
-                "/devices/outputDevice",
-                "/devices/previewDevice",
-            ] {
-                if let Some(control) = self.controls.iter_mut().find(|c| c.field.path == p) {
-                    control.items = Some(vec![String::new()]);
-                    control.missing = None;
-                }
-                self.set_value(p, String::new(), window, cx);
-            }
-            self.refresh_choices(window, cx);
+            self.reset_device_choices(window, cx);
         }
         if [
             "/devices/backend",
@@ -431,5 +420,19 @@ impl SettingsView {
         }
         window.refresh();
         cx.notify();
+    }
+    pub(super) fn reset_device_choices(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        for p in [
+            "/devices/device",
+            "/devices/outputDevice",
+            "/devices/previewDevice",
+        ] {
+            if let Some(control) = self.controls.iter_mut().find(|c| c.field.path == p) {
+                control.items = Some(vec![String::new()]);
+                control.missing = None;
+            }
+            self.set_value(p, String::new(), window, cx);
+        }
+        self.refresh_choices(window, cx);
     }
 }

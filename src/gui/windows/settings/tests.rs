@@ -1199,10 +1199,7 @@ fn initial_device_choices_do_not_duplicate_empty_default_and_backend_switch_clea
     window
         .update(cx, |_, w, cx| {
             view.update(cx, |v, cx| {
-                v.changed("/devices/backend", "cpal".into(), w, cx);
-                v.generation.advance();
-                v.operation = None;
-                v.model.update(cx, |m, _| m.busy = false);
+                v.reset_device_choices(w, cx);
                 v.apply_discovery(Err("discovery failed".into()), w, cx);
             });
         })
@@ -1216,6 +1213,54 @@ fn initial_device_choices_do_not_duplicate_empty_default_and_backend_switch_clea
         ] {
             let control = v.controls.iter().find(|c| c.field.path == path).unwrap();
             assert_eq!(control.items.as_deref(), Some(&[String::new()][..]));
+            assert_eq!(control.missing, None);
+            assert_eq!(control.field.text, "");
+        }
+    });
+    cleanup(model, window, cx);
+}
+
+#[gpui_kit::test]
+fn asio_discovery_ignores_unused_cpal_output_and_preview_devices(cx: &mut TestAppContext) {
+    use crate::{backend::BackendKind, gui::model::DeviceChoices};
+
+    let dir = directory();
+    let (model, window, view) = open(cx, &dir);
+    set(&view, window, "/devices/device", "ASIO Driver", cx);
+    set(&view, window, "/devices/outputDevice", "Old CPAL Out", cx);
+    set(
+        &view,
+        window,
+        "/devices/previewDevice",
+        "Old CPAL Preview",
+        cx,
+    );
+    window
+        .update(cx, |_, w, cx| {
+            view.update(cx, |v, cx| {
+                v.apply_discovery(
+                    Ok((
+                        DeviceChoices {
+                            inputs: vec!["ASIO Driver".into()],
+                            outputs: Vec::new(),
+                            resolved: BackendKind::Asio,
+                        },
+                        Ok(None),
+                    )),
+                    w,
+                    cx,
+                );
+            });
+        })
+        .unwrap();
+    view.read_with(cx, |v, _| {
+        assert!(v.device_error.is_empty());
+        for path in [
+            "/devices/device",
+            "/devices/outputDevice",
+            "/devices/previewDevice",
+        ] {
+            let control = v.controls.iter().find(|c| c.field.path == path).unwrap();
             assert_eq!(control.missing, None);
         }
     });
@@ -1259,8 +1304,36 @@ fn missing_device_message_is_not_overwritten_by_rate_lookup_failure(cx: &mut Tes
 #[gpui_kit::test]
 fn closing_disables_settings_navigation_and_overview_stage_buttons(cx: &mut TestAppContext) {
     let dir = directory();
-    let (model, window, _view) = open(cx, &dir);
+    let (model, window, view) = open(cx, &dir);
     navigate(&model, window, "overview", cx);
+    view.update(cx, |v, _| v.save_failed = true);
+    window
+        .update(cx, |_, w, cx| {
+            w.render_frame(cx);
+            w.click("stage-inputEq", cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        model.read_with(cx, |m, _| m.preferences.section.clone()),
+        "inputEq"
+    );
+    assert!(view.read_with(cx, |v, _| !v.save_failed));
+
+    view.update(cx, |v, _| v.save_failed = true);
+    window
+        .update(cx, |_, w, cx| {
+            w.render_frame(cx);
+            w.click("nav-overview", cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        model.read_with(cx, |m, _| m.preferences.section.clone()),
+        "overview"
+    );
+    assert!(view.read_with(cx, |v, _| !v.save_failed));
+
     model.update(cx, |m, cx| {
         m.closing = true;
         cx.notify();

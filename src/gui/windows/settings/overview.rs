@@ -35,13 +35,18 @@ pub(super) fn render(
                     .label(format!("↓  {}", t(label)))
                     .disabled(model.closing)
                     .on_click(cx.listener(move |v, _, _, cx| {
+                        let mut changed = false;
                         v.model.update(cx, |m, cx| {
                             if !m.closing && m.preferences.section != id {
                                 m.preferences.section = id.clone();
                                 m.quit_save_failed = false;
+                                changed = true;
                                 cx.notify();
                             }
-                        })
+                        });
+                        if changed {
+                            v.save_failed = false;
+                        }
                     })),
             );
         let toggles: Vec<(&str, &str)> = match stage {
