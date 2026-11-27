@@ -23,6 +23,7 @@
   "出力デバイス": "Output device",
   "サンプルレート": "Sample rate",
   "DSP遅延": "DSP latency",
+  "変換時": "when converting",
   "処理ログを表示": "Show processing log",
   "音声を停止": "Stop audio",
   "音声を開始": "Start audio",
