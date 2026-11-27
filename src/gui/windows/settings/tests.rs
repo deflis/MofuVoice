@@ -9,7 +9,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-fn open(
+pub(super) fn open(
     cx: &mut TestAppContext,
     directory: &std::path::Path,
 ) -> (Entity<AppModel>, AnyWindowHandle, Entity<SettingsView>) {
@@ -42,7 +42,7 @@ fn open(
     model.update(cx, |m, _| m.settings = Some((handle, view.clone())));
     (model, handle, view)
 }
-fn directory() -> PathBuf {
+pub(super) fn directory() -> PathBuf {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     std::env::temp_dir().join(format!(
         "mofu-gpui-{}-{}",
@@ -398,7 +398,7 @@ fn navigate(
     cx.run_until_parked();
     window.update(cx, |_, w, cx| w.render_frame(cx)).unwrap();
 }
-fn set(
+pub(super) fn set(
     view: &Entity<SettingsView>,
     window: AnyWindowHandle,
     path: &str,
@@ -416,7 +416,7 @@ fn set(
         .unwrap();
     cx.run_until_parked();
 }
-fn cleanup(model: Entity<AppModel>, window: AnyWindowHandle, cx: &mut TestAppContext) {
+pub(super) fn cleanup(model: Entity<AppModel>, window: AnyWindowHandle, cx: &mut TestAppContext) {
     model.update(cx, |m, _| m.settings = None);
     window.update(cx, |_, w, _| w.remove_window()).unwrap();
 }

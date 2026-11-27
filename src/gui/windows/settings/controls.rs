@@ -15,7 +15,7 @@ impl SettingsView {
         }
         self.subscriptions.clear();
         let options = self.base.options().expect("validated settings");
-        let percent = options.pitch_unit == "percent";
+        let percent = edits.get("/voice/pitchUnit").unwrap_or(&options.pitch_unit) == "percent";
         let kind = edits
             .get("/devices/backend")
             .map_or(options.backend, |name| {
