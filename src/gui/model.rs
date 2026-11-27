@@ -155,10 +155,26 @@ impl AppModel {
         self.saved.device.is_empty()
             && self.resolve_backend(self.saved.backend) == backend::BackendKind::Asio
     }
-    pub fn can_start(&self) -> bool {
+    pub fn can_start(&self, cx: &App) -> bool {
         !self.locked()
             && !self.needs_input_device()
-            && self.device_warning != Some(DeviceWarning::Unavailable)
+            && self.device_warning.is_none()
+            && !self.has_unsaved_audio_draft(cx)
+    }
+    pub fn has_unsaved_audio_draft(&self, cx: &App) -> bool {
+        self.settings
+            .as_ref()
+            .is_some_and(|(_, view)| view.read(cx).blocks_audio_start(&self.saved))
+    }
+    pub fn start_blocked_message(&self, cx: &App) -> Option<&'static str> {
+        if self.has_unsaved_audio_draft(cx) {
+            Some("設定を保存してから音声を開始してください。")
+        } else {
+            self.device_warning.map(DeviceWarning::message).or_else(|| {
+                self.needs_input_device()
+                    .then_some("最初に、入力・出力デバイスを設定してください。")
+            })
+        }
     }
     pub fn check_saved_devices(&mut self, cx: &mut Context<Self>) {
         let options = self.saved.clone();
@@ -207,7 +223,7 @@ impl AppModel {
         }
     }
     pub fn start(&mut self, inspect: bool, cx: &mut Context<Self>) {
-        if !self.can_start() {
+        if !self.can_start(cx) {
             return;
         }
         self.error.clear();
@@ -223,11 +239,18 @@ impl AppModel {
             let result = task.await;
             _ = this.update(cx, |m, cx| {
                 if !m.generation.accepts(generation) {
+                    // shutdown() advances generation; leave busy alone while quitting.
+                    if !m.closing {
+                        m.busy = false;
+                    }
                     return;
                 }
                 m.busy = false;
                 match result {
-                    Ok(()) => m.active = true,
+                    Ok(()) => {
+                        // Worker exists; phase stays "opening" until the device is running.
+                        m.active = true;
+                    }
                     Err(e) => m.error = e,
                 };
                 if m.quit_requested {
@@ -658,18 +681,23 @@ mod tests {
             outputs: vec![],
             resolved: BackendKind::Cpal,
         };
-        model.update(cx, |model, _| {
+        model.update(cx, |model, cx| {
             let older_check = model.device_check.advance();
             model.device_warning = Some(DeviceWarning::Unavailable);
-            assert!(!model.can_start());
+            assert!(!model.can_start(cx));
             model.update_saved_device_warning(BackendKind::Auto, Some(&choices));
-            assert!(!model.can_start());
+            assert!(!model.can_start(cx));
             assert!(model.device_check.accepts(older_check));
             model.update_saved_device_warning(BackendKind::Cpal, Some(&choices));
-            assert!(model.can_start());
+            assert!(model.can_start(cx));
             assert!(!model.device_check.accepts(older_check));
+            model.saved.device = "missing".into();
+            model.update_saved_device_warning(BackendKind::Cpal, Some(&choices));
+            assert_eq!(model.device_warning, Some(DeviceWarning::Missing));
+            assert!(!model.can_start(cx));
+            model.saved.device = "mic".into();
             model.update_saved_device_warning(BackendKind::Cpal, None);
-            assert!(!model.can_start());
+            assert!(!model.can_start(cx));
             assert_eq!(model.device_warning, Some(DeviceWarning::Unavailable));
         });
     }
@@ -805,13 +833,13 @@ mod tests {
                 )
             })
         });
-        model.update(cx, |m, _| {
-            assert!(m.can_start());
+        model.update(cx, |m, cx| {
+            assert!(m.can_start(cx));
             assert!(!m.locked());
             m.quit_requested = true;
             assert!(m.shutting_down());
             assert!(m.locked());
-            assert!(!m.can_start());
+            assert!(!m.can_start(cx));
         });
     }
 }

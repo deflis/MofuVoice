@@ -33,6 +33,7 @@ impl SettingsView {
         self.notice.clear();
         self.save_failed = false;
         window.refresh();
+        self.notify_host(cx);
         cx.notify();
     }
 }

@@ -164,7 +164,35 @@ impl SettingsView {
             .collect()
     }
     pub(super) fn options(&self) -> Result<Options, String> {
-        draft::parse(&self.base, &self.edits())
+        let options = draft::parse(&self.base, &self.edits())?;
+        self.validate_discovered_rates(&options)?;
+        Ok(options)
+    }
+    pub fn blocks_audio_start(&self, saved: &Options) -> bool {
+        match self.options() {
+            Ok(options) => options != *saved,
+            Err(_) => true,
+        }
+    }
+    pub(super) fn notify_host(&self, cx: &mut Context<Self>) {
+        self.model.update(cx, |_, cx| cx.notify());
+    }
+    fn validate_discovered_rates(&self, options: &Options) -> Result<(), String> {
+        let Some(rates) = &self.rates else {
+            return Ok(());
+        };
+        let kind = backend::BackendKind::parse(&self.value("/devices/backend"))
+            .map_err(|e| e.to_string())?;
+        let resolved = match kind {
+            backend::BackendKind::Auto => self.observed.auto_backend,
+            explicit => explicit,
+        };
+        if resolved == backend::BackendKind::Asio && !rates.common.contains(&options.sample_rate) {
+            return Err(
+                "/devices/sampleRate: 選択したサンプリングレートには対応していません。".into(),
+            );
+        }
+        Ok(())
     }
     pub(super) fn value(&self, path: &str) -> String {
         self.controls
@@ -241,7 +269,11 @@ impl SettingsView {
     }
     pub(super) fn error_text(&self, cx: &App) -> String {
         let prefs = &self.model.read(cx).preferences;
-        let mut error = prefs.text(&self.error);
+        let mut error = if let Some((prefix, message)) = self.error.split_once(": ") {
+            format!("{prefix}: {}", prefs.text(message))
+        } else {
+            prefs.text(&self.error)
+        };
         let mut controls: Vec<_> = self.controls.iter().collect();
         controls.sort_by_key(|c| std::cmp::Reverse(c.field.path.len()));
         for c in controls {
@@ -360,6 +392,7 @@ impl SettingsView {
                 }
             }
             window.refresh();
+            self.notify_host(cx);
             cx.notify();
             return;
         }
@@ -420,6 +453,7 @@ impl SettingsView {
             self.discover(cx);
         }
         window.refresh();
+        self.notify_host(cx);
         cx.notify();
     }
     pub(super) fn reset_device_choices(&mut self, window: &mut Window, cx: &mut Context<Self>) {

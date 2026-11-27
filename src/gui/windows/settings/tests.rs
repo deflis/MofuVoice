@@ -1498,6 +1498,49 @@ fn asio_unselected_shows_rate_hint_and_preview_device_change_skips_rediscovery(
 }
 
 #[gpui_kit::test]
+fn unsaved_settings_draft_blocks_audio_start(cx: &mut TestAppContext) {
+    let dir = directory();
+    let (model, window, view) = open(cx, &dir);
+    assert!(model.read_with(cx, |m, cx| m.can_start(cx)));
+    set(&view, window, "/voice/pitch", "3", cx);
+    cx.run_until_parked();
+    assert!(model.read_with(cx, |m, cx| {
+        m.has_unsaved_audio_draft(cx) && !m.can_start(cx)
+    }));
+    view.update(cx, |v, cx| v.save(CloseTarget::None, cx));
+    cx.run_until_parked();
+    assert!(model.read_with(cx, |m, cx| {
+        !m.has_unsaved_audio_draft(cx) && m.can_start(cx) && m.saved.pitch.semitones == 3.
+    }));
+    cleanup(model, window, cx);
+}
+
+#[gpui_kit::test]
+fn asio_unsupported_sample_rate_rejects_options(cx: &mut TestAppContext) {
+    use crate::backend::{DeviceChannels, DeviceSampleRates};
+
+    let dir = directory();
+    let (model, window, view) = open(cx, &dir);
+    set(&view, window, "/devices/backend", "asio", cx);
+    set(&view, window, "/devices/sampleRate", "44100", cx);
+    view.update(cx, |v, _| {
+        v.rates = Some(DeviceSampleRates {
+            channels: vec![DeviceChannels {
+                sample_rate: 48000,
+                input: 2,
+                output: 2,
+            }],
+            input: vec![48000],
+            output: vec![48000],
+            common: vec![48000],
+        });
+    });
+    let error = view.read_with(cx, |v, _| v.options().unwrap_err());
+    assert!(error.contains("/devices/sampleRate"));
+    cleanup(model, window, cx);
+}
+
+#[gpui_kit::test]
 fn opening_details_clears_save_failed_and_notice_when_switching_mode(cx: &mut TestAppContext) {
     let dir = directory();
     let (model, window, view) = open(cx, &dir);

@@ -27,14 +27,9 @@ impl Render for MainView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let m = self.model.read(cx);
         let t = |s: &str| m.text(s);
-        let can_start = m.can_start();
-        let device_guidance = m
-            .device_warning
-            .map(|warning| warning.message())
-            .or_else(|| {
-                m.needs_input_device()
-                    .then_some("最初に、入力・出力デバイスを設定してください。")
-            });
+        let can_start = m.can_start(cx);
+        let unsaved_draft = m.has_unsaved_audio_draft(cx);
+        let start_guidance = m.start_blocked_message(cx);
         layout::surface(cx)
             .id("main-content")
             .overflow_y_scroll()
@@ -43,7 +38,7 @@ impl Render for MainView {
                     .flex()
                     .justify_between()
                     .items_center()
-                    .child(div().text_xl().child(t("もふボイス / MofuVoice")))
+                    .child(div().text_xl().child(t("もふボイス")))
                     .child(
                         Button::new("language")
                             .label(if m.preferences.language == "ja" {
@@ -137,14 +132,26 @@ impl Render for MainView {
                             })),
                     ),
             )
-            .when_some(device_guidance, |body, message| {
+            .when_some(start_guidance, |body, message| {
                 body.child(t(message)).child(
                     Button::new("device-settings")
-                        .label(t("入力・出力デバイスを確認する"))
+                        .label(t(if unsaved_draft {
+                            "設定を確認する"
+                        } else {
+                            "入力・出力デバイスを確認する"
+                        }))
                         .disabled(m.shutting_down())
-                        .on_click(cx.listener(|v, _, _, cx| {
-                            v.model
-                                .update(cx, |m, cx| m.open_settings(Some("devices".into()), cx))
+                        .on_click(cx.listener(move |v, _, _, cx| {
+                            v.model.update(cx, |m, cx| {
+                                m.open_settings(
+                                    Some(if unsaved_draft {
+                                        m.preferences.section.clone()
+                                    } else {
+                                        "devices".into()
+                                    }),
+                                    cx,
+                                )
+                            })
                         })),
                 )
             })
@@ -171,7 +178,7 @@ impl Render for MainView {
 }
 
 pub fn window_options() -> WindowOptions {
-    layout::window_options("もふボイス", 560., 310., 420., 240.)
+    layout::window_options("もふボイス / MofuVoice", 560., 310., 420., 240.)
 }
 
 #[cfg(all(test, feature = "desktop-tests"))]

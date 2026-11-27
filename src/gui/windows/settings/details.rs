@@ -21,6 +21,7 @@ impl SettingsView {
                 self.set_value(&mode_path, "pro".into(), window, cx);
                 self.save_failed = false;
                 self.notice.clear();
+                self.notify_host(cx);
             }
         }
         let weak = cx.weak_entity();
@@ -352,6 +353,7 @@ impl SettingsView {
         self.notice.clear();
         self.save_failed = false;
         w.refresh();
+        self.notify_host(cx);
         cx.notify();
     }
 }
