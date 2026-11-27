@@ -86,6 +86,41 @@ fn changing_eq_band_count_preserves_other_drafts_and_manual_gate_threshold(
 }
 
 #[gpui_kit::test]
+fn changing_eq_band_count_preserves_discovered_device_choices(cx: &mut TestAppContext) {
+    let dir = directory();
+    let (model, window, view) = open(cx, &dir);
+    let devices = [
+        ("/devices/device", ["", "Microphone A", "Microphone B"]),
+        ("/devices/outputDevice", ["", "Output A", "Output B"]),
+        ("/devices/previewDevice", ["", "Output A", "Output B"]),
+    ];
+    view.update(cx, |v, _| {
+        for (path, items) in devices {
+            let control = v
+                .controls
+                .iter_mut()
+                .find(|c| c.field.path == path)
+                .unwrap();
+            control.items = Some(items.map(str::to_owned).into());
+        }
+    });
+    for add in [true, false] {
+        window
+            .update(cx, |_, window, cx| {
+                view.update(cx, |v, cx| v.band_count("eq", add, window, cx));
+            })
+            .unwrap();
+        view.read_with(cx, |v, _| {
+            for (path, items) in devices {
+                let control = v.controls.iter().find(|c| c.field.path == path).unwrap();
+                assert_eq!(control.items.as_deref().unwrap(), items);
+            }
+        });
+    }
+    cleanup(model, window, cx);
+}
+
+#[gpui_kit::test]
 fn settings_close_retries_after_another_app_operation_and_saves_the_draft(cx: &mut TestAppContext) {
     let dir = directory();
     std::fs::create_dir(&dir).unwrap();

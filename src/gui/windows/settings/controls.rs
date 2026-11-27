@@ -2,7 +2,17 @@ use super::*;
 impl SettingsView {
     pub(super) fn build_controls(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let edits = self.edits();
-        self.controls.clear();
+        let mut device_items = BTreeMap::new();
+        for control in self.controls.drain(..) {
+            if matches!(
+                control.field.path.as_str(),
+                "/devices/device" | "/devices/outputDevice" | "/devices/previewDevice"
+            ) {
+                if let Some(items) = control.items {
+                    device_items.insert(control.field.path, items);
+                }
+            }
+        }
         self.subscriptions.clear();
         let options = self.base.options().expect("validated settings");
         let percent = options.pitch_unit == "percent";
@@ -17,7 +27,9 @@ impl SettingsView {
                 field.text = text.clone();
             }
             let path = field.path.clone();
-            let items = choices(&path, &field.text);
+            let items = device_items
+                .remove(&path)
+                .or_else(|| choices(&path, &field.text));
             let widget = if field.value.is_boolean() {
                 Widget::Toggle
             } else if let Some(items) = items.clone() {
