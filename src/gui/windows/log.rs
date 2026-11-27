@@ -1,5 +1,8 @@
-use crate::gui::{layout, model::AppModel};
-use gpui_kit::component::checkbox::Checkbox;
+use crate::gui::{
+    layout,
+    model::{self, AppModel},
+};
+use gpui_kit::component::{checkbox::Checkbox, Disableable};
 use gpui_kit::*;
 pub struct LogView {
     model: Entity<AppModel>,
@@ -36,6 +39,7 @@ impl Render for LogView {
                 Checkbox::new("processing-log")
                     .label(m.text("処理ログを表示"))
                     .checked(m.logging)
+                    .disabled(m.closing)
                     .on_click(cx.listener(|view, enabled: &bool, _, cx| {
                         view.model.update(cx, |m, cx| m.set_logging(*enabled, cx));
                     })),
@@ -85,20 +89,7 @@ fn append_metrics(value: &serde_json::Value, body: &mut Stateful<Div>, m: &AppMo
                 "maxOutputCallbackUs" => "最大出力コールバック",
                 _ => key,
             };
-            let mut text = match value {
-                serde_json::Value::Null => "—".into(),
-                serde_json::Value::String(s) => s.clone(),
-                _ => value.to_string(),
-            };
-            if !value.is_null() {
-                match key.as_str() {
-                    "elapsedSeconds" => text.push_str(" s"),
-                    "maxCallbackUs" | "maxInputCallbackUs" | "maxOutputCallbackUs" => {
-                        text.push_str(" µs")
-                    }
-                    _ => {}
-                }
-            }
+            let text = format_metric_value(key, value, m);
             let row = div()
                 .flex()
                 .gap_3()
@@ -106,6 +97,44 @@ fn append_metrics(value: &serde_json::Value, body: &mut Stateful<Div>, m: &AppMo
                 .child(text);
             body.extend([row.into_any_element()]);
         }
+    }
+}
+
+fn format_metric_value(key: &str, value: &serde_json::Value, m: &AppModel) -> String {
+    if value.is_null() {
+        return "—".into();
+    }
+    match key {
+        "phase" => value
+            .as_str()
+            .map(|phase| m.text(model::phase_label(phase)))
+            .unwrap_or_else(|| value.to_string()),
+        "elapsedSeconds" => value
+            .as_f64()
+            .map(|seconds| format!("{seconds:.1} s"))
+            .unwrap_or_else(|| value.to_string()),
+        "maxCallbackUs" | "maxInputCallbackUs" | "maxOutputCallbackUs" => value
+            .as_f64()
+            .map(|us| format!("{us:.2} µs"))
+            .unwrap_or_else(|| value.to_string()),
+        "periodMs" | "dspMs" | "inputLatencyMs" | "outputLatencyMs" => value
+            .as_f64()
+            .map(|ms| format!("{ms:.2}"))
+            .unwrap_or_else(|| value.to_string()),
+        "faultFlags" => value
+            .as_u64()
+            .map(|flags| format!("0x{flags:x}"))
+            .unwrap_or_else(|| value.to_string()),
+        "queueFrames"
+        | "observedInputFrames"
+        | "observedOutputFrames"
+        | "queuePeakFrames"
+        | "startupQueueFrames"
+        | "queueCapacityFrames" => format!("{value} frames"),
+        _ => match value {
+            serde_json::Value::String(s) => s.clone(),
+            _ => value.to_string(),
+        },
     }
 }
 
@@ -151,5 +180,52 @@ mod tests {
             });
         }
         window.update(cx, |_, w, _| w.remove_window()).unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn metric_values_format_numbers_flags_units_and_phases(cx: &mut TestAppContext) {
+        let model = cx.update(|cx| {
+            cx.new(|cx| {
+                AppModel::new(
+                    Default::default(),
+                    Default::default(),
+                    Preferences {
+                        language: "ja".into(),
+                        section: "voice".into(),
+                    },
+                    cx,
+                )
+            })
+        });
+        model.read_with(cx, |m, _| {
+            assert_eq!(
+                super::format_metric_value("phase", &serde_json::json!("running"), m),
+                "動作中"
+            );
+            assert_eq!(
+                super::format_metric_value("elapsedSeconds", &serde_json::json!(12.345), m),
+                "12.3 s"
+            );
+            assert_eq!(
+                super::format_metric_value("maxCallbackUs", &serde_json::json!(123.456), m),
+                "123.46 µs"
+            );
+            assert_eq!(
+                super::format_metric_value("periodMs", &serde_json::json!(10.666666), m),
+                "10.67"
+            );
+            assert_eq!(
+                super::format_metric_value("faultFlags", &serde_json::json!(26), m),
+                "0x1a"
+            );
+            assert_eq!(
+                super::format_metric_value("queueFrames", &serde_json::json!(512), m),
+                "512 frames"
+            );
+            assert_eq!(
+                super::format_metric_value("error", &serde_json::Value::Null, m),
+                "—"
+            );
+        });
     }
 }
