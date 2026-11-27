@@ -34,6 +34,11 @@ impl Render for MainView {
         let can_start = m.can_start(cx);
         let unsaved_draft = m.has_unsaved_audio_draft(cx);
         let start_guidance = m.start_blocked_message(cx);
+        let error_text = if m.error.is_empty() {
+            m.info.error.clone().unwrap_or_default()
+        } else {
+            m.error.clone()
+        };
         layout::surface(cx)
             .id("main-content")
             .overflow_y_scroll()
@@ -174,15 +179,13 @@ impl Render for MainView {
                 m.saved.sample_rate,
                 m.saved.frames
             )))
-            .child(
-                div()
-                    .text_color(crate::gui::theme::palette(cx).danger)
-                    .child(if m.error.is_empty() {
-                        m.info.error.clone().unwrap_or_default()
-                    } else {
-                        m.error.clone()
-                    }),
-            )
+            .when(!error_text.is_empty(), |body| {
+                body.child(
+                    div()
+                        .text_color(crate::gui::theme::palette(cx).danger)
+                        .child(error_text),
+                )
+            })
     }
 }
 
