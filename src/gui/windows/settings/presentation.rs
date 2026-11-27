@@ -25,6 +25,9 @@ impl SettingsView {
         let disabled = !self.editable(path, cx);
         let value = &control.field.text;
         let mut label = field_label(path);
+        if path == "/devices/device" && self.resolved_backend() == backend::BackendKind::Asio {
+            label = "入出力デバイス".into();
+        }
         if path == "/voice/pitch" && self.percent() {
             label = label.replace("半音", "%");
         }

@@ -149,13 +149,21 @@ impl SettingsView {
         if let Some(rates) = &self.rates {
             if kind == backend::BackendKind::Cpal {
                 body = body
-                    .child(format!("{} {:?} Hz", t("入力の対応レート："), rates.input))
-                    .child(format!("{} {:?} Hz", t("出力の対応レート："), rates.output));
+                    .child(format!(
+                        "{} {}",
+                        t("入力の対応レート："),
+                        format_rates(&rates.input)
+                    ))
+                    .child(format!(
+                        "{} {}",
+                        t("出力の対応レート："),
+                        format_rates(&rates.output)
+                    ));
             }
             body = body.child(format!(
-                "{} {:?} Hz",
+                "{} {}",
                 t("入出力で変換なしに使えるレート"),
-                rates.common
+                format_rates(&rates.common)
             ));
             let rate = self
                 .value("/devices/sampleRate")
@@ -226,9 +234,14 @@ impl SettingsView {
                     .map(usize::to_string)
                     .collect::<Vec<_>>()
                     .join(",");
+                let label = if channel > outputs {
+                    format!("{channel}ch{}", t("（利用不可）"))
+                } else {
+                    format!("{channel}ch")
+                };
                 output_buttons = output_buttons.child(
                     Button::new(SharedString::from(format!("output-channel:{channel}")))
-                        .label(format!("{channel}ch"))
+                        .label(label)
                         .selected(selected.contains(&channel))
                         .disabled(m.locked() || self.pending())
                         .on_click(move |_, w, cx| {
@@ -285,4 +298,18 @@ impl SettingsView {
             .child(self.detail_button("devices", owner, cx));
         body.into_any_element()
     }
+}
+
+fn format_rates(rates: &[u32]) -> String {
+    if rates.is_empty() {
+        return "—".into();
+    }
+    format!(
+        "{} Hz",
+        rates
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
 }

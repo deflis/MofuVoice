@@ -112,6 +112,7 @@ fn restored_previews_have_english_labels_and_explanations() {
                 "{}: {value}",
                 stage.id()
             );
+            assert!(!value.contains("  "), "{}: {value}", stage.id());
         }
     }
 }
