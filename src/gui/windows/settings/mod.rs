@@ -164,7 +164,8 @@ impl SettingsView {
             }
         };
         let path = model.path.clone();
-        let prefs = model.preferences.stored();
+        let persisted = model.preferences.clone();
+        let prefs = persisted.stored();
         let saved = options.clone();
         self.operation = Some(Operation::Save);
         self.model.update(cx, |m, cx| {
@@ -198,6 +199,8 @@ impl SettingsView {
                             v.close = CloseTarget::None;
                             v.model.update(cx, |m, cx| {
                                 m.saved = options;
+                                m.persisted_preferences = persisted;
+                                m.quit_save_failed = false;
                                 if target == CloseTarget::Application {
                                     m.shutdown(cx);
                                 } else {
@@ -255,8 +258,11 @@ impl Render for SettingsView {
                     .selected(selected)
                     .on_click(cx.listener(move |v, _, _, cx| {
                         v.model.update(cx, |m, cx| {
-                            m.preferences.section = id.clone();
-                            cx.notify();
+                            if m.preferences.section != id {
+                                m.preferences.section = id.clone();
+                                m.quit_save_failed = false;
+                                cx.notify();
+                            }
                         });
                     })),
             );

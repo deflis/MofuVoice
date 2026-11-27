@@ -60,6 +60,7 @@ impl Render for MainView {
                                         "ja"
                                     }
                                     .into();
+                                    m.quit_save_failed = false;
                                     cx.notify();
                                 })
                             })),
@@ -149,14 +150,7 @@ impl Render for MainView {
                 t(if m.closing {
                     "終了中"
                 } else {
-                    match m.info.phase {
-                        "opening" => "開始中",
-                        "running" => "動作中",
-                        "stopped" => "停止済み",
-                        "inspected" => "検査完了",
-                        "error" => "エラー",
-                        _ => "準備完了",
-                    }
+                    crate::gui::model::phase_label(m.info.phase)
                 }),
                 m.saved.sample_rate,
                 m.saved.frames

@@ -17,6 +17,7 @@ pub struct AppModel {
     pub session: Arc<Mutex<Session>>,
     pub saved: Options,
     pub preferences: Preferences,
+    pub persisted_preferences: Preferences,
     pub path: PathBuf,
     pub info: AudioInfo,
     pub log: Option<AudioLog>,
@@ -29,6 +30,7 @@ pub struct AppModel {
     pub active: bool,
     pub closing: bool,
     pub quit_requested: bool,
+    pub quit_save_failed: bool,
     opening_settings: bool,
     opening_log: bool,
     opening_spectrum: bool,
@@ -102,6 +104,7 @@ impl AppModel {
         Self {
             session,
             saved,
+            persisted_preferences: preferences.clone(),
             preferences,
             path,
             info: AudioInfo::default(),
@@ -115,6 +118,7 @@ impl AppModel {
             active: false,
             closing: false,
             quit_requested: false,
+            quit_save_failed: false,
             opening_settings: false,
             opening_log: false,
             opening_spectrum: false,
@@ -217,12 +221,18 @@ impl AppModel {
             return;
         }
         if let Some(section) = section {
-            self.preferences.section = section;
+            if self.preferences.section != section {
+                self.preferences.section = section;
+                self.quit_save_failed = false;
+            }
         }
         let model = cx.entity();
         if let Some((handle, _)) = &self.settings {
             let handle = *handle;
             cx.defer(move |cx| {
+                if model.read(cx).closing {
+                    return;
+                }
                 if handle.update(cx, |_, w, _| w.activate_window()).is_err() {
                     model.update(cx, |m, cx| {
                         m.settings = None;
@@ -237,6 +247,10 @@ impl AppModel {
         let options = self.saved.clone();
         // Creating/activating a window can render it synchronously. Release the model first.
         cx.defer(move |cx| {
+            if model.read(cx).closing {
+                model.update(cx, |m, _| m.opening_settings = false);
+                return;
+            }
             let result =
                 gpui_kit::open_window(windows::settings::window_options(), cx, |window, cx| {
                     let view = cx.new(|cx| SettingsView::new(model.clone(), options, window, cx));
@@ -249,17 +263,22 @@ impl AppModel {
                     });
                     view
                 });
+            let mut stale_window = None;
             model.update(cx, |m, cx| {
                 m.opening_settings = false;
                 match result {
-                    Ok((handle, view)) => {
+                    Ok((handle, view)) if !m.closing => {
                         m.settings = Some((handle, view.clone()));
                         cx.defer(move |cx| view.update(cx, |v, cx| v.discover(cx)));
                     }
+                    Ok((handle, _)) => stale_window = Some(handle),
                     Err(e) => m.error = e.to_string(),
                 }
                 cx.notify();
             });
+            if let Some(handle) = stale_window {
+                _ = handle.update(cx, |_, w, _| w.remove_window());
+            }
         });
         cx.notify();
     }
@@ -270,6 +289,9 @@ impl AppModel {
         let model = cx.entity();
         if let Some(handle) = self.log_window {
             cx.defer(move |cx| {
+                if model.read(cx).closing {
+                    return;
+                }
                 if handle.update(cx, |_, w, _| w.activate_window()).is_err() {
                     model.update(cx, |m, cx| {
                         m.log_window = None;
@@ -282,6 +304,10 @@ impl AppModel {
         }
         self.opening_log = true;
         cx.defer(move |cx| {
+            if model.read(cx).closing {
+                model.update(cx, |m, _| m.opening_log = false);
+                return;
+            }
             let close = model.clone();
             let observed = model.clone();
             let result = gpui_kit::open_window(windows::log::window_options(), cx, |window, cx| {
@@ -294,19 +320,30 @@ impl AppModel {
                 });
                 cx.new(|cx| windows::log::LogView::new(observed, cx))
             });
+            let mut stale_window = None;
             model.update(cx, |m, cx| {
                 m.opening_log = false;
                 match result {
-                    Ok((handle, _)) => {
+                    Ok((handle, _)) if !m.closing => {
                         m.log_window = Some(handle);
                     }
+                    Ok((handle, _)) => stale_window = Some(handle),
                     Err(e) => m.error = e.to_string(),
                 };
                 cx.notify();
             });
+            if let Some(handle) = stale_window {
+                _ = handle.update(cx, |_, w, _| w.remove_window());
+            }
         });
     }
     pub fn set_logging(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.closing {
+            self.logging = false;
+            self.log = None;
+            cx.notify();
+            return;
+        }
         self.session
             .lock()
             .expect("session control lock")
@@ -324,6 +361,9 @@ impl AppModel {
         let model = cx.entity();
         if let Some(handle) = self.spectrum_window {
             cx.defer(move |cx| {
+                if model.read(cx).closing {
+                    return;
+                }
                 if handle.update(cx, |_, w, _| w.activate_window()).is_err() {
                     model.update(cx, |m, cx| {
                         m.spectrum_window = None;
@@ -335,6 +375,10 @@ impl AppModel {
         }
         self.opening_spectrum = true;
         cx.defer(move |cx| {
+            if model.read(cx).closing {
+                model.update(cx, |m, _| m.opening_spectrum = false);
+                return;
+            }
             let controller = match crate::spectrum::SpectrumController::start() {
                 Ok(c) => c,
                 Err(e) => {
@@ -358,14 +402,19 @@ impl AppModel {
                     });
                     cx.new(|cx| windows::spectrum::SpectrumView::new(controller, observed, cx))
                 });
+            let mut stale_window = None;
             model.update(cx, |m, cx| {
                 m.opening_spectrum = false;
                 match result {
-                    Ok((handle, _)) => m.spectrum_window = Some(handle),
+                    Ok((handle, _)) if !m.closing => m.spectrum_window = Some(handle),
+                    Ok((handle, _)) => stale_window = Some(handle),
                     Err(e) => m.error = e.to_string(),
                 };
                 cx.notify();
             });
+            if let Some(handle) = stale_window {
+                _ = handle.update(cx, |_, w, _| w.remove_window());
+            }
         });
     }
     pub fn request_quit(&mut self, cx: &mut Context<Self>) {
@@ -388,9 +437,14 @@ impl AppModel {
         if self.closing || self.busy {
             return;
         }
+        if self.preferences == self.persisted_preferences || self.quit_save_failed {
+            self.shutdown(cx);
+            return;
+        }
         self.busy = true;
         let options = self.saved.clone();
-        let prefs = self.preferences.stored();
+        let persisted = self.preferences.clone();
+        let prefs = persisted.stored();
         let path = self.path.clone();
         let task = cx.background_executor().spawn(async move {
             crate::gui_settings::save(&path, &options, &prefs).map_err(|e| e.to_string())
@@ -400,9 +454,14 @@ impl AppModel {
             _ = this.update(cx, |m, cx| {
                 m.busy = false;
                 match result {
-                    Ok(()) => m.shutdown(cx),
+                    Ok(()) => {
+                        m.persisted_preferences = persisted;
+                        m.quit_save_failed = false;
+                        m.shutdown(cx);
+                    }
                     Err(e) => {
                         m.quit_requested = false;
+                        m.quit_save_failed = true;
                         m.report(e, cx);
                     }
                 }
@@ -427,6 +486,17 @@ impl AppModel {
         })
         .detach();
         cx.notify();
+    }
+}
+
+pub fn phase_label(phase: &str) -> &'static str {
+    match phase {
+        "opening" => "開始中",
+        "running" => "動作中",
+        "stopped" => "停止済み",
+        "inspected" => "検査完了",
+        "error" => "エラー",
+        _ => "準備完了",
     }
 }
 
@@ -569,5 +639,102 @@ mod tests {
             assert!(model.can_start());
             assert!(!model.device_check.accepts(older_check));
         });
+    }
+
+    #[cfg(feature = "desktop-tests")]
+    #[gpui_kit::test]
+    fn persist_and_quit_skips_unmodified_writes_and_allows_retry_after_save_failure(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use gpui_kit::AppContext;
+
+        let blocker = std::env::temp_dir().join(format!(
+            "mofu-quit-readonly-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&blocker, "not a directory").unwrap();
+        let settings_path = blocker.join("settings.ini");
+
+        let unmodified = cx.update(|cx| {
+            cx.new(|cx| {
+                super::AppModel::new(
+                    Options::default(),
+                    settings_path.clone(),
+                    super::Preferences {
+                        language: "en".into(),
+                        section: "voice".into(),
+                    },
+                    cx,
+                )
+            })
+        });
+        unmodified.update(cx, |m, cx| m.request_quit(cx));
+        cx.run_until_parked();
+        assert!(unmodified.read_with(cx, |m, _| m.closing && m.error.is_empty()));
+
+        let modified = cx.update(|cx| {
+            cx.new(|cx| {
+                super::AppModel::new(
+                    Options::default(),
+                    settings_path,
+                    super::Preferences {
+                        language: "en".into(),
+                        section: "voice".into(),
+                    },
+                    cx,
+                )
+            })
+        });
+        modified.update(cx, |m, cx| {
+            m.preferences.language = "ja".into();
+            m.request_quit(cx);
+        });
+        cx.run_until_parked();
+        assert!(modified.read_with(cx, |m, _| !m.closing
+            && !m.quit_requested
+            && m.quit_save_failed
+            && !m.error.is_empty()));
+
+        modified.update(cx, |m, cx| m.request_quit(cx));
+        cx.run_until_parked();
+        assert!(modified.read_with(cx, |m, _| m.closing));
+
+        std::fs::remove_file(blocker).unwrap();
+    }
+
+    #[cfg(feature = "desktop-tests")]
+    #[gpui_kit::test]
+    fn closing_cancels_deferred_window_open_and_avoids_session_lock_in_set_logging(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use gpui_kit::AppContext;
+
+        let model = cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::gui::theme::init(cx);
+            cx.new(|cx| {
+                super::AppModel::new(
+                    Options::default(),
+                    Default::default(),
+                    super::Preferences::system(),
+                    cx,
+                )
+            })
+        });
+        model.update(cx, |m, cx| {
+            m.open_log(cx);
+            m.closing = true;
+        });
+        cx.run_until_parked();
+        assert!(model.read_with(cx, |m, _| m.log_window.is_none() && !m.opening_log));
+
+        let session = model.read_with(cx, |m, _| m.session.clone());
+        let _held = session.lock().unwrap();
+        model.update(cx, |m, cx| m.set_logging(true, cx));
+        assert!(model.read_with(cx, |m, _| !m.logging));
     }
 }

@@ -35,8 +35,11 @@ pub(super) fn render(
                     .label(format!("↓  {}", t(label)))
                     .on_click(cx.listener(move |v, _, _, cx| {
                         v.model.update(cx, |m, cx| {
-                            m.preferences.section = id.clone();
-                            cx.notify();
+                            if m.preferences.section != id {
+                                m.preferences.section = id.clone();
+                                m.quit_save_failed = false;
+                                cx.notify();
+                            }
                         })
                     })),
             );
