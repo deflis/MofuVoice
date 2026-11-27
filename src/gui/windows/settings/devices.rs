@@ -30,20 +30,21 @@ impl SettingsView {
         let handle = self.handle;
         let task = cx.background_executor().spawn(async move {
             let choices = model::device_choices(kind)?;
-            #[cfg(all(windows, feature = "asio"))]
-            let _apartment = if choices.resolved == backend::BackendKind::Asio {
-                Some(crate::session::ComApartment::initialize().map_err(|e| e.to_string())?)
-            } else {
-                None
-            };
-            let rates = if choices.resolved == backend::BackendKind::Asio && device.is_empty() {
-                Ok(None)
-            } else {
+            let rates = (|| {
+                if choices.resolved == backend::BackendKind::Asio && device.is_empty() {
+                    return Ok(None);
+                }
+                #[cfg(all(windows, feature = "asio"))]
+                let _apartment = if choices.resolved == backend::BackendKind::Asio {
+                    Some(crate::session::ComApartment::initialize().map_err(|e| e.to_string())?)
+                } else {
+                    None
+                };
                 backend::select(choices.resolved, &output)
                     .and_then(|s| s.supported_sample_rates(&device))
                     .map(Some)
                     .map_err(|e| e.to_string())
-            };
+            })();
             Ok::<_, String>((choices, rates))
         });
         let model = self.model.clone();
@@ -51,6 +52,9 @@ impl SettingsView {
             let result = task.await;
             // Always release the app-level operation gate, even if the view disappeared.
             model.update(cx, |m, cx| {
+                if let Ok((choices, _)) = &result {
+                    m.update_saved_device_warning(kind, choices);
+                }
                 m.busy = false;
                 cx.notify();
             });

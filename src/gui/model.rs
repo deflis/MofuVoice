@@ -148,9 +148,10 @@ impl AppModel {
         let options = self.saved.clone();
         let generation = self.device_check.advance();
         self.device_warning = None;
-        let task = cx
-            .background_executor()
-            .spawn(async move { saved_device_warning(&options, device_choices(options.backend)) });
+        let task = cx.background_executor().spawn(async move {
+            let choices = device_choices(options.backend).ok();
+            saved_device_warning(&options, choices.as_ref())
+        });
         cx.spawn(async move |this, cx| {
             let warning = task.await;
             _ = this.update(cx, |m, cx| {
@@ -162,6 +163,17 @@ impl AppModel {
         })
         .detach();
         cx.notify();
+    }
+    pub fn update_saved_device_warning(
+        &mut self,
+        kind: backend::BackendKind,
+        choices: &DeviceChoices,
+    ) {
+        if !self.closing && kind == self.saved.backend {
+            // A completed discovery supersedes an earlier background check for the saved backend.
+            self.device_check.advance();
+            self.device_warning = saved_device_warning(&self.saved, Some(choices));
+        }
     }
     pub fn start(&mut self, inspect: bool, cx: &mut Context<Self>) {
         if !self.can_start() {
@@ -443,9 +455,9 @@ impl DeviceWarning {
 
 fn saved_device_warning(
     options: &Options,
-    choices: Result<DeviceChoices, String>,
+    choices: Option<&DeviceChoices>,
 ) -> Option<DeviceWarning> {
-    let Ok(choices) = choices else {
+    let Some(choices) = choices else {
         return Some(DeviceWarning::Unavailable);
     };
     let missing = |name: &str, devices: &[String]| {
@@ -481,12 +493,10 @@ mod tests {
 
     #[test]
     fn saved_device_warning_checks_each_cpal_route_and_distinguishes_enumeration_failure() {
-        let choices = || {
-            Ok(DeviceChoices {
-                inputs: vec!["mic".into()],
-                outputs: vec!["speaker".into(), "headphones".into()],
-                resolved: BackendKind::Cpal,
-            })
+        let choices = DeviceChoices {
+            inputs: vec!["mic".into()],
+            outputs: vec!["speaker".into(), "headphones".into()],
+            resolved: BackendKind::Cpal,
         };
         let options = Options {
             device: "mic".into(),
@@ -494,8 +504,11 @@ mod tests {
             preview_device: "headphones".into(),
             ..Default::default()
         };
-        assert_eq!(saved_device_warning(&options, choices()), None);
-        assert_eq!(saved_device_warning(&Options::default(), choices()), None);
+        assert_eq!(saved_device_warning(&options, Some(&choices)), None);
+        assert_eq!(
+            saved_device_warning(&Options::default(), Some(&choices)),
+            None
+        );
         for missing in [
             Options {
                 device: "missing".into(),
@@ -511,13 +524,50 @@ mod tests {
             },
         ] {
             assert_eq!(
-                saved_device_warning(&missing, choices()),
+                saved_device_warning(&missing, Some(&choices)),
                 Some(DeviceWarning::Missing)
             );
         }
         assert_eq!(
-            saved_device_warning(&options, Err("failed".into())),
+            saved_device_warning(&options, None),
             Some(DeviceWarning::Unavailable)
         );
+    }
+
+    #[cfg(feature = "desktop-tests")]
+    #[gpui_kit::test]
+    fn discovery_recovers_start_only_for_saved_backend(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::AppContext;
+
+        let model = cx.update(|cx| {
+            cx.new(|cx| {
+                super::AppModel::new(
+                    Options {
+                        backend: BackendKind::Cpal,
+                        device: "mic".into(),
+                        ..Default::default()
+                    },
+                    Default::default(),
+                    super::Preferences::system(),
+                    cx,
+                )
+            })
+        });
+        let choices = DeviceChoices {
+            inputs: vec!["mic".into()],
+            outputs: vec![],
+            resolved: BackendKind::Cpal,
+        };
+        model.update(cx, |model, _| {
+            let older_check = model.device_check.advance();
+            model.device_warning = Some(DeviceWarning::Unavailable);
+            assert!(!model.can_start());
+            model.update_saved_device_warning(BackendKind::Auto, &choices);
+            assert!(!model.can_start());
+            assert!(model.device_check.accepts(older_check));
+            model.update_saved_device_warning(BackendKind::Cpal, &choices);
+            assert!(model.can_start());
+            assert!(!model.device_check.accepts(older_check));
+        });
     }
 }
