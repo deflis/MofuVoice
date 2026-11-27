@@ -57,7 +57,14 @@ pub fn fields(settings: &Settings) -> Vec<Field> {
 pub fn semitones_to_percent(value: f64) -> f64 {
     100. * 2f64.powf(value / 12.)
 }
-pub fn percent_to_semitones(value: f64) -> Result<f64, String> {
+pub fn restore_percent_pitch(value: f64, original: f64) -> Result<f64, String> {
+    if value == semitones_to_percent(original) {
+        return Ok(original);
+    }
+    percent_to_semitones(value)
+}
+
+fn percent_to_semitones(value: f64) -> Result<f64, String> {
     if !value.is_finite() || !(50. ..=200.).contains(&value) {
         return Err("Pitch percentage must be between 50 and 200".into());
     }
@@ -76,10 +83,11 @@ pub fn parse(settings: &Settings, edits: &BTreeMap<String, String>) -> Result<Op
             .pointer_mut(path)
             .ok_or_else(|| format!("Unknown setting: {path}"))?;
         *slot = if percent && path == "/voice/pitch" {
-            Value::from(percent_to_semitones(
-                text.parse()
-                    .map_err(|_| format!("{path}: enter a percentage"))?,
-            )?)
+            let original = slot.as_f64().expect("numeric pitch");
+            let entered = text
+                .parse()
+                .map_err(|_| format!("{path}: enter a percentage"))?;
+            Value::from(restore_percent_pitch(entered, original)?)
         } else {
             match slot {
                 Value::String(_) => Value::String(text.clone()),
@@ -224,7 +232,7 @@ mod tests {
         let options = Options {
             pitch_unit: "percent".into(),
             pitch: crate::pitch::PitchSettings {
-                semitones: 7.5,
+                semitones: 3.0,
                 ..Default::default()
             },
             ..Default::default()
@@ -234,7 +242,13 @@ mod tests {
             .into_iter()
             .map(|f| (f.path, f.text))
             .collect();
-        assert!((parse(&settings, &edits).unwrap().pitch.semitones - 7.5).abs() < 1e-10);
+        assert_eq!(parse(&settings, &edits).unwrap(), options);
+        let mut edits = edits;
+        edits.insert("/voice/pitch".into(), "150".into());
+        assert_eq!(
+            parse(&settings, &edits).unwrap().pitch.semitones,
+            percent_to_semitones(150.).unwrap()
+        );
         for bad in [0., 49., 201., f64::NAN] {
             assert!(percent_to_semitones(bad).is_err());
         }

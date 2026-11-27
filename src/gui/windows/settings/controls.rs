@@ -348,7 +348,14 @@ impl SettingsView {
                 .ok_or_else(|| "ピッチの値を入力してから単位を変更してください。".to_string())
                 .and_then(|n| {
                     if self.percent() {
-                        draft::percent_to_semitones(n)
+                        draft::restore_percent_pitch(
+                            n,
+                            self.base
+                                .options()
+                                .expect("validated settings")
+                                .pitch
+                                .semitones,
+                        )
                     } else {
                         crate::pitch::pitch_ratio(n)
                             .map(|_| n)
