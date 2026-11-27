@@ -4,6 +4,12 @@ use gpui_kit::{base::TestSupportExt as _, *};
 fn height(db: f64) -> f32 {
     ((db.clamp(-60., 0.) + 60.) / 60.) as f32
 }
+fn hold_top(bounds: Bounds<Pixels>, db: f64) -> Pixels {
+    let line_height = px(2.);
+    (bounds.bottom() - bounds.size.height * height(db))
+        .max(bounds.top())
+        .min(bounds.bottom() - line_height)
+}
 fn clipped(levels: MeterLevels) -> bool {
     levels.hold_db >= 0.
 }
@@ -58,7 +64,10 @@ pub fn render(levels: MeterLevels, cx: &App) -> Div {
                                 }
                                 window.paint_quad(fill(
                                     Bounds::new(
-                                        point(bounds.left() + px(46.), y(levels.hold_db)),
+                                        point(
+                                            bounds.left() + px(46.),
+                                            hold_top(bounds, levels.hold_db),
+                                        ),
                                         size(px(30.), px(2.)),
                                     ),
                                     p.foreground,
@@ -116,6 +125,20 @@ mod tests {
         assert!(!clipped(levels));
         assert!(height(levels.rms_db) < height(levels.peak_db));
         assert!(height(levels.peak_db) < height(levels.hold_db));
+        let bounds = gpui_kit::Bounds::new(
+            gpui_kit::point(gpui_kit::px(0.), gpui_kit::px(10.)),
+            gpui_kit::size(gpui_kit::px(80.), gpui_kit::px(252.)),
+        );
+        assert_eq!(
+            super::hold_top(bounds, -60.),
+            bounds.bottom() - gpui_kit::px(2.)
+        );
+        assert_eq!(
+            super::hold_top(bounds, -120.),
+            bounds.bottom() - gpui_kit::px(2.)
+        );
+        assert_eq!(super::hold_top(bounds, 0.), bounds.top());
+        assert_eq!(super::hold_top(bounds, 6.), bounds.top());
     }
 
     #[cfg(feature = "desktop-tests")]

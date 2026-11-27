@@ -1,5 +1,7 @@
 use crate::gui::{layout, model::AppModel};
-use crate::spectrum::{SpectrumController, BYTES_PER_PIXEL, IMAGE_HEIGHT, IMAGE_WIDTH};
+use crate::spectrum::{
+    MeterLevels, SpectrumController, BYTES_PER_PIXEL, IMAGE_HEIGHT, IMAGE_WIDTH,
+};
 use gpui_kit::{
     component::{button::Button, Selectable},
     *,
@@ -14,6 +16,7 @@ pub struct SpectrumView {
     generation: u64,
     image: Option<Arc<RenderImage>>,
     last_rendered: Option<Arc<RenderImage>>,
+    last_levels: Option<MeterLevels>,
     wide: bool,
     frozen: bool,
     _tick: Task<()>,
@@ -30,10 +33,16 @@ impl SpectrumView {
             executor.timer(Duration::from_millis(33)).await;
             if this
                 .update(cx, |v, cx| {
-                    if v.controller.copy_image(&mut v.pixels, &mut v.generation) {
+                    let image_updated = v.controller.copy_image(&mut v.pixels, &mut v.generation);
+                    if image_updated {
                         v.image = Some(bgra_image(&v.pixels));
                     }
-                    cx.notify();
+                    let levels = v.controller.levels();
+                    let levels_changed = v.last_levels != Some(levels);
+                    if image_updated || levels_changed {
+                        v.last_levels = Some(levels);
+                        cx.notify();
+                    }
                 })
                 .is_err()
             {
@@ -48,6 +57,7 @@ impl SpectrumView {
             generation: 0,
             image: None,
             last_rendered: None,
+            last_levels: None,
             wide: true,
             frozen: false,
             _tick: tick,
@@ -108,18 +118,23 @@ impl Render for SpectrumView {
                         })),
                 ),
         );
-        let mut display = div().flex().flex_1().min_h_0().gap_3();
+        let mut spectrogram = div().flex_1().min_w_0().min_h_0();
         if let Some(image) = &self.image {
-            display = display.child(
-                div().flex_1().min_w_0().min_h_0().child(
-                    img(image.clone())
-                        .w_full()
-                        .h_full()
-                        .object_fit(ObjectFit::Contain),
-                ),
+            spectrogram = spectrogram.child(
+                img(image.clone())
+                    .w_full()
+                    .h_full()
+                    .object_fit(ObjectFit::Contain),
             );
         }
-        body.child(display.child(meter::render(levels, cx)))
+        let display = div()
+            .flex()
+            .flex_1()
+            .min_h_0()
+            .gap_3()
+            .child(spectrogram)
+            .child(meter::render(levels, cx));
+        body.child(display)
             .child("8 kHz ↑ · 20 Hz ↓     −80 … 0 dBFS     ← history · now →")
     }
 }
