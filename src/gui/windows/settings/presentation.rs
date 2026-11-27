@@ -111,7 +111,7 @@ impl SettingsView {
         match &control.widget {
             Widget::Input(state) if control.field.value.is_number() => NumberInput::new(state)
                 .bg(crate::gui::theme::palette(cx).raised)
-                .accessibility_label(label.to_string())
+                .accessibility_label(self.model.read(cx).text(label))
                 .disabled(disabled)
                 .into_any_element(),
             Widget::Input(state) => Input::new(state)

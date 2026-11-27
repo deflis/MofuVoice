@@ -89,11 +89,14 @@ fn automatic_level_and_post_compressor_are_independent() {
     let auto = build(FilterStage::Level, &o, &preferences());
     assert!(auto.graphs.is_empty());
     assert!(auto.values.iter().any(|s| s.contains("-20")));
+    assert!(!auto.values.iter().any(|s| s.contains("chart")));
+    assert!(auto.values.iter().any(|s| s.contains("peak guard")));
     o.level.enabled = false;
     o.level.compressor_enabled = true;
     let compressor = build(FilterStage::Level, &o, &preferences());
     assert_eq!(compressor.graphs.len(), 1);
     assert!(!compressor.values.iter().any(|s| s.contains("-20")));
+    assert!(compressor.values.iter().any(|s| s.contains("chart")));
 }
 
 #[test]

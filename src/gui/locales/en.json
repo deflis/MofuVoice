@@ -260,5 +260,6 @@
   "減衰時間": "Decay time",
   "無音判定": "Activity threshold",
   "モード": "Mode",
-  "デバイスを選ぶと対応レートを表示します。": "Select a device to see supported rates."
+  "デバイスを選ぶと対応レートを表示します。": "Select a device to see supported rates.",
+  "有効な音量処理が動作する場合、内部ピークガード（−1 dBFS）を適用します。": "An internal peak guard (−1 dBFS) applies when level processing is active."
 }

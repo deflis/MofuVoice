@@ -43,7 +43,7 @@ impl Render for MainView {
                     .flex()
                     .justify_between()
                     .items_center()
-                    .child(div().text_xl().child(t("もふボイス")))
+                    .child(div().text_xl().child(t("もふボイス / MofuVoice")))
                     .child(
                         Button::new("language")
                             .label(if m.preferences.language == "ja" {

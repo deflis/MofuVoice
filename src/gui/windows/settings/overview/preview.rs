@@ -281,7 +281,11 @@ pub fn build(stage: FilterStage, o: &Options, p: &Preferences) -> Preview {
                 ));
                 out.values.push(timing(p, s.attack_ms, s.release_ms));
             }
-            out.values.push(t("図は圧縮の設定静特性です。有効な音量処理が動作する場合、内部ピークガード（−1 dBFS）を適用します。"));
+            out.values.push(t(if s.compressor_enabled {
+                "図は圧縮の設定静特性です。有効な音量処理が動作する場合、内部ピークガード（−1 dBFS）を適用します。"
+            } else {
+                "有効な音量処理が動作する場合、内部ピークガード（−1 dBFS）を適用します。"
+            }));
         }
         FilterStage::Reverb => {
             let s = o.reverb;
