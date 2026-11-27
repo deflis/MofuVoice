@@ -138,6 +138,9 @@ impl AppModel {
     pub fn locked(&self) -> bool {
         self.active || self.busy || self.closing
     }
+    fn shutting_down(&self) -> bool {
+        self.closing || self.quit_requested
+    }
     pub fn report(&mut self, error: impl ToString, cx: &mut Context<Self>) {
         self.error = error.to_string();
         cx.notify();
@@ -241,7 +244,7 @@ impl AppModel {
         cx.notify();
     }
     pub fn open_settings(&mut self, section: Option<String>, cx: &mut Context<Self>) {
-        if self.closing || self.opening_settings {
+        if self.shutting_down() || self.opening_settings {
             return;
         }
         if let Some(section) = section {
@@ -254,7 +257,7 @@ impl AppModel {
         if let Some((handle, _)) = &self.settings {
             let handle = *handle;
             cx.defer(move |cx| {
-                if model.read(cx).closing {
+                if model.read(cx).shutting_down() {
                     return;
                 }
                 if handle.update(cx, |_, w, _| w.activate_window()).is_err() {
@@ -271,7 +274,7 @@ impl AppModel {
         let options = self.saved.clone();
         // Creating/activating a window can render it synchronously. Release the model first.
         cx.defer(move |cx| {
-            if model.read(cx).closing {
+            if model.read(cx).shutting_down() {
                 model.update(cx, |m, _| m.opening_settings = false);
                 return;
             }
@@ -291,7 +294,7 @@ impl AppModel {
             model.update(cx, |m, cx| {
                 m.opening_settings = false;
                 match result {
-                    Ok((handle, view)) if !m.closing => {
+                    Ok((handle, view)) if !m.shutting_down() => {
                         m.settings = Some((handle, view.clone()));
                         cx.defer(move |cx| view.update(cx, |v, cx| v.discover(cx)));
                     }
@@ -307,13 +310,13 @@ impl AppModel {
         cx.notify();
     }
     pub fn open_log(&mut self, cx: &mut Context<Self>) {
-        if self.closing || self.opening_log {
+        if self.shutting_down() || self.opening_log {
             return;
         }
         let model = cx.entity();
         if let Some(handle) = self.log_window {
             cx.defer(move |cx| {
-                if model.read(cx).closing {
+                if model.read(cx).shutting_down() {
                     return;
                 }
                 if handle.update(cx, |_, w, _| w.activate_window()).is_err() {
@@ -328,7 +331,7 @@ impl AppModel {
         }
         self.opening_log = true;
         cx.defer(move |cx| {
-            if model.read(cx).closing {
+            if model.read(cx).shutting_down() {
                 model.update(cx, |m, _| m.opening_log = false);
                 return;
             }
@@ -348,7 +351,7 @@ impl AppModel {
             model.update(cx, |m, cx| {
                 m.opening_log = false;
                 match result {
-                    Ok((handle, _)) if !m.closing => {
+                    Ok((handle, _)) if !m.shutting_down() => {
                         m.log_window = Some(handle);
                     }
                     Ok((handle, _)) => stale_window = Some(handle),
@@ -379,13 +382,13 @@ impl AppModel {
         cx.notify();
     }
     pub fn open_spectrum(&mut self, cx: &mut Context<Self>) {
-        if self.closing || self.opening_spectrum {
+        if self.shutting_down() || self.opening_spectrum {
             return;
         }
         let model = cx.entity();
         if let Some(handle) = self.spectrum_window {
             cx.defer(move |cx| {
-                if model.read(cx).closing {
+                if model.read(cx).shutting_down() {
                     return;
                 }
                 if handle.update(cx, |_, w, _| w.activate_window()).is_err() {
@@ -399,7 +402,7 @@ impl AppModel {
         }
         self.opening_spectrum = true;
         cx.defer(move |cx| {
-            if model.read(cx).closing {
+            if model.read(cx).shutting_down() {
                 model.update(cx, |m, _| m.opening_spectrum = false);
                 return;
             }
@@ -430,7 +433,7 @@ impl AppModel {
             model.update(cx, |m, cx| {
                 m.opening_spectrum = false;
                 match result {
-                    Ok((handle, _)) if !m.closing => m.spectrum_window = Some(handle),
+                    Ok((handle, _)) if !m.shutting_down() => m.spectrum_window = Some(handle),
                     Ok((handle, _)) => stale_window = Some(handle),
                     Err(e) => m.error = e.to_string(),
                 };
@@ -759,6 +762,22 @@ mod tests {
         cx.run_until_parked();
         assert!(model.read_with(cx, |m, _| m.log_window.is_none() && !m.opening_log));
 
+        model.update(cx, |m, cx| {
+            m.closing = false;
+            m.open_settings(None, cx);
+            m.open_log(cx);
+            m.open_spectrum(cx);
+            m.quit_requested = true;
+        });
+        cx.run_until_parked();
+        assert!(model.read_with(cx, |m, _| m.settings.is_none()
+            && !m.opening_settings
+            && m.log_window.is_none()
+            && !m.opening_log
+            && m.spectrum_window.is_none()
+            && !m.opening_spectrum));
+
+        model.update(cx, |m, _| m.closing = true);
         let session = model.read_with(cx, |m, _| m.session.clone());
         let _held = session.lock().unwrap();
         model.update(cx, |m, cx| m.set_logging(true, cx));
