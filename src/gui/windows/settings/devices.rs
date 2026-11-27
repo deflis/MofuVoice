@@ -2,7 +2,7 @@ use super::*;
 use gpui_kit::base::TestSupportExt as _;
 impl SettingsView {
     pub fn discover(&mut self, cx: &mut Context<Self>) {
-        if self.pending {
+        if self.pending() {
             return;
         }
         self.discovery_deferred = self.model.read(cx).locked();
@@ -17,7 +17,7 @@ impl SettingsView {
                 return;
             }
         };
-        self.pending = true;
+        self.operation = Some(Operation::Discover);
         self.rates = None;
         self.device_error.clear();
         self.model.update(cx, |m, cx| {
@@ -59,7 +59,7 @@ impl SettingsView {
                     if !v.generation.accepts(generation) {
                         return;
                     }
-                    v.pending = false;
+                    v.operation = None;
                     v.device_error.clear();
                     match result {
                         Ok((choices, rates)) => {
@@ -191,7 +191,7 @@ impl SettingsView {
                     Button::new(SharedString::from(format!("input-channel:{channel}")))
                         .label(format!("{channel}ch"))
                         .selected(input == channel)
-                        .disabled(m.locked() || self.pending)
+                        .disabled(m.locked() || self.pending())
                         .on_click(move |_, w, cx| {
                             owner.update(cx, |v, cx| {
                                 v.changed("/devices/inputChannel", channel.to_string(), w, cx)
@@ -226,7 +226,7 @@ impl SettingsView {
                     Button::new(SharedString::from(format!("output-channel:{channel}")))
                         .label(format!("{channel}ch"))
                         .selected(selected.contains(&channel))
-                        .disabled(m.locked() || self.pending)
+                        .disabled(m.locked() || self.pending())
                         .on_click(move |_, w, cx| {
                             owner.update(cx, |v, cx| {
                                 v.changed("/devices/outputChannels", next.clone(), w, cx)
@@ -253,7 +253,7 @@ impl SettingsView {
                     )),
                 );
             }
-        } else if !self.device_error.is_empty() && !self.pending {
+        } else if !self.device_error.is_empty() {
             body = body.child(
                 div()
                     .id("device-discovery-failed")
@@ -262,7 +262,7 @@ impl SettingsView {
             );
         } else if self.discovery_deferred {
             body = body.child(t("音声を停止すると対応レートを確認できます。"));
-        } else if self.pending && self.device_error.is_empty() {
+        } else if self.operation == Some(Operation::Discover) {
             body = body.child(
                 div()
                     .id("device-discovery-pending")
@@ -275,7 +275,7 @@ impl SettingsView {
             .child(
                 Button::new("refresh-devices")
                     .label(t("更新"))
-                    .disabled(m.locked() || self.pending)
+                    .disabled(m.locked() || self.pending())
                     .on_click(move |_, _, cx| refresh.update(cx, |v, cx| v.discover(cx))),
             )
             .child(self.detail_button("devices", owner, cx));

@@ -1,4 +1,4 @@
-use super::{CloseTarget, SettingsView, Widget};
+use super::{CloseTarget, Operation, SettingsView, Widget};
 use crate::{
     cli::Options,
     gui::{layout, model::AppModel, preferences::Preferences},
@@ -60,7 +60,17 @@ fn failed_device_discovery_replaces_pending_status(cx: &mut TestAppContext) {
         cx.notify();
     });
     view.update(cx, |v, cx| {
-        v.pending = true;
+        v.operation = Some(Operation::Save);
+        cx.notify();
+    });
+    window
+        .update(cx, |_, w, cx| {
+            w.render_frame(cx);
+            assert!(w.try_find("device-discovery-pending").is_none());
+        })
+        .unwrap();
+    view.update(cx, |v, cx| {
+        v.operation = Some(Operation::Discover);
         cx.notify();
     });
     window
@@ -70,7 +80,7 @@ fn failed_device_discovery_replaces_pending_status(cx: &mut TestAppContext) {
         })
         .unwrap();
     view.update(cx, |v, cx| {
-        v.pending = false;
+        v.operation = None;
         v.device_error = "device disconnected".into();
         cx.notify();
     });
@@ -226,7 +236,7 @@ fn deferred_close_keeps_the_window_and_draft_when_saving_fails(cx: &mut TestAppC
     assert!(model.read_with(cx, |m, _| m.settings.is_some() && !m.busy));
     assert!(view.read_with(cx, |v, _| !v.error.is_empty()
         && v.close == CloseTarget::None
-        && !v.pending));
+        && !v.pending()));
     assert_eq!(view.read_with(cx, |v, _| v.value("/voice/pitch")), "6.5");
     cleanup(model, window, cx);
     std::fs::remove_file(dir).unwrap();
@@ -375,7 +385,7 @@ fn failed_save_keeps_the_draft_and_cancels_application_close(cx: &mut TestAppCon
         v.save(CloseTarget::Application, cx);
     });
     cx.run_until_parked();
-    assert!(view.read_with(cx, |v, _| !v.error.is_empty() && !v.pending));
+    assert!(view.read_with(cx, |v, _| !v.error.is_empty() && !v.pending()));
     assert_eq!(view.read_with(cx, |v, _| v.value("/voice/pitch")), "8");
     assert!(model.read_with(cx, |m, _| !m.closing
         && !m.quit_requested

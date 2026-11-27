@@ -58,7 +58,7 @@ pub struct SettingsView {
     _observe: Subscription,
     handle: AnyWindowHandle,
     generation: Generation,
-    pending: bool,
+    operation: Option<Operation>,
     discovery_deferred: bool,
     close: CloseTarget,
     error: String,
@@ -67,7 +67,18 @@ pub struct SettingsView {
     rates: Option<backend::DeviceSampleRates>,
     language: String,
 }
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Operation {
+    Save,
+    Discover,
+}
+
 impl SettingsView {
+    fn pending(&self) -> bool {
+        self.operation.is_some()
+    }
+
     pub fn new(
         model: Entity<AppModel>,
         options: Options,
@@ -89,7 +100,7 @@ impl SettingsView {
                             view.refresh_choices(window, cx);
                         }
                         if view.close != CloseTarget::None
-                            && !view.pending
+                            && !view.pending()
                             && !view.model.read(cx).busy
                             && !view.model.read(cx).closing
                         {
@@ -111,7 +122,7 @@ impl SettingsView {
             _observe: observe,
             handle: window.window_handle(),
             generation: Generation::default(),
-            pending: false,
+            operation: None,
             discovery_deferred: false,
             close: CloseTarget::None,
             error: String::new(),
@@ -124,7 +135,7 @@ impl SettingsView {
     }
     pub fn save(&mut self, target: CloseTarget, cx: &mut Context<Self>) {
         self.close = self.close.max(target);
-        if self.pending {
+        if self.pending() {
             return;
         }
         let model = self.model.read(cx);
@@ -155,7 +166,7 @@ impl SettingsView {
         let path = model.path.clone();
         let prefs = model.preferences.stored();
         let saved = options.clone();
-        self.pending = true;
+        self.operation = Some(Operation::Save);
         self.model.update(cx, |m, cx| {
             m.busy = true;
             cx.notify();
@@ -177,7 +188,7 @@ impl SettingsView {
                     if !v.generation.accepts(generation) {
                         return;
                     }
-                    v.pending = false;
+                    v.operation = None;
                     match result {
                         Ok(()) => {
                             v.error.clear();
@@ -225,7 +236,7 @@ impl Render for SettingsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let model = self.model.read(cx);
         let section = model.preferences.section.clone();
-        let locked = model.locked() || self.pending;
+        let locked = model.locked() || self.pending();
         let t = |s: &str| model.text(s);
         let mut nav = div()
             .id("settings-navigation")

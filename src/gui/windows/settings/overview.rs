@@ -67,7 +67,7 @@ pub(super) fn render(
                 Button::new(SharedString::from(format!("overview:{path}")))
                     .label(t(label))
                     .selected(enabled)
-                    .disabled(model.locked() || view.pending)
+                    .disabled(model.locked() || view.pending())
                     .on_click(cx.listener(move |v, _, window, cx| {
                         v.changed(path, (!enabled).to_string(), window, cx)
                     })),

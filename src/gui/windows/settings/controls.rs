@@ -246,7 +246,7 @@ impl SettingsView {
         error
     }
     pub(super) fn editable(&self, path: &str, cx: &App) -> bool {
-        if self.pending || self.model.read(cx).locked() {
+        if self.pending() || self.model.read(cx).locked() {
             return false;
         }
         if path == "/voice/enabled"

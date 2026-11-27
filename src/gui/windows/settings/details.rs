@@ -8,7 +8,7 @@ impl SettingsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.pending || self.model.read(cx).locked() || !self.section_enabled(section) {
+        if self.pending() || self.model.read(cx).locked() || !self.section_enabled(section) {
             return;
         }
         let root = match section {
@@ -210,7 +210,7 @@ impl SettingsView {
                         && c.field.path.ends_with("/gainDb")
                 })
                 .count();
-            let locked = model.locked() || self.pending;
+            let locked = model.locked() || self.pending();
             body = body.child(
                 div()
                     .flex()
@@ -270,13 +270,13 @@ impl SettingsView {
         Button::new(SharedString::from(format!("reset:{target}")))
             .label(self.model.read(cx).text(label))
             .disabled(
-                self.model.read(cx).locked() || self.pending || !self.section_enabled(section),
+                self.model.read(cx).locked() || self.pending() || !self.section_enabled(section),
             )
             .on_click(move |_, w, cx| owner.update(cx, |v, cx| v.reset(&target, w, cx)))
             .into_any_element()
     }
     pub(super) fn reset(&mut self, target: &str, w: &mut Window, cx: &mut Context<Self>) {
-        if self.model.read(cx).locked() || self.pending {
+        if self.model.read(cx).locked() || self.pending() {
             return;
         }
         let defaults = draft::fields(&Settings::from_options(&Options::default()));

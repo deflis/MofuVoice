@@ -127,7 +127,7 @@ impl SettingsView {
         let enabled = self.section_enabled(&section);
         Button::new(SharedString::from(format!("details:{section}")))
             .label(self.model.read(cx).text("詳細設定"))
-            .disabled(self.model.read(cx).locked() || self.pending || !enabled)
+            .disabled(self.model.read(cx).locked() || self.pending() || !enabled)
             .on_click(move |_, w, cx| owner.update(cx, |v, cx| v.open_details(&section, w, cx)))
             .into_any_element()
     }
