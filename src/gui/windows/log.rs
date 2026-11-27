@@ -39,7 +39,7 @@ impl Render for LogView {
                 Checkbox::new("processing-log")
                     .label(m.text("処理ログを表示"))
                     .checked(m.logging)
-                    .disabled(m.closing)
+                    .disabled(m.shutting_down())
                     .on_click(cx.listener(|view, enabled: &bool, _, cx| {
                         view.model.update(cx, |m, cx| m.set_logging(*enabled, cx));
                     })),

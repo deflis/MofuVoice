@@ -1357,6 +1357,25 @@ fn closing_disables_settings_navigation_and_overview_stage_buttons(cx: &mut Test
     assert!(view.read_with(cx, |v, _| !v.save_failed));
 
     model.update(cx, |m, cx| {
+        m.quit_requested = true;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    window
+        .update(cx, |_, w, cx| {
+            w.render_frame(cx);
+            w.click("nav-devices", cx);
+            w.click("stage-inputEq", cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        model.read_with(cx, |m, _| m.preferences.section.clone()),
+        "overview"
+    );
+
+    model.update(cx, |m, cx| {
+        m.quit_requested = false;
         m.closing = true;
         cx.notify();
     });
@@ -1375,3 +1394,4 @@ fn closing_disables_settings_navigation_and_overview_stage_buttons(cx: &mut Test
     );
     cleanup(model, window, cx);
 }
+

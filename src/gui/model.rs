@@ -136,9 +136,9 @@ impl AppModel {
         self.preferences.text(key)
     }
     pub fn locked(&self) -> bool {
-        self.active || self.busy || self.closing
+        self.active || self.busy || self.shutting_down()
     }
-    fn shutting_down(&self) -> bool {
+    pub fn shutting_down(&self) -> bool {
         self.closing || self.quit_requested
     }
     pub fn report(&mut self, error: impl ToString, cx: &mut Context<Self>) {
@@ -230,6 +230,9 @@ impl AppModel {
                     Ok(()) => m.active = true,
                     Err(e) => m.error = e,
                 };
+                if m.quit_requested {
+                    m.request_quit(cx);
+                }
                 cx.notify();
             });
         })
@@ -782,5 +785,33 @@ mod tests {
         let _held = session.lock().unwrap();
         model.update(cx, |m, cx| m.set_logging(true, cx));
         assert!(model.read_with(cx, |m, _| !m.logging));
+    }
+
+    #[cfg(feature = "desktop-tests")]
+    #[gpui_kit::test]
+    fn quit_requested_locks_start_and_controls(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::AppContext;
+
+        let model = cx.update(|cx| {
+            cx.new(|cx| {
+                super::AppModel::new(
+                    Options {
+                        backend: BackendKind::Cpal,
+                        ..Default::default()
+                    },
+                    Default::default(),
+                    super::Preferences::system(),
+                    cx,
+                )
+            })
+        });
+        model.update(cx, |m, _| {
+            assert!(m.can_start());
+            assert!(!m.locked());
+            m.quit_requested = true;
+            assert!(m.shutting_down());
+            assert!(m.locked());
+            assert!(!m.can_start());
+        });
     }
 }

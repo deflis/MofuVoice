@@ -51,9 +51,12 @@ impl Render for MainView {
                             } else {
                                 "日本語"
                             })
-                            .disabled(m.busy || m.closing)
+                            .disabled(m.busy || m.shutting_down())
                             .on_click(cx.listener(|v, _, _, cx| {
                                 v.model.update(cx, |m, cx| {
+                                    if m.busy || m.shutting_down() {
+                                        return;
+                                    }
                                     m.preferences.language = if m.preferences.language == "ja" {
                                         "en"
                                     } else {
@@ -82,7 +85,7 @@ impl Render for MainView {
                     .child(
                         Button::new("stop-audio")
                             .label(t("音声を停止"))
-                            .disabled(!m.active || m.closing)
+                            .disabled(!m.active || m.shutting_down())
                             .on_click(
                                 cx.listener(|v, _, _, cx| v.model.update(cx, |m, cx| m.stop(cx))),
                             ),
@@ -103,7 +106,7 @@ impl Render for MainView {
                     .child(
                         Button::new("voice-settings")
                             .label(t("声を調整する"))
-                            .disabled(m.closing)
+                            .disabled(m.shutting_down())
                             .on_click(cx.listener(|v, _, _, cx| {
                                 v.model
                                     .update(cx, |m, cx| m.open_settings(Some("voice".into()), cx))
@@ -112,7 +115,7 @@ impl Render for MainView {
                     .child(
                         Button::new("log")
                             .label(t("ログ"))
-                            .disabled(m.closing)
+                            .disabled(m.shutting_down())
                             .on_click(cx.listener(|v, _, _, cx| {
                                 v.model.update(cx, |m, cx| m.open_log(cx))
                             })),
@@ -120,7 +123,7 @@ impl Render for MainView {
                     .child(
                         Button::new("spectrum")
                             .label(t("スペアナ"))
-                            .disabled(m.closing)
+                            .disabled(m.shutting_down())
                             .on_click(cx.listener(|v, _, _, cx| {
                                 v.model.update(cx, |m, cx| m.open_spectrum(cx))
                             })),
@@ -128,7 +131,7 @@ impl Render for MainView {
                     .child(
                         Button::new("settings")
                             .label(t("設定"))
-                            .disabled(m.closing)
+                            .disabled(m.shutting_down())
                             .on_click(cx.listener(|v, _, _, cx| {
                                 v.model.update(cx, |m, cx| m.open_settings(None, cx))
                             })),
@@ -138,7 +141,7 @@ impl Render for MainView {
                 body.child(t(message)).child(
                     Button::new("device-settings")
                         .label(t("入力・出力デバイスを確認する"))
-                        .disabled(m.closing)
+                        .disabled(m.shutting_down())
                         .on_click(cx.listener(|v, _, _, cx| {
                             v.model
                                 .update(cx, |m, cx| m.open_settings(Some("devices".into()), cx))
@@ -147,7 +150,7 @@ impl Render for MainView {
             })
             .child(div().child(format!(
                 "{} · {} Hz · {} frames",
-                t(if m.closing {
+                t(if m.shutting_down() {
                     "終了中"
                 } else {
                     crate::gui::model::phase_label(m.info.phase)
