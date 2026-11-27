@@ -172,6 +172,7 @@
   "TD-PSOLA＋リサンプリング": "TD-PSOLA + resampling",
   "PSOLAのピッチ推定": "PSOLA pitch estimator",
   "YIN（標準）": "YIN (default)",
+  "MPM＋FFT": "MPM + FFT",
   "ピッチの表示単位": "Pitch display unit",
   "パーセント": "Percent",
   "100%が元の高さ、50%で1オクターブ下、200%で1オクターブ上です。": "100% is the original pitch, 50% is one octave down, and 200% is one octave up.",
