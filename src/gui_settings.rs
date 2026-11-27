@@ -413,16 +413,56 @@ fn decode(text: &str) -> Result<SavedSettings, Box<dyn Error>> {
     })
 }
 
-pub(crate) fn load(path: &Path) -> Result<SavedSettings, Box<dyn Error>> {
+fn read_settings_file(path: &Path) -> Result<SavedSettings, Box<dyn Error>> {
+    let text = fs::read_to_string(path)
+        .map_err(|error| format!("Cannot read GUI settings '{}': {error}", path.display()))?;
+    decode(&text)
+        .map_err(|error| format!("Cannot read GUI settings '{}': {error}", path.display()).into())
+}
+
+fn default_settings() -> Result<SavedSettings, Box<dyn Error>> {
+    Ok(SavedSettings {
+        options: Options::parse_gui(Vec::new())?,
+        ui: UiPreferences::default(),
+    })
+}
+
+/// Loads `path`, or migrates a legacy file when the primary path is absent.
+///
+/// `legacy` is only consulted when `path` does not exist. A corrupt legacy file
+/// fails; a failed write to `path` still returns the loaded legacy settings so
+/// the next launch can retry the migration.
+pub(crate) fn load_with_legacy(
+    path: &Path,
+    legacy: Option<&Path>,
+) -> Result<SavedSettings, Box<dyn Error>> {
     match fs::read_to_string(path) {
         Ok(text) => decode(&text).map_err(|error| {
             format!("Cannot read GUI settings '{}': {error}", path.display()).into()
         }),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(SavedSettings {
-            options: Options::parse_gui(Vec::new())?,
-            ui: UiPreferences::default(),
-        }),
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            if let Some(legacy) = legacy.filter(|legacy| *legacy != path && legacy.exists()) {
+                let settings = read_settings_file(legacy)?;
+                let _ = save(path, &settings.options, &settings.ui);
+                return Ok(settings);
+            }
+            default_settings()
+        }
         Err(error) => Err(format!("Cannot read GUI settings '{}': {error}", path.display()).into()),
+    }
+}
+
+pub(crate) fn load(path: &Path) -> Result<SavedSettings, Box<dyn Error>> {
+    #[cfg(all(feature = "desktop", target_os = "macos"))]
+    {
+        let legacy = std::env::current_exe()
+            .ok()
+            .map(|executable| executable.with_file_name("settings.ini"));
+        load_with_legacy(path, legacy.as_deref())
+    }
+    #[cfg(not(all(feature = "desktop", target_os = "macos")))]
+    {
+        load_with_legacy(path, None)
     }
 }
 
@@ -660,6 +700,43 @@ mod tests {
         );
         assert!(super::macos_path(None).is_err());
         assert!(super::macos_path(Some(std::ffi::OsString::new())).is_err());
+    }
+
+    #[test]
+    fn missing_primary_settings_migrate_from_legacy_and_prefer_primary() {
+        let root = std::env::temp_dir().join(format!(
+            "mofu-settings-migrate-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let primary = root.join("app-support").join("settings.ini");
+        let legacy = root.join("exe-dir").join("settings.ini");
+        fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        let options = Options::parse_gui(["--pitch", "7.5"].map(String::from)).unwrap();
+        save(&legacy, &options).unwrap();
+
+        let migrated = super::load_with_legacy(&primary, Some(&legacy)).unwrap();
+        assert_eq!(migrated.options.pitch.semitones, 7.5);
+        assert!(primary.is_file());
+        assert!(legacy.is_file());
+        assert_eq!(load(&primary).unwrap().pitch.semitones, 7.5);
+
+        let mut primary_options = options;
+        primary_options.pitch.semitones = 1.0;
+        save(&primary, &primary_options).unwrap();
+        assert_eq!(
+            super::load_with_legacy(&primary, Some(&legacy))
+                .unwrap()
+                .options
+                .pitch
+                .semitones,
+            1.0
+        );
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
