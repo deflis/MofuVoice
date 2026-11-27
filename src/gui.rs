@@ -13,26 +13,31 @@ gpui_kit::actions!(mofuvoice, [Quit]);
 
 pub struct Startup {
     pub options: Options,
+    persisted_options: Options,
     preferences: preferences::Preferences,
 }
 
 pub fn initial_settings(args: impl IntoIterator<Item = String>) -> Result<Startup, Box<dyn Error>> {
     let args: Vec<_> = args.into_iter().collect();
     if args.iter().any(|arg| arg == "--help") {
+        let options = Options::parse_gui(args)?;
         return Ok(Startup {
-            options: Options::parse_gui(args)?,
+            persisted_options: options.clone(),
+            options,
             preferences: preferences::Preferences::system(),
         });
     }
     let saved = gui_settings::load(&gui_settings::path()?)?;
     Ok(Startup {
         options: gui_settings::merge(&saved.options, args)?,
+        persisted_options: saved.options,
         preferences: preferences::Preferences::from_saved(saved.ui),
     })
 }
 pub fn run(
     Startup {
         options,
+        persisted_options,
         preferences,
     }: Startup,
     on_window_error: impl FnOnce(String) + 'static,
@@ -43,7 +48,8 @@ pub fn run(
         .run(move |cx| {
             gpui_kit::init(cx);
             theme::init(cx);
-            let model = cx.new(|cx| model::AppModel::new(options, path, preferences, cx));
+            let model = cx
+                .new(|cx| model::AppModel::new(options, persisted_options, path, preferences, cx));
             model.update(cx, |m, cx| m.check_saved_devices(cx));
             let quit_model = model.clone();
             cx.bind_keys([KeyBinding::new(

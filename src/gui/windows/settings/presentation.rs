@@ -137,20 +137,62 @@ impl SettingsView {
             let spec = numbers::slider(field, self.draft.pitch_unit).expect("slider field");
             let valid = spec.valid(value);
             let slider = control.slider.as_ref().expect("retained slider");
-            let mut track = div().flex().items_center().gap_3().child(
+            let accessible_label = t(&label);
+            let blocked = disabled || !valid;
+            let slider_el = if style == FieldStyle::SimpleSlider {
+                let focus = control
+                    .slider_focus
+                    .as_ref()
+                    .expect("simple slider focus handle");
+                let state = slider.clone();
                 div()
                     .id(SharedString::from(format!("slider:{field_id}")))
                     .flex_1()
                     .h(px(28.))
-                    .child(Slider::new(slider).disabled(disabled || !valid).w_full())
-                    .test_support(),
-            );
+                    .track_focus(focus)
+                    .tab_index(0)
+                    .on_key_down(move |event, window, cx| {
+                        if blocked {
+                            return;
+                        }
+                        let direction = match event.keystroke.key.as_str() {
+                            "left" | "down" => -1.0,
+                            "right" | "up" => 1.0,
+                            _ => return,
+                        };
+                        state.update(cx, |slider, cx| {
+                            let step = slider.accessibility_step();
+                            slider.step_thumb(false, direction * step, window, cx);
+                        });
+                        cx.stop_propagation();
+                    })
+                    .child(
+                        Slider::new(slider)
+                            .disabled(blocked)
+                            .accessibility_label(accessible_label.clone())
+                            .w_full(),
+                    )
+                    .test_support()
+            } else {
+                div()
+                    .id(SharedString::from(format!("slider:{field_id}")))
+                    .flex_1()
+                    .h(px(28.))
+                    .child(
+                        Slider::new(slider)
+                            .disabled(blocked)
+                            .accessibility_label(accessible_label.clone())
+                            .w_full(),
+                    )
+                    .test_support()
+            };
+            let mut track = div().flex().items_center().gap_3().child(slider_el);
             if style == FieldStyle::VoiceSlider {
                 track = track.child(
                     div().w(px(130.)).child(
                         NumberInput::new(&control.input)
                             .bg(crate::gui::theme::palette(cx).raised)
-                            .accessibility_label(t(&label))
+                            .accessibility_label(accessible_label)
                             .disabled(disabled),
                     ),
                 );

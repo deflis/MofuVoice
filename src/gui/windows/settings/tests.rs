@@ -41,6 +41,7 @@ fn open_with_options(
         cx.new(|cx| {
             AppModel::new(
                 options.clone(),
+                options.clone(),
                 directory.join("settings.ini"),
                 Preferences {
                     language: Language::En,
@@ -1751,7 +1752,10 @@ fn asio_unsupported_sample_rate_rejects_options(cx: &mut TestAppContext) {
     assert!(view.read_with(cx, |v, _| v.discard_target == CloseTarget::Settings));
 
     let saved = view.read_with(cx, |v, _| v.draft.to_options().unwrap());
-    model.update(cx, |m, _| m.saved = saved);
+    model.update(cx, |m, _| {
+        m.saved = saved.clone();
+        m.persisted_options = saved;
+    });
     assert_eq!(
         model.read_with(cx, |m, cx| m.start_blocked_message(cx)),
         Some("選択したサンプリングレートには対応していません。")

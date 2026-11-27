@@ -90,6 +90,7 @@ impl SelectControls {
 struct NumberControl {
     input: Entity<InputState>,
     slider: Option<Entity<SliderState>>,
+    slider_focus: Option<FocusHandle>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -310,6 +311,7 @@ impl SettingsView {
         if self.close != CloseTarget::None
             && options == model.saved
             && model.preferences == model.persisted_preferences
+            && options == model.persisted_options
         {
             let target = self.close;
             self.finish_close(target, None, cx);
@@ -351,9 +353,11 @@ impl SettingsView {
                             v.base = options.clone();
                             v.notice = "設定を保存しました。".into();
                             let target = v.close;
+                            let prefs_changed = v.model.read(cx).preferences != persisted;
                             v.model.update(cx, |m, cx| {
                                 let options_changed = m.saved != options;
-                                m.saved = options;
+                                m.saved = options.clone();
+                                m.persisted_options = options;
                                 m.persisted_preferences = persisted;
                                 m.quit_save_failed = false;
                                 if target != CloseTarget::Application
@@ -364,6 +368,10 @@ impl SettingsView {
                                 }
                                 cx.notify();
                             });
+                            if prefs_changed && target != CloseTarget::None {
+                                v.save(target, cx);
+                                return;
+                            }
                             v.finish_close(target, Some(window), cx);
                         }
                         Err(e) => {

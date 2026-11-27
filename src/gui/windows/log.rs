@@ -205,6 +205,7 @@ mod tests {
                 AppModel::new(
                     Default::default(),
                     Default::default(),
+                    Default::default(),
                     Preferences::system(),
                     cx,
                 )
@@ -235,6 +236,7 @@ mod tests {
         let model = cx.update(|cx| {
             cx.new(|cx| {
                 AppModel::new(
+                    Default::default(),
                     Default::default(),
                     Default::default(),
                     Preferences {

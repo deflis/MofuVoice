@@ -206,11 +206,13 @@ mod tests {
             gpui_kit::init(cx);
             crate::gui::theme::init(cx);
             let model = cx.new(|cx| {
+                let options = crate::cli::Options {
+                    backend: crate::backend::BackendKind::Asio,
+                    ..Default::default()
+                };
                 AppModel::new(
-                    crate::cli::Options {
-                        backend: crate::backend::BackendKind::Asio,
-                        ..Default::default()
-                    },
+                    options.clone(),
+                    options,
                     std::path::PathBuf::new(),
                     crate::gui::preferences::Preferences::from_saved(
                         crate::gui_settings::UiPreferences {

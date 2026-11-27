@@ -308,6 +308,7 @@ impl SettingsView {
         });
         NumberControl {
             input,
+            slider_focus: slider.as_ref().map(|_| cx.focus_handle()),
             slider,
             _subscriptions: subscriptions,
         }
@@ -585,18 +586,51 @@ impl SettingsView {
         }
         let changed = self.draft.device(slot) != value;
         self.draft.set_device(slot, value.clone());
+        let kind = self.resolved_backend(cx);
+        let used = slot == DeviceSlot::Input || kind == BackendKind::Cpal;
         let select = self.selects.device_mut(slot);
-        if select.missing.as_deref() != Some(value.as_str()) {
-            select.missing = None;
+        let discovered: Vec<String> = select
+            .items
+            .iter()
+            .filter(|device| {
+                !device.is_empty() && select.missing.as_deref() != Some(device.as_str())
+            })
+            .cloned()
+            .collect();
+        select.missing =
+            (used && !value.is_empty() && !model::device_listed(&value, &discovered, kind))
+                .then(|| value.clone());
+        if !value.is_empty() && !select.items.iter().any(|item| item == &value) {
+            select.items.push(value.clone());
         }
-        select
-            .state
-            .update(cx, |s, cx| s.set_selected_value(&value, window, cx));
+        let prefs = self.model.read(cx).preferences;
+        let items = select.items.clone();
+        let missing = select.missing.clone();
+        select.state.update(cx, |s, cx| {
+            s.set_items(
+                fields::device_choices(slot, &items, &prefs, kind, missing.as_deref()),
+                window,
+                cx,
+            );
+            s.set_selected_value(&value, window, cx);
+        });
+        self.sync_missing_device_error();
         self.clear_feedback();
         if changed && matches!(slot, DeviceSlot::Input | DeviceSlot::Output) {
             self.discover(cx);
         }
         self.finish_edit(window, cx);
+    }
+
+    fn sync_missing_device_error(&mut self) {
+        let has_missing = DeviceSlot::ALL
+            .iter()
+            .any(|slot| self.selects.device(*slot).missing.is_some());
+        if has_missing {
+            self.device_error = model::DeviceWarning::Missing.message().into();
+        } else if self.device_error == model::DeviceWarning::Missing.message() {
+            self.device_error.clear();
+        }
     }
 
     pub(super) fn set_sample_rate(

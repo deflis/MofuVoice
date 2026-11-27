@@ -19,6 +19,7 @@ use std::{
 pub struct AppModel {
     pub session: Arc<Mutex<Session>>,
     pub saved: Options,
+    pub persisted_options: Options,
     pub preferences: Preferences,
     pub persisted_preferences: Preferences,
     pub path: PathBuf,
@@ -47,6 +48,7 @@ pub struct AppModel {
 impl AppModel {
     pub fn new(
         saved: Options,
+        persisted_options: Options,
         path: PathBuf,
         preferences: Preferences,
         cx: &mut Context<Self>,
@@ -109,6 +111,7 @@ impl AppModel {
         Self {
             session,
             saved,
+            persisted_options,
             persisted_preferences: preferences,
             preferences,
             path,
@@ -493,7 +496,9 @@ impl AppModel {
         if self.closing || self.busy {
             return;
         }
-        if self.preferences == self.persisted_preferences || self.quit_save_failed {
+        if (self.saved == self.persisted_options && self.preferences == self.persisted_preferences)
+            || self.quit_save_failed
+        {
             self.shutdown(cx);
             return;
         }
@@ -502,8 +507,9 @@ impl AppModel {
         let persisted = self.preferences;
         let prefs = persisted.stored();
         let path = self.path.clone();
+        let written = options.clone();
         let task = cx.background_executor().spawn(async move {
-            crate::gui_settings::save(&path, &options, &prefs).map_err(|e| e.to_string())
+            crate::gui_settings::save(&path, &written, &prefs).map_err(|e| e.to_string())
         });
         cx.spawn(async move |this, cx| {
             let result = task.await;
@@ -511,6 +517,7 @@ impl AppModel {
                 m.busy = false;
                 match result {
                     Ok(()) => {
+                        m.persisted_options = options;
                         m.persisted_preferences = persisted;
                         m.quit_save_failed = false;
                         m.shutdown(cx);
@@ -579,6 +586,45 @@ impl DeviceWarning {
     }
 }
 
+/// True when `name` resolves the same way the audio backend selects a device.
+///
+/// CPAL accepts the list label, the bare device name, or the device id, and
+/// requires a unique match. ASIO matches driver names without regard to ASCII case.
+pub fn device_listed(name: &str, devices: &[String], kind: backend::BackendKind) -> bool {
+    if name.is_empty() {
+        return true;
+    }
+    match kind {
+        backend::BackendKind::Asio => devices
+            .iter()
+            .filter(|device| !device.is_empty())
+            .any(|device| device.eq_ignore_ascii_case(name)),
+        backend::BackendKind::Cpal | backend::BackendKind::Auto => {
+            devices
+                .iter()
+                .filter(|label| !label.is_empty() && cpal_device_matches(name, label))
+                .count()
+                == 1
+        }
+    }
+}
+
+fn cpal_device_matches(name: &str, label: &str) -> bool {
+    if name == label {
+        return true;
+    }
+    split_cpal_label(label).is_some_and(|(device_name, id)| name == device_name || name == id)
+}
+
+fn split_cpal_label(label: &str) -> Option<(&str, &str)> {
+    let end = label.rfind(']')?;
+    if end + 1 != label.len() {
+        return None;
+    }
+    let start = label[..end].rfind(" [")?;
+    Some((&label[..start], &label[start + 2..end]))
+}
+
 fn saved_device_warning(
     options: &Options,
     choices: Option<&DeviceChoices>,
@@ -587,7 +633,7 @@ fn saved_device_warning(
         return Some(DeviceWarning::Unavailable);
     };
     let missing = |name: &str, devices: &[String]| {
-        !name.is_empty() && !devices.iter().any(|device| device == name)
+        !name.is_empty() && !device_listed(name, devices, choices.resolved)
     };
     (missing(&options.device, &choices.inputs)
         || (choices.resolved == backend::BackendKind::Cpal
@@ -614,20 +660,22 @@ pub fn device_choices(kind: backend::BackendKind) -> Result<DeviceChoices, Strin
 
 #[cfg(test)]
 mod tests {
-    use super::{saved_device_warning, DeviceChoices, DeviceWarning};
+    use super::{
+        device_listed, saved_device_warning, split_cpal_label, DeviceChoices, DeviceWarning,
+    };
     use crate::{backend::BackendKind, cli::Options};
 
     #[test]
     fn saved_device_warning_checks_each_cpal_route_and_distinguishes_enumeration_failure() {
         let choices = DeviceChoices {
-            inputs: vec!["mic".into()],
-            outputs: vec!["speaker".into(), "headphones".into()],
+            inputs: vec!["mic [in-1]".into()],
+            outputs: vec!["speaker [out-1]".into(), "headphones [out-2]".into()],
             resolved: BackendKind::Cpal,
         };
         let options = Options {
-            device: "mic".into(),
-            output_device: "speaker".into(),
-            preview_device: "headphones".into(),
+            device: "mic [in-1]".into(),
+            output_device: "speaker [out-1]".into(),
+            preview_device: "headphones [out-2]".into(),
             ..Default::default()
         };
         assert_eq!(saved_device_warning(&options, Some(&choices)), None);
@@ -658,6 +706,51 @@ mod tests {
             saved_device_warning(&options, None),
             Some(DeviceWarning::Unavailable)
         );
+        for (device, output, preview) in [
+            ("mic", "speaker [out-1]", "headphones [out-2]"),
+            ("in-1", "out-1", "out-2"),
+            ("mic [in-1]", "speaker", "headphones"),
+        ] {
+            let aliases = Options {
+                device: device.into(),
+                output_device: output.into(),
+                preview_device: preview.into(),
+                ..Default::default()
+            };
+            assert_eq!(
+                saved_device_warning(&aliases, Some(&choices)),
+                None,
+                "device={device} output={output} preview={preview}"
+            );
+        }
+    }
+
+    #[test]
+    fn device_listed_matches_cpal_aliases_and_asio_case() {
+        let labels = vec![
+            "Built-in Mic [mic-1]".into(),
+            "USB Mic [mic-2]".into(),
+            "Shared Name [a]".into(),
+            "Shared Name [b]".into(),
+        ];
+        assert!(device_listed(
+            "Built-in Mic [mic-1]",
+            &labels,
+            BackendKind::Cpal
+        ));
+        assert!(device_listed("Built-in Mic", &labels, BackendKind::Cpal));
+        assert!(device_listed("mic-1", &labels, BackendKind::Cpal));
+        assert!(!device_listed("Shared Name", &labels, BackendKind::Cpal));
+        assert!(!device_listed("missing", &labels, BackendKind::Cpal));
+        assert_eq!(
+            split_cpal_label("Built-in Mic [mic-1]"),
+            Some(("Built-in Mic", "mic-1"))
+        );
+
+        let drivers = vec!["ASIO4ALL v2".into(), "Realtek ASIO".into()];
+        assert!(device_listed("asio4all v2", &drivers, BackendKind::Asio));
+        assert!(device_listed("Realtek ASIO", &drivers, BackendKind::Asio));
+        assert!(!device_listed("missing", &drivers, BackendKind::Asio));
     }
 
     #[cfg(feature = "desktop-tests")]
@@ -667,12 +760,14 @@ mod tests {
 
         let model = cx.update(|cx| {
             cx.new(|cx| {
+                let options = Options {
+                    backend: BackendKind::Cpal,
+                    device: "mic".into(),
+                    ..Default::default()
+                };
                 super::AppModel::new(
-                    Options {
-                        backend: BackendKind::Cpal,
-                        device: "mic".into(),
-                        ..Default::default()
-                    },
+                    options.clone(),
+                    options,
                     Default::default(),
                     super::Preferences::system(),
                     cx,
@@ -723,15 +818,17 @@ mod tests {
         std::fs::write(&blocker, "not a directory").unwrap();
         let settings_path = blocker.join("settings.ini");
 
+        let prefs = super::Preferences {
+            language: crate::gui::preferences::Language::En,
+            section: super::Section::Voice,
+        };
         let unmodified = cx.update(|cx| {
             cx.new(|cx| {
                 super::AppModel::new(
                     Options::default(),
+                    Options::default(),
                     settings_path.clone(),
-                    super::Preferences {
-                        language: crate::gui::preferences::Language::En,
-                        section: super::Section::Voice,
-                    },
+                    prefs,
                     cx,
                 )
             })
@@ -744,11 +841,9 @@ mod tests {
             cx.new(|cx| {
                 super::AppModel::new(
                     Options::default(),
+                    Options::default(),
                     settings_path,
-                    super::Preferences {
-                        language: crate::gui::preferences::Language::En,
-                        section: super::Section::Voice,
-                    },
+                    prefs,
                     cx,
                 )
             })
@@ -772,6 +867,47 @@ mod tests {
 
     #[cfg(feature = "desktop-tests")]
     #[gpui_kit::test]
+    fn persist_and_quit_writes_launch_overrides(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::AppContext;
+
+        let directory = std::env::temp_dir().join(format!(
+            "mofu-quit-launch-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let settings_path = directory.join("settings.ini");
+        let disk = Options::default();
+        let mut launched = disk.clone();
+        launched.pitch.semitones = 7.5;
+
+        let model = cx.update(|cx| {
+            cx.new(|cx| {
+                super::AppModel::new(
+                    launched,
+                    disk,
+                    settings_path.clone(),
+                    super::Preferences {
+                        language: crate::gui::preferences::Language::En,
+                        section: super::Section::Voice,
+                    },
+                    cx,
+                )
+            })
+        });
+        model.update(cx, |m, cx| m.request_quit(cx));
+        cx.run_until_parked();
+        assert!(model.read_with(cx, |m, _| m.closing && m.error.is_empty()));
+        let saved = crate::gui_settings::load(&settings_path).unwrap();
+        assert_eq!(saved.options.pitch.semitones, 7.5);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[cfg(feature = "desktop-tests")]
+    #[gpui_kit::test]
     fn closing_cancels_deferred_window_open_and_avoids_session_lock_in_set_logging(
         cx: &mut gpui_kit::TestAppContext,
     ) {
@@ -782,6 +918,7 @@ mod tests {
             crate::gui::theme::init(cx);
             cx.new(|cx| {
                 super::AppModel::new(
+                    Options::default(),
                     Options::default(),
                     Default::default(),
                     super::Preferences::system(),
@@ -825,11 +962,13 @@ mod tests {
 
         let model = cx.update(|cx| {
             cx.new(|cx| {
+                let options = Options {
+                    backend: BackendKind::Cpal,
+                    ..Default::default()
+                };
                 super::AppModel::new(
-                    Options {
-                        backend: BackendKind::Cpal,
-                        ..Default::default()
-                    },
+                    options.clone(),
+                    options,
                     Default::default(),
                     super::Preferences::system(),
                     cx,
