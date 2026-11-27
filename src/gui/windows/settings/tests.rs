@@ -13,6 +13,14 @@ pub(super) fn open(
     cx: &mut TestAppContext,
     directory: &std::path::Path,
 ) -> (Entity<AppModel>, AnyWindowHandle, Entity<SettingsView>) {
+    open_with_options(cx, directory, Options::default())
+}
+
+fn open_with_options(
+    cx: &mut TestAppContext,
+    directory: &std::path::Path,
+    options: Options,
+) -> (Entity<AppModel>, AnyWindowHandle, Entity<SettingsView>) {
     cx.update(|cx| {
         gpui_kit::init(cx);
         crate::gui::theme::init(cx);
@@ -20,7 +28,7 @@ pub(super) fn open(
     let model = cx.update(|cx| {
         cx.new(|cx| {
             AppModel::new(
-                Options::default(),
+                options.clone(),
                 directory.join("settings.ini"),
                 Preferences {
                     language: "en".into(),
@@ -35,7 +43,7 @@ pub(super) fn open(
             gpui_kit::open_window(
                 layout::window_options("Settings test", 1000., 760., 800., 480.),
                 cx,
-                |w, cx| cx.new(|cx| SettingsView::new(model.clone(), Options::default(), w, cx)),
+                |w, cx| cx.new(|cx| SettingsView::new(model.clone(), options, w, cx)),
             )
         })
         .unwrap();
@@ -1037,7 +1045,47 @@ fn pitch_unit_switch_rejects_out_of_range_semitones(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn unmodified_settings_close_skips_disk_write_and_failed_save_closes_on_retry(
+fn invalid_draft_can_be_discarded_on_quit(cx: &mut TestAppContext) {
+    let dir = directory();
+    let (model, window, view) = open(cx, &dir);
+    set(&view, window, "/voice/pitch", "-", cx);
+
+    model.update(cx, |m, cx| m.request_quit(cx));
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |v, _| v.discard_target == CloseTarget::Application));
+    assert!(model.read_with(cx, |m, _| !m.closing && !m.quit_requested));
+
+    view.update(cx, |v, cx| v.discard_and_close(cx));
+    cx.run_until_parked();
+    assert!(model.read_with(cx, |m, _| m.closing));
+    assert!(!dir.exists());
+    cleanup(model, window, cx);
+}
+
+#[gpui_kit::test]
+fn close_retries_after_explicit_save_failure(cx: &mut TestAppContext) {
+    let dir = directory();
+    std::fs::write(&dir, "not a directory").unwrap();
+    let (model, window, view) = open(cx, &dir);
+    set(&view, window, "/voice/pitch", "3", cx);
+
+    view.update(cx, |v, cx| v.save(CloseTarget::None, cx));
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |v, _| {
+        !v.error.is_empty() && v.discard_target == CloseTarget::None
+    }));
+
+    std::fs::remove_file(&dir).unwrap();
+    view.update(cx, |v, cx| v.save(CloseTarget::Settings, cx));
+    cx.run_until_parked();
+    assert!(model.read_with(cx, |m, _| m.settings.is_none()
+        && m.saved.pitch.semitones == 3.));
+    std::fs::remove_file(dir.join("settings.ini")).unwrap();
+    std::fs::remove_dir(dir).unwrap();
+}
+
+#[gpui_kit::test]
+fn unmodified_settings_close_skips_disk_write_and_failed_close_allows_discard(
     cx: &mut TestAppContext,
 ) {
     let dir = directory();
@@ -1054,9 +1102,12 @@ fn unmodified_settings_close_skips_disk_write_and_failed_save_closes_on_retry(
     view.update(cx, |v, cx| v.save(CloseTarget::Settings, cx));
     cx.run_until_parked();
     assert!(model.read_with(cx, |m, _| m.settings.is_some()));
-    assert!(view.read_with(cx, |v, _| v.save_failed && !v.error.is_empty()));
+    assert!(
+        view.read_with(cx, |v, _| v.discard_target == CloseTarget::Settings
+            && !v.error.is_empty())
+    );
 
-    view.update(cx, |v, cx| v.save(CloseTarget::Settings, cx));
+    view.update(cx, |v, cx| v.discard_and_close(cx));
     cx.run_until_parked();
     assert!(model.read_with(cx, |m, _| m.settings.is_none()));
     assert!(window.update(cx, |_, _, _| ()).is_err());
@@ -1066,9 +1117,9 @@ fn unmodified_settings_close_skips_disk_write_and_failed_save_closes_on_retry(
     view.update(cx, |v, cx| v.save(CloseTarget::Application, cx));
     cx.run_until_parked();
     assert!(model.read_with(cx, |m, _| !m.closing));
-    assert!(view.read_with(cx, |v, _| v.save_failed));
+    assert!(view.read_with(cx, |v, _| v.discard_target == CloseTarget::Application));
 
-    view.update(cx, |v, cx| v.save(CloseTarget::Application, cx));
+    view.update(cx, |v, cx| v.discard_and_close(cx));
     cx.run_until_parked();
     assert!(model.read_with(cx, |m, _| m.closing));
     cleanup(model, window, cx);
@@ -1328,7 +1379,7 @@ fn closing_disables_settings_navigation_and_overview_stage_buttons(cx: &mut Test
     let dir = directory();
     let (model, window, view) = open(cx, &dir);
     navigate(&model, window, "overview", cx);
-    view.update(cx, |v, _| v.save_failed = true);
+    view.update(cx, |v, _| v.discard_target = CloseTarget::Settings);
     window
         .update(cx, |_, w, cx| {
             w.render_frame(cx);
@@ -1340,9 +1391,9 @@ fn closing_disables_settings_navigation_and_overview_stage_buttons(cx: &mut Test
         model.read_with(cx, |m, _| m.preferences.section.clone()),
         "inputEq"
     );
-    assert!(view.read_with(cx, |v, _| !v.save_failed));
+    assert!(view.read_with(cx, |v, _| v.discard_target == CloseTarget::None));
 
-    view.update(cx, |v, _| v.save_failed = true);
+    view.update(cx, |v, _| v.discard_target = CloseTarget::Settings);
     window
         .update(cx, |_, w, cx| {
             w.render_frame(cx);
@@ -1354,7 +1405,7 @@ fn closing_disables_settings_navigation_and_overview_stage_buttons(cx: &mut Test
         model.read_with(cx, |m, _| m.preferences.section.clone()),
         "overview"
     );
-    assert!(view.read_with(cx, |v, _| !v.save_failed));
+    assert!(view.read_with(cx, |v, _| v.discard_target == CloseTarget::None));
 
     model.update(cx, |m, cx| {
         m.quit_requested = true;
@@ -1500,9 +1551,21 @@ fn asio_unselected_shows_rate_hint_and_preview_device_change_skips_rediscovery(
 #[gpui_kit::test]
 fn unsaved_settings_draft_blocks_audio_start(cx: &mut TestAppContext) {
     let dir = directory();
-    let (model, window, view) = open(cx, &dir);
+    let (model, window, view) = open_with_options(
+        cx,
+        &dir,
+        Options {
+            backend: crate::backend::BackendKind::Cpal,
+            pitch_unit: "percent".into(),
+            pitch: crate::pitch::PitchSettings {
+                semitones: 3.,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    );
     assert!(model.read_with(cx, |m, cx| m.can_start(cx)));
-    set(&view, window, "/voice/pitch", "3", cx);
+    set(&view, window, "/voice/pitch", "200", cx);
     cx.run_until_parked();
     assert!(model.read_with(cx, |m, cx| {
         m.has_unsaved_audio_draft(cx) && !m.can_start(cx)
@@ -1510,7 +1573,7 @@ fn unsaved_settings_draft_blocks_audio_start(cx: &mut TestAppContext) {
     view.update(cx, |v, cx| v.save(CloseTarget::None, cx));
     cx.run_until_parked();
     assert!(model.read_with(cx, |m, cx| {
-        !m.has_unsaved_audio_draft(cx) && m.can_start(cx) && m.saved.pitch.semitones == 3.
+        !m.has_unsaved_audio_draft(cx) && m.can_start(cx) && m.saved.pitch.semitones == 12.
     }));
     cleanup(model, window, cx);
 }
@@ -1537,17 +1600,26 @@ fn asio_unsupported_sample_rate_rejects_options(cx: &mut TestAppContext) {
     });
     let error = view.read_with(cx, |v, _| v.options().unwrap_err());
     assert!(error.contains("/devices/sampleRate"));
-    cleanup(model, window, cx);
+
+    view.update(cx, |v, cx| v.save(CloseTarget::Settings, cx));
+    assert!(view.read_with(cx, |v, _| v.discard_target == CloseTarget::Settings));
+
+    let saved = view.read_with(cx, |v, _| v.draft_options().unwrap());
+    model.update(cx, |m, _| m.saved = saved);
+    view.update(cx, |v, cx| v.save(CloseTarget::Settings, cx));
+    cx.run_until_parked();
+    assert!(model.read_with(cx, |m, _| m.settings.is_none()));
+    assert!(!dir.exists());
 }
 
 #[gpui_kit::test]
-fn opening_details_clears_save_failed_and_notice_when_switching_mode(cx: &mut TestAppContext) {
+fn opening_details_clears_discard_target_and_notice_when_switching_mode(cx: &mut TestAppContext) {
     let dir = directory();
     let (model, window, view) = open(cx, &dir);
     set(&view, window, "/inputEq/enabled", "true", cx);
     navigate(&model, window, "inputEq", cx);
     view.update(cx, |v, _| {
-        v.save_failed = true;
+        v.discard_target = CloseTarget::Settings;
         v.notice = "設定を保存しました。".into();
     });
     window
@@ -1556,7 +1628,7 @@ fn opening_details_clears_save_failed_and_notice_when_switching_mode(cx: &mut Te
     cx.run_until_parked();
     view.read_with(cx, |v, _| {
         assert_eq!(v.value("/inputEq/mode"), "pro");
-        assert!(!v.save_failed);
+        assert!(v.discard_target == CloseTarget::None);
         assert!(v.notice.is_empty());
     });
     window

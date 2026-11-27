@@ -19,7 +19,7 @@ impl SettingsView {
             let mode_path = format!("/{root}/mode");
             if self.value(&mode_path) != "pro" {
                 self.set_value(&mode_path, "pro".into(), window, cx);
-                self.save_failed = false;
+                self.discard_target = CloseTarget::None;
                 self.notice.clear();
                 self.notify_host(cx);
             }
@@ -351,7 +351,7 @@ impl SettingsView {
         self.refresh_choices(w, cx);
         self.error.clear();
         self.notice.clear();
-        self.save_failed = false;
+        self.discard_target = CloseTarget::None;
         w.refresh();
         self.notify_host(cx);
         cx.notify();

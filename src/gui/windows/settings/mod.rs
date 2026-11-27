@@ -61,7 +61,7 @@ pub struct SettingsView {
     generation: Generation,
     operation: Option<Operation>,
     discovery_deferred: bool,
-    save_failed: bool,
+    discard_target: CloseTarget,
     close: CloseTarget,
     error: String,
     device_error: String,
@@ -137,7 +137,7 @@ impl SettingsView {
                 let _ = handle.update(cx, |_, window, cx| {
                     let _ = weak.update(cx, |view, cx| {
                         if language_changed {
-                            view.save_failed = false;
+                            view.discard_target = CloseTarget::None;
                         }
                         if language_changed || backend_changed {
                             view.refresh_choices(window, cx);
@@ -168,7 +168,7 @@ impl SettingsView {
             generation: Generation::default(),
             operation: None,
             discovery_deferred: false,
-            save_failed: false,
+            discard_target: CloseTarget::None,
             close: CloseTarget::None,
             error: String::new(),
             device_error: String::new(),
@@ -207,6 +207,14 @@ impl SettingsView {
             }
         }
     }
+    fn discard_and_close(&mut self, cx: &mut Context<Self>) {
+        if self.pending() || self.model.read(cx).shutting_down() {
+            return;
+        }
+        self.finish_close(self.discard_target, None, cx);
+        cx.notify();
+    }
+
     pub fn save(&mut self, target: CloseTarget, cx: &mut Context<Self>) {
         self.close = self.close.max(target);
         if self.pending() {
@@ -216,19 +224,18 @@ impl SettingsView {
         if model.busy || model.closing {
             return;
         }
-        if self.close != CloseTarget::None && self.save_failed {
-            let target = self.close;
-            self.finish_close(target, None, cx);
-            cx.notify();
-            return;
-        }
-        // The draft cannot change during audio; closing it may still persist the same settings.
-        let options = match self.options() {
+        let options = self.draft_options().and_then(|options| {
+            if self.close == CloseTarget::None || options != model.saved {
+                self.validate_discovered_rates(&options)?;
+            }
+            Ok(options)
+        });
+        let options = match options {
             Ok(o) => o,
             Err(e) => {
                 let application_close = self.close == CloseTarget::Application;
                 self.error = e;
-                self.save_failed = false;
+                self.discard_target = self.close;
                 self.close = CloseTarget::None;
                 self.model.update(cx, |m, cx| {
                     m.quit_requested = false;
@@ -253,6 +260,7 @@ impl SettingsView {
             cx.notify();
             return;
         }
+        self.discard_target = CloseTarget::None;
         let path = model.path.clone();
         let persisted = model.preferences.clone();
         let prefs = persisted.stored();
@@ -283,7 +291,7 @@ impl SettingsView {
                     match result {
                         Ok(()) => {
                             v.error.clear();
-                            v.save_failed = false;
+                            v.discard_target = CloseTarget::None;
                             v.base = Settings::from_options(&options);
                             v.notice = "設定を保存しました。".into();
                             let target = v.close;
@@ -300,7 +308,7 @@ impl SettingsView {
                         }
                         Err(e) => {
                             v.error = e;
-                            v.save_failed = true;
+                            v.discard_target = v.close;
                             v.close = CloseTarget::None;
                             v.model.update(cx, |m, cx| {
                                 m.quit_requested = false;
@@ -351,7 +359,7 @@ impl Render for SettingsView {
                             }
                         });
                         if changed {
-                            v.save_failed = false;
+                            v.discard_target = CloseTarget::None;
                         }
                     })),
             );
@@ -411,6 +419,18 @@ impl Render for SettingsView {
                             .disabled(locked)
                             .on_click(cx.listener(|v, _, _, cx| v.save(CloseTarget::None, cx))),
                     )
+                    .when(self.discard_target != CloseTarget::None, |row| {
+                        row.child(
+                            Button::new("discard-settings")
+                                .label(t(if self.discard_target == CloseTarget::Application {
+                                    "変更を破棄して終了"
+                                } else {
+                                    "変更を破棄して閉じる"
+                                }))
+                                .disabled(self.pending() || model.shutting_down())
+                                .on_click(cx.listener(|v, _, _, cx| v.discard_and_close(cx))),
+                        )
+                    })
                     .child(if model.active { hint } else { String::new() }),
             )
     }

@@ -45,7 +45,7 @@ pub(super) fn render(
                             }
                         });
                         if changed {
-                            v.save_failed = false;
+                            v.discard_target = CloseTarget::None;
                         }
                     })),
             );

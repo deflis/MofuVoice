@@ -31,7 +31,7 @@ impl SettingsView {
         self.build_controls(window, cx);
         self.error.clear();
         self.notice.clear();
-        self.save_failed = false;
+        self.discard_target = CloseTarget::None;
         window.refresh();
         self.notify_host(cx);
         cx.notify();

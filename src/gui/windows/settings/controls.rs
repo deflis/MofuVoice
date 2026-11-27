@@ -163,8 +163,11 @@ impl SettingsView {
             .map(|c| (c.field.path.clone(), c.field.text.clone()))
             .collect()
     }
+    pub(super) fn draft_options(&self) -> Result<Options, String> {
+        draft::parse(&self.base, &self.edits())
+    }
     pub(super) fn options(&self) -> Result<Options, String> {
-        let options = draft::parse(&self.base, &self.edits())?;
+        let options = self.draft_options()?;
         self.validate_discovered_rates(&options)?;
         Ok(options)
     }
@@ -177,7 +180,7 @@ impl SettingsView {
     pub(super) fn notify_host(&self, cx: &mut Context<Self>) {
         self.model.update(cx, |_, cx| cx.notify());
     }
-    fn validate_discovered_rates(&self, options: &Options) -> Result<(), String> {
+    pub(super) fn validate_discovered_rates(&self, options: &Options) -> Result<(), String> {
         let Some(rates) = &self.rates else {
             return Ok(());
         };
@@ -390,7 +393,7 @@ impl SettingsView {
                     }
                     self.error.clear();
                     self.notice.clear();
-                    self.save_failed = false;
+                    self.discard_target = CloseTarget::None;
                 }
                 Err(e) => {
                     let previous = self.value(path);
@@ -428,7 +431,7 @@ impl SettingsView {
         }
         self.error.clear();
         self.notice.clear();
-        self.save_failed = false;
+        self.discard_target = CloseTarget::None;
         if path == "/voice/pitchAlgorithm" && value.starts_with("td-psola") {
             self.set_value("/voice/preserveFormants", "true".into(), window, cx);
         }
