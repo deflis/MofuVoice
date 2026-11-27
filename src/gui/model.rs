@@ -179,7 +179,6 @@ impl AppModel {
     pub fn check_saved_devices(&mut self, cx: &mut Context<Self>) {
         let options = self.saved.clone();
         let generation = self.device_check.advance();
-        self.device_warning = None;
         let task = cx.background_executor().spawn(async move {
             let choices = device_choices(options.backend).ok();
             let resolved_auto = (options.backend == backend::BackendKind::Auto)

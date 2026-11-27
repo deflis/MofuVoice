@@ -265,5 +265,6 @@
   "設定を保存してから音声を開始してください。": "Save settings before starting audio.",
   "設定を確認する": "Review settings",
   "変更を破棄して閉じる": "Discard changes and close",
-  "変更を破棄して終了": "Discard changes and quit"
+  "変更を破棄して終了": "Discard changes and quit",
+  "音声デバイスを再検出する": "Detect audio devices again"
 }

@@ -132,6 +132,16 @@ impl Render for MainView {
                             })),
                     ),
             )
+            .when(m.device_warning.is_some() && !unsaved_draft, |body| {
+                body.child(
+                    Button::new("refresh-saved-devices")
+                        .label(t("音声デバイスを再検出する"))
+                        .disabled(m.locked())
+                        .on_click(cx.listener(|v, _, _, cx| {
+                            v.model.update(cx, |m, cx| m.check_saved_devices(cx))
+                        })),
+                )
+            })
             .when_some(start_guidance, |body, message| {
                 body.child(t(message)).child(
                     Button::new("device-settings")
