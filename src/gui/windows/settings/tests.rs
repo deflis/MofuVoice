@@ -1035,3 +1035,126 @@ fn pitch_unit_switch_rejects_out_of_range_semitones(cx: &mut TestAppContext) {
     }
     cleanup(model, window, cx);
 }
+
+#[gpui_kit::test]
+fn unmodified_settings_close_skips_disk_write_and_failed_save_closes_on_retry(
+    cx: &mut TestAppContext,
+) {
+    let dir = directory();
+    std::fs::write(&dir, "not a directory").unwrap();
+
+    let (model, window, view) = open(cx, &dir);
+    view.update(cx, |v, cx| v.save(CloseTarget::Settings, cx));
+    cx.run_until_parked();
+    assert!(model.read_with(cx, |m, _| m.settings.is_none()));
+    assert!(window.update(cx, |_, _, _| ()).is_err());
+
+    let (model, window, view) = open(cx, &dir);
+    set(&view, window, "/voice/pitch", "6.5", cx);
+    view.update(cx, |v, cx| v.save(CloseTarget::Settings, cx));
+    cx.run_until_parked();
+    assert!(model.read_with(cx, |m, _| m.settings.is_some()));
+    assert!(view.read_with(cx, |v, _| v.save_failed && !v.error.is_empty()));
+
+    view.update(cx, |v, cx| v.save(CloseTarget::Settings, cx));
+    cx.run_until_parked();
+    assert!(model.read_with(cx, |m, _| m.settings.is_none()));
+    assert!(window.update(cx, |_, _, _| ()).is_err());
+
+    let (model, window, view) = open(cx, &dir);
+    set(&view, window, "/voice/pitch", "7", cx);
+    view.update(cx, |v, cx| v.save(CloseTarget::Application, cx));
+    cx.run_until_parked();
+    assert!(model.read_with(cx, |m, _| !m.closing));
+    assert!(view.read_with(cx, |v, _| v.save_failed));
+
+    view.update(cx, |v, cx| v.save(CloseTarget::Application, cx));
+    cx.run_until_parked();
+    assert!(model.read_with(cx, |m, _| m.closing));
+    cleanup(model, window, cx);
+    std::fs::remove_file(dir).unwrap();
+}
+
+#[gpui_kit::test]
+fn pitch_unit_and_eq_band_edits_clear_saved_notice(cx: &mut TestAppContext) {
+    let dir = directory();
+    let (model, window, view) = open(cx, &dir);
+    view.update(cx, |v, _| v.notice = "設定を保存しました。".into());
+    window
+        .update(cx, |_, w, cx| {
+            view.update(cx, |v, cx| {
+                v.changed("/voice/pitchUnit", "percent".into(), w, cx)
+            })
+        })
+        .unwrap();
+    assert!(view.read_with(cx, |v, _| v.notice.is_empty()));
+
+    view.update(cx, |v, _| v.notice = "設定を保存しました。".into());
+    window
+        .update(cx, |_, w, cx| {
+            view.update(cx, |v, cx| v.band_count("eq", true, w, cx))
+        })
+        .unwrap();
+    assert!(view.read_with(cx, |v, _| v.notice.is_empty()));
+    cleanup(model, window, cx);
+}
+
+#[gpui_kit::test]
+fn missing_device_and_unavailable_input_channel_are_labeled(cx: &mut TestAppContext) {
+    use super::fields::labeled_choices;
+    use crate::backend::{BackendKind, DeviceChannels, DeviceSampleRates};
+    use gpui_kit::SharedString;
+
+    let en = Preferences {
+        language: "en".into(),
+        section: "devices".into(),
+    };
+    let ja = Preferences {
+        language: "ja".into(),
+        section: "devices".into(),
+    };
+    let en_choices = labeled_choices(
+        "/devices/device",
+        vec![String::new(), "OldMic".into()],
+        &en,
+        BackendKind::Cpal,
+        Some("OldMic"),
+    );
+    assert_eq!(
+        en_choices[1].label,
+        SharedString::from("OldMic (not detected)")
+    );
+    let ja_choices = labeled_choices(
+        "/devices/device",
+        vec![String::new(), "OldMic".into()],
+        &ja,
+        BackendKind::Cpal,
+        Some("OldMic"),
+    );
+    assert_eq!(ja_choices[1].label, SharedString::from("OldMic（未検出）"));
+
+    let dir = directory();
+    let (model, window, view) = open(cx, &dir);
+    set(&view, window, "/devices/inputChannel", "4", cx);
+    view.update(cx, |v, cx| {
+        v.rates = Some(DeviceSampleRates {
+            channels: vec![DeviceChannels {
+                sample_rate: 48000,
+                input: 2,
+                output: 2,
+            }],
+            input: vec![48000],
+            output: vec![48000],
+            common: vec![48000],
+        });
+        cx.notify();
+    });
+    navigate(&model, window, "devices", cx);
+    window
+        .update(cx, |_, w, cx| {
+            w.render_frame(cx);
+            assert!(w.try_find("input-channel:4").is_some());
+        })
+        .unwrap();
+    cleanup(model, window, cx);
+}

@@ -34,10 +34,17 @@ pub(super) fn labeled_choices(
     items: Vec<String>,
     prefs: &Preferences,
     resolved_backend: backend::BackendKind,
+    missing: Option<&str>,
 ) -> Vec<Choice> {
     items
         .into_iter()
         .map(|value| {
+            if missing == Some(value.as_str()) {
+                return Choice {
+                    label: format!("{value}{}", prefs.text("（未検出）")).into(),
+                    value,
+                };
+            }
             let key = match value.as_str() {
                 "" if path.ends_with("previewDevice") => "なし",
                 "" if path == "/devices/device"

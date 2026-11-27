@@ -49,6 +49,7 @@ struct Control {
     widget: Widget,
     slider: Option<Entity<SliderState>>,
     items: Option<Vec<String>>,
+    missing: Option<String>,
 }
 pub struct SettingsView {
     model: Entity<AppModel>,
@@ -60,6 +61,7 @@ pub struct SettingsView {
     generation: Generation,
     operation: Option<Operation>,
     discovery_deferred: bool,
+    save_failed: bool,
     close: CloseTarget,
     error: String,
     device_error: String,
@@ -124,6 +126,7 @@ impl SettingsView {
             generation: Generation::default(),
             operation: None,
             discovery_deferred: false,
+            save_failed: false,
             close: CloseTarget::None,
             error: String::new(),
             device_error: String::new(),
@@ -132,6 +135,35 @@ impl SettingsView {
         };
         this.build_controls(window, cx);
         this
+    }
+    fn finish_close(
+        &mut self,
+        target: CloseTarget,
+        window: Option<&mut Window>,
+        cx: &mut Context<Self>,
+    ) {
+        self.close = CloseTarget::None;
+        match target {
+            CloseTarget::None => {}
+            CloseTarget::Application => {
+                self.model.update(cx, |m, cx| m.shutdown(cx));
+            }
+            CloseTarget::Settings => {
+                self.generation.advance();
+                self.model.update(cx, |m, cx| {
+                    m.settings = None;
+                    cx.notify();
+                });
+                if let Some(window) = window {
+                    window.remove_window();
+                } else {
+                    let handle = self.handle;
+                    cx.defer(move |cx| {
+                        _ = handle.update(cx, |_, window, _| window.remove_window());
+                    });
+                }
+            }
+        }
     }
     pub fn save(&mut self, target: CloseTarget, cx: &mut Context<Self>) {
         self.close = self.close.max(target);
@@ -142,12 +174,19 @@ impl SettingsView {
         if model.busy || model.closing {
             return;
         }
+        if self.close != CloseTarget::None && self.save_failed {
+            let target = self.close;
+            self.finish_close(target, None, cx);
+            cx.notify();
+            return;
+        }
         // The draft cannot change during audio; closing it may still persist the same settings.
         let options = match self.options() {
             Ok(o) => o,
             Err(e) => {
                 let application_close = self.close == CloseTarget::Application;
                 self.error = e;
+                self.save_failed = false;
                 self.close = CloseTarget::None;
                 self.model.update(cx, |m, cx| {
                     m.quit_requested = false;
@@ -163,6 +202,15 @@ impl SettingsView {
                 return;
             }
         };
+        if self.close != CloseTarget::None
+            && options == model.saved
+            && model.preferences == model.persisted_preferences
+        {
+            let target = self.close;
+            self.finish_close(target, None, cx);
+            cx.notify();
+            return;
+        }
         let path = model.path.clone();
         let persisted = model.preferences.clone();
         let prefs = persisted.stored();
@@ -193,31 +241,24 @@ impl SettingsView {
                     match result {
                         Ok(()) => {
                             v.error.clear();
+                            v.save_failed = false;
                             v.base = Settings::from_options(&options);
                             v.notice = "設定を保存しました。".into();
                             let target = v.close;
-                            v.close = CloseTarget::None;
                             v.model.update(cx, |m, cx| {
                                 m.saved = options;
                                 m.persisted_preferences = persisted;
                                 m.quit_save_failed = false;
-                                if target == CloseTarget::Application {
-                                    m.shutdown(cx);
-                                } else {
+                                if target != CloseTarget::Application {
                                     m.check_saved_devices(cx);
-                                    if target == CloseTarget::Settings {
-                                        m.settings = None;
-                                    }
                                 }
                                 cx.notify();
                             });
-                            if target == CloseTarget::Settings {
-                                v.generation.advance();
-                                window.remove_window();
-                            }
+                            v.finish_close(target, Some(window), cx);
                         }
                         Err(e) => {
                             v.error = e;
+                            v.save_failed = true;
                             v.close = CloseTarget::None;
                             v.model.update(cx, |m, cx| {
                                 m.quit_requested = false;

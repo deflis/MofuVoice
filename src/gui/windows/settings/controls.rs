@@ -9,7 +9,7 @@ impl SettingsView {
                 "/devices/device" | "/devices/outputDevice" | "/devices/previewDevice"
             ) {
                 if let Some(items) = control.items {
-                    device_items.insert(control.field.path, items);
+                    device_items.insert(control.field.path, (items, control.missing));
                 }
             }
         }
@@ -21,15 +21,16 @@ impl SettingsView {
             .map_or(options.backend, |name| {
                 backend::BackendKind::parse(name).expect("backend selection")
             });
-        let resolved_backend = backend::resolve(kind);
+        let resolved_backend = self.model.read(cx).resolve_backend(kind);
         for mut field in draft::fields(&self.base) {
             if let Some(text) = edits.get(&field.path) {
                 field.text = text.clone();
             }
             let path = field.path.clone();
-            let items = device_items
-                .remove(&path)
-                .or_else(|| choices(&path, &field.text));
+            let (items, missing) = match device_items.remove(&path) {
+                Some((items, missing)) => (Some(items), missing),
+                None => (choices(&path, &field.text), None),
+            };
             let widget = if field.value.is_boolean() {
                 Widget::Toggle
             } else if let Some(items) = items.clone() {
@@ -39,6 +40,7 @@ impl SettingsView {
                     items,
                     &self.model.read(cx).preferences,
                     resolved_backend,
+                    missing.as_deref(),
                 );
                 let select = cx.new(|cx| {
                     let mut s = SelectState::new(items, None, window, cx);
@@ -147,6 +149,7 @@ impl SettingsView {
                 widget,
                 slider,
                 items,
+                missing,
             });
         }
         self.refresh_choices(window, cx);
@@ -204,7 +207,7 @@ impl SettingsView {
     }
     pub(super) fn refresh_choices(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let prefs = self.model.read(cx).preferences.clone();
-        let resolved_backend = self.resolved_backend();
+        let resolved_backend = self.resolved_backend(cx);
         for i in 0..self.controls.len() {
             let path = self.controls[i].field.path.clone();
             let Some(mut items) = self.controls[i].items.clone() else {
@@ -224,9 +227,10 @@ impl SettingsView {
                 items.push(current.clone());
             }
             if let Widget::Select(state) = &control.widget {
+                let missing = control.missing.as_deref();
                 state.update(cx, |s, cx| {
                     s.set_items(
-                        labeled_choices(&path, items, &prefs, resolved_backend),
+                        labeled_choices(&path, items, &prefs, resolved_backend, missing),
                         window,
                         cx,
                     );
@@ -346,6 +350,8 @@ impl SettingsView {
                         }
                     }
                     self.error.clear();
+                    self.notice.clear();
+                    self.save_failed = false;
                 }
                 Err(e) => {
                     let previous = self.value(path);
@@ -360,6 +366,9 @@ impl SettingsView {
         // Input events already own their text state; do not replace that state's cursor on each keystroke.
         if let Some(control) = self.controls.iter_mut().find(|c| c.field.path == path) {
             control.field.text = value.clone();
+            if control.missing.as_deref() != Some(value.as_str()) {
+                control.missing = None;
+            }
         }
         if let Some(spec) = numbers::slider(path, self.percent()) {
             if let Some(slider) = self
@@ -378,6 +387,7 @@ impl SettingsView {
         }
         self.error.clear();
         self.notice.clear();
+        self.save_failed = false;
         if path == "/voice/pitchAlgorithm" && value.starts_with("td-psola") {
             self.set_value("/voice/preserveFormants", "true".into(), window, cx);
         }

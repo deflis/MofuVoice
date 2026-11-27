@@ -30,6 +30,8 @@ impl SettingsView {
         self.base = Settings::from_options(&options);
         self.build_controls(window, cx);
         self.error.clear();
+        self.notice.clear();
+        self.save_failed = false;
         window.refresh();
         cx.notify();
     }

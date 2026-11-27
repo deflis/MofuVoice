@@ -52,9 +52,10 @@ impl SettingsView {
             let result = task.await;
             // Always release the app-level operation gate, even if the view disappeared.
             model.update(cx, |m, cx| {
-                if let Ok((choices, _)) = &result {
-                    m.update_saved_device_warning(kind, choices);
-                }
+                m.update_saved_device_warning(
+                    kind,
+                    result.as_ref().ok().map(|(choices, _)| choices),
+                );
                 m.busy = false;
                 cx.notify();
             });
@@ -74,13 +75,16 @@ impl SettingsView {
                             ] {
                                 items.insert(0, String::new());
                                 let current = v.value(path);
-                                if !items.contains(&current) {
-                                    v.device_error = format!("Device unavailable: {current}");
+                                let missing = (!current.is_empty() && !items.contains(&current))
+                                    .then(|| current.clone());
+                                if missing.is_some() {
+                                    v.device_error = "前回使った音声機器が見つかりません。入力・出力デバイスを確認してください。".into();
                                     items.push(current.clone());
                                 }
                                 if let Some(control) =
                                     v.controls.iter_mut().find(|c| c.field.path == path)
                                 {
+                                    control.missing = missing.clone();
                                     if let Widget::Select(state) = &control.widget {
                                         control.items = Some(items.clone());
                                         let choices = labeled_choices(
@@ -88,6 +92,7 @@ impl SettingsView {
                                             items,
                                             &v.model.read(cx).preferences,
                                             choices.resolved,
+                                            missing.as_deref(),
                                         );
                                         state.update(cx, |s, cx| {
                                             s.set_items(choices, window, cx);
@@ -117,8 +122,8 @@ impl SettingsView {
 }
 
 impl SettingsView {
-    pub(super) fn resolved_backend(&self) -> backend::BackendKind {
-        backend::resolve(
+    pub(super) fn resolved_backend(&self, cx: &App) -> backend::BackendKind {
+        self.model.read(cx).resolve_backend(
             backend::BackendKind::parse(&self.value("/devices/backend"))
                 .expect("backend selection"),
         )
@@ -128,7 +133,7 @@ impl SettingsView {
         use super::presentation::FieldStyle;
         let m = self.model.read(cx);
         let t = |s: &str| m.text(s);
-        let kind = self.resolved_backend();
+        let kind = self.resolved_backend(cx);
         let mut body = div().flex().flex_col().gap_3().child(self.render_field(
             "/devices/device",
             FieldStyle::Number,
@@ -182,6 +187,7 @@ impl SettingsView {
                 .filter_map(|s| s.trim().parse::<usize>().ok())
                 .collect::<Vec<_>>();
             let required = selected.iter().copied().max().unwrap_or(1);
+            let rate_available = rates.channels.iter().any(|l| l.sample_rate == rate);
             let inputs = rates
                 .channels
                 .iter()
@@ -196,12 +202,22 @@ impl SettingsView {
                 .map(|l| l.output)
                 .max()
                 .unwrap_or(0);
+            let mut input_choices: Vec<usize> = (1..=inputs).collect();
+            if input > 0 && !input_choices.contains(&input) {
+                input_choices.push(input);
+                input_choices.sort_unstable();
+            }
             let mut input_buttons = div().flex().flex_wrap().gap_2();
-            for channel in 1..=inputs {
+            for channel in input_choices {
                 let owner = owner.clone();
+                let label = if channel > inputs {
+                    format!("{channel}ch{}", t("（利用不可）"))
+                } else {
+                    format!("{channel}ch")
+                };
                 input_buttons = input_buttons.child(
                     Button::new(SharedString::from(format!("input-channel:{channel}")))
-                        .label(format!("{channel}ch"))
+                        .label(label)
                         .selected(input == channel)
                         .disabled(m.locked() || self.pending())
                         .on_click(move |_, w, cx| {
@@ -261,7 +277,15 @@ impl SettingsView {
                         .child(t("出力チャンネルを1つ以上選択してください。")),
                 );
             }
-            if input > inputs || selected.iter().any(|n| *n > outputs) {
+            if !rate_available {
+                body = body.child(
+                    div()
+                        .text_color(crate::gui::theme::palette(cx).danger)
+                        .child(t(
+                            "このサンプリングレートで利用できる入出力チャンネルがありません。",
+                        )),
+                );
+            } else if input > inputs || selected.iter().any(|n| *n > outputs) {
                 body = body.child(
                     div()
                         .text_color(crate::gui::theme::palette(cx).danger)

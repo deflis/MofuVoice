@@ -345,6 +345,7 @@ impl SettingsView {
         self.refresh_choices(w, cx);
         self.error.clear();
         self.notice.clear();
+        self.save_failed = false;
         w.refresh();
         cx.notify();
     }

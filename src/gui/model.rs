@@ -22,6 +22,7 @@ pub struct AppModel {
     pub info: AudioInfo,
     pub log: Option<AudioLog>,
     pub logging: bool,
+    auto_backend: backend::BackendKind,
     pub device_warning: Option<DeviceWarning>,
     device_check: Generation,
     pub status: String,
@@ -101,6 +102,7 @@ impl AppModel {
                 break;
             }
         });
+        let auto_backend = backend::resolve(backend::BackendKind::Auto);
         Self {
             session,
             saved,
@@ -110,6 +112,7 @@ impl AppModel {
             info: AudioInfo::default(),
             log: None,
             logging: false,
+            auto_backend,
             device_warning: None,
             device_check: Generation::default(),
             status: String::new(),
@@ -139,9 +142,15 @@ impl AppModel {
         self.error = error.to_string();
         cx.notify();
     }
+    pub fn resolve_backend(&self, kind: backend::BackendKind) -> backend::BackendKind {
+        match kind {
+            backend::BackendKind::Auto => self.auto_backend,
+            explicit => explicit,
+        }
+    }
     pub fn needs_input_device(&self) -> bool {
         self.saved.device.is_empty()
-            && backend::resolve(self.saved.backend) == backend::BackendKind::Asio
+            && self.resolve_backend(self.saved.backend) == backend::BackendKind::Asio
     }
     pub fn can_start(&self) -> bool {
         !self.locked()
@@ -154,12 +163,19 @@ impl AppModel {
         self.device_warning = None;
         let task = cx.background_executor().spawn(async move {
             let choices = device_choices(options.backend).ok();
-            saved_device_warning(&options, choices.as_ref())
+            let resolved_auto = (options.backend == backend::BackendKind::Auto)
+                .then(|| choices.as_ref().map(|c| c.resolved))
+                .flatten();
+            let warning = saved_device_warning(&options, choices.as_ref());
+            (resolved_auto, warning)
         });
         cx.spawn(async move |this, cx| {
-            let warning = task.await;
+            let (resolved_auto, warning) = task.await;
             _ = this.update(cx, |m, cx| {
                 if !m.closing && m.device_check.accepts(generation) {
+                    if let Some(resolved) = resolved_auto {
+                        m.auto_backend = resolved;
+                    }
                     m.device_warning = warning;
                     cx.notify();
                 }
@@ -171,12 +187,20 @@ impl AppModel {
     pub fn update_saved_device_warning(
         &mut self,
         kind: backend::BackendKind,
-        choices: &DeviceChoices,
+        choices: Option<&DeviceChoices>,
     ) {
-        if !self.closing && kind == self.saved.backend {
+        if self.closing {
+            return;
+        }
+        if kind == backend::BackendKind::Auto {
+            if let Some(choices) = choices {
+                self.auto_backend = choices.resolved;
+            }
+        }
+        if kind == self.saved.backend {
             // A completed discovery supersedes an earlier background check for the saved backend.
             self.device_check.advance();
-            self.device_warning = saved_device_warning(&self.saved, Some(choices));
+            self.device_warning = saved_device_warning(&self.saved, choices);
         }
     }
     pub fn start(&mut self, inspect: bool, cx: &mut Context<Self>) {
@@ -632,12 +656,15 @@ mod tests {
             let older_check = model.device_check.advance();
             model.device_warning = Some(DeviceWarning::Unavailable);
             assert!(!model.can_start());
-            model.update_saved_device_warning(BackendKind::Auto, &choices);
+            model.update_saved_device_warning(BackendKind::Auto, Some(&choices));
             assert!(!model.can_start());
             assert!(model.device_check.accepts(older_check));
-            model.update_saved_device_warning(BackendKind::Cpal, &choices);
+            model.update_saved_device_warning(BackendKind::Cpal, Some(&choices));
             assert!(model.can_start());
             assert!(!model.device_check.accepts(older_check));
+            model.update_saved_device_warning(BackendKind::Cpal, None);
+            assert!(!model.can_start());
+            assert_eq!(model.device_warning, Some(DeviceWarning::Unavailable));
         });
     }
 
