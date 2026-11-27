@@ -364,6 +364,7 @@ impl SettingsView {
             return;
         }
         // Input events already own their text state; do not replace that state's cursor on each keystroke.
+        let previous = self.value(path);
         if let Some(control) = self.controls.iter_mut().find(|c| c.field.path == path) {
             control.field.text = value.clone();
             if control.missing.as_deref() != Some(value.as_str()) {
@@ -405,16 +406,17 @@ impl SettingsView {
         if path.ends_with("AnalysisWindow") || path == "/voice/analysisWindow" {
             self.refresh_choices(window, cx);
         }
-        if path == "/devices/backend" {
+        if path == "/devices/backend" && value != previous {
             self.reset_device_choices(window, cx);
         }
-        if [
-            "/devices/backend",
-            "/devices/device",
-            "/devices/outputDevice",
-            "/devices/previewDevice",
-        ]
-        .contains(&path)
+        if value != previous
+            && [
+                "/devices/backend",
+                "/devices/device",
+                "/devices/outputDevice",
+                "/devices/previewDevice",
+            ]
+            .contains(&path)
         {
             self.discover(cx);
         }

@@ -1196,6 +1196,28 @@ fn initial_device_choices_do_not_duplicate_empty_default_and_backend_switch_clea
             control.missing = Some("Old Missing".into());
         }
     });
+    set(&view, window, "/devices/device", "Old Mic", cx);
+    let current_backend = view.read_with(cx, |v, _| v.value("/devices/backend"));
+    window
+        .update(cx, |_, w, cx| {
+            view.update(cx, |v, cx| {
+                v.changed("/devices/backend", current_backend, w, cx);
+            });
+        })
+        .unwrap();
+    view.read_with(cx, |v, _| {
+        assert!(!v.pending());
+        assert_eq!(v.value("/devices/device"), "Old Mic");
+        let control = v
+            .controls
+            .iter()
+            .find(|c| c.field.path == "/devices/device")
+            .unwrap();
+        assert_eq!(
+            control.items.as_deref(),
+            Some(&[String::new(), "Old Mic".into()][..])
+        );
+    });
     window
         .update(cx, |_, w, cx| {
             view.update(cx, |v, cx| {
