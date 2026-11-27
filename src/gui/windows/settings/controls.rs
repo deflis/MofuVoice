@@ -411,6 +411,10 @@ impl SettingsView {
                 "/devices/outputDevice",
                 "/devices/previewDevice",
             ] {
+                if let Some(control) = self.controls.iter_mut().find(|c| c.field.path == p) {
+                    control.items = Some(vec![String::new()]);
+                    control.missing = None;
+                }
                 self.set_value(p, String::new(), window, cx);
             }
             self.refresh_choices(window, cx);

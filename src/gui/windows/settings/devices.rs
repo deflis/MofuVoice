@@ -65,49 +65,7 @@ impl SettingsView {
                         return;
                     }
                     v.operation = None;
-                    v.device_error.clear();
-                    match result {
-                        Ok((choices, rates)) => {
-                            for (path, mut items) in [
-                                ("/devices/device", choices.inputs),
-                                ("/devices/outputDevice", choices.outputs.clone()),
-                                ("/devices/previewDevice", choices.outputs),
-                            ] {
-                                items.insert(0, String::new());
-                                let current = v.value(path);
-                                let missing = (!current.is_empty() && !items.contains(&current))
-                                    .then(|| current.clone());
-                                if missing.is_some() {
-                                    v.device_error = "前回使った音声機器が見つかりません。入力・出力デバイスを確認してください。".into();
-                                    items.push(current.clone());
-                                }
-                                if let Some(control) =
-                                    v.controls.iter_mut().find(|c| c.field.path == path)
-                                {
-                                    control.missing = missing.clone();
-                                    if let Widget::Select(state) = &control.widget {
-                                        control.items = Some(items.clone());
-                                        let choices = labeled_choices(
-                                            path,
-                                            items,
-                                            &v.model.read(cx).preferences,
-                                            choices.resolved,
-                                            missing.as_deref(),
-                                        );
-                                        state.update(cx, |s, cx| {
-                                            s.set_items(choices, window, cx);
-                                            s.set_selected_value(&current, window, cx);
-                                        });
-                                    }
-                                }
-                            }
-                            match rates {
-                                Ok(rates) => v.rates = rates,
-                                Err(e) => v.device_error = e,
-                            }
-                        }
-                        Err(e) => v.device_error = e,
-                    }
+                    v.apply_discovery(result, window, cx);
                     let target = v.close;
                     cx.notify();
                     if target != CloseTarget::None {
@@ -118,6 +76,67 @@ impl SettingsView {
         })
         .detach();
         cx.notify();
+    }
+
+    pub(super) fn apply_discovery(
+        &mut self,
+        result: Result<
+            (
+                model::DeviceChoices,
+                Result<Option<backend::DeviceSampleRates>, String>,
+            ),
+            String,
+        >,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.device_error.clear();
+        match result {
+            Ok((choices, rates)) => {
+                for (path, mut items) in [
+                    ("/devices/device", choices.inputs),
+                    ("/devices/outputDevice", choices.outputs.clone()),
+                    ("/devices/previewDevice", choices.outputs),
+                ] {
+                    items.insert(0, String::new());
+                    let current = self.value(path);
+                    let missing =
+                        (!current.is_empty() && !items.contains(&current)).then(|| current.clone());
+                    if missing.is_some() {
+                        self.device_error =
+                            "前回使った音声機器が見つかりません。入力・出力デバイスを確認してください。"
+                                .into();
+                        items.push(current.clone());
+                    }
+                    if let Some(control) = self.controls.iter_mut().find(|c| c.field.path == path) {
+                        control.missing = missing.clone();
+                        if let Widget::Select(state) = &control.widget {
+                            control.items = Some(items.clone());
+                            let choices = labeled_choices(
+                                path,
+                                items,
+                                &self.model.read(cx).preferences,
+                                choices.resolved,
+                                missing.as_deref(),
+                            );
+                            state.update(cx, |s, cx| {
+                                s.set_items(choices, window, cx);
+                                s.set_selected_value(&current, window, cx);
+                            });
+                        }
+                    }
+                }
+                match rates {
+                    Ok(rates) => self.rates = rates,
+                    Err(e) => {
+                        if self.device_error.is_empty() {
+                            self.device_error = e;
+                        }
+                    }
+                }
+            }
+            Err(e) => self.device_error = e,
+        }
     }
 }
 

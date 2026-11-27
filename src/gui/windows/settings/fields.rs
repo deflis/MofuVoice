@@ -92,7 +92,13 @@ pub(super) fn choices(path: &str, current: &str) -> Option<Vec<String>> {
         .filter(|k| k.available())
         .map(|k| k.name().into())
         .collect(),
-        "device" | "outputDevice" | "previewDevice" => vec![String::new(), current.into()],
+        "device" | "outputDevice" | "previewDevice" => {
+            if current.is_empty() {
+                vec![String::new()]
+            } else {
+                vec![String::new(), current.into()]
+            }
+        }
         "pitchAlgorithm" => crate::pitch::PitchAlgorithm::ALL
             .iter()
             .map(|a| a.name().into())

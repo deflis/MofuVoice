@@ -99,6 +99,7 @@ impl SettingsView {
                 let _ = handle.update(cx, |_, window, cx| {
                     let _ = weak.update(cx, |view, cx| {
                         if changed {
+                            view.save_failed = false;
                             view.refresh_choices(window, cx);
                         }
                         if view.close != CloseTarget::None
@@ -297,9 +298,10 @@ impl Render for SettingsView {
                 Button::new(SharedString::from(format!("nav-{id}")))
                     .label(t(label))
                     .selected(selected)
+                    .disabled(model.closing)
                     .on_click(cx.listener(move |v, _, _, cx| {
                         v.model.update(cx, |m, cx| {
-                            if m.preferences.section != id {
+                            if !m.closing && m.preferences.section != id {
                                 m.preferences.section = id.clone();
                                 m.quit_save_failed = false;
                                 cx.notify();
@@ -336,11 +338,13 @@ impl Render for SettingsView {
                     .child(nav)
                     .child(content),
             )
-            .child(
-                div()
-                    .text_color(crate::gui::theme::palette(cx).danger)
-                    .child(error),
-            )
+            .when(!error.is_empty(), |body| {
+                body.child(
+                    div()
+                        .text_color(crate::gui::theme::palette(cx).danger)
+                        .child(error),
+                )
+            })
             .when(!self.device_error.is_empty(), |body| {
                 body.child(
                     div()
@@ -348,7 +352,7 @@ impl Render for SettingsView {
                         .child(t(&self.device_error)),
                 )
             })
-            .child(t(&notice))
+            .when(!notice.is_empty(), |body| body.child(t(&notice)))
             .child(
                 div()
                     .flex()

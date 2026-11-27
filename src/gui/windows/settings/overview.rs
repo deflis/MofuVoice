@@ -33,9 +33,10 @@ pub(super) fn render(
             .child(
                 Button::new(SharedString::from(format!("stage-{id}")))
                     .label(format!("↓  {}", t(label)))
+                    .disabled(model.closing)
                     .on_click(cx.listener(move |v, _, _, cx| {
                         v.model.update(cx, |m, cx| {
-                            if m.preferences.section != id {
+                            if !m.closing && m.preferences.section != id {
                                 m.preferences.section = id.clone();
                                 m.quit_save_failed = false;
                                 cx.notify();

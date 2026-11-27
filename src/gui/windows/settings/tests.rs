@@ -1158,3 +1158,125 @@ fn missing_device_and_unavailable_input_channel_are_labeled(cx: &mut TestAppCont
         .unwrap();
     cleanup(model, window, cx);
 }
+
+#[gpui_kit::test]
+fn initial_device_choices_do_not_duplicate_empty_default_and_backend_switch_clears_stale_items(
+    cx: &mut TestAppContext,
+) {
+    let dir = directory();
+    let (model, window, view) = open(cx, &dir);
+    view.read_with(cx, |v, _| {
+        for path in [
+            "/devices/device",
+            "/devices/outputDevice",
+            "/devices/previewDevice",
+        ] {
+            let control = v.controls.iter().find(|c| c.field.path == path).unwrap();
+            assert_eq!(control.items.as_deref(), Some(&[String::new()][..]));
+        }
+    });
+    view.update(cx, |v, _| {
+        for (path, items) in [
+            ("/devices/device", vec![String::new(), "Old Mic".into()]),
+            (
+                "/devices/outputDevice",
+                vec![String::new(), "Old Speaker".into()],
+            ),
+            (
+                "/devices/previewDevice",
+                vec![String::new(), "Old Headphones".into()],
+            ),
+        ] {
+            let control = v
+                .controls
+                .iter_mut()
+                .find(|c| c.field.path == path)
+                .unwrap();
+            control.items = Some(items);
+            control.missing = Some("Old Missing".into());
+        }
+    });
+    window
+        .update(cx, |_, w, cx| {
+            view.update(cx, |v, cx| {
+                v.changed("/devices/backend", "cpal".into(), w, cx);
+                v.generation.advance();
+                v.operation = None;
+                v.model.update(cx, |m, _| m.busy = false);
+                v.apply_discovery(Err("discovery failed".into()), w, cx);
+            });
+        })
+        .unwrap();
+    view.read_with(cx, |v, _| {
+        assert_eq!(v.device_error, "discovery failed");
+        for path in [
+            "/devices/device",
+            "/devices/outputDevice",
+            "/devices/previewDevice",
+        ] {
+            let control = v.controls.iter().find(|c| c.field.path == path).unwrap();
+            assert_eq!(control.items.as_deref(), Some(&[String::new()][..]));
+            assert_eq!(control.missing, None);
+        }
+    });
+    cleanup(model, window, cx);
+}
+
+#[gpui_kit::test]
+fn missing_device_message_is_not_overwritten_by_rate_lookup_failure(cx: &mut TestAppContext) {
+    use crate::{backend::BackendKind, gui::model::DeviceChoices};
+
+    let dir = directory();
+    let (model, window, view) = open(cx, &dir);
+    set(&view, window, "/devices/device", "MissingMic", cx);
+    window
+        .update(cx, |_, w, cx| {
+            view.update(cx, |v, cx| {
+                v.apply_discovery(
+                    Ok((
+                        DeviceChoices {
+                            inputs: vec!["PresentMic".into()],
+                            outputs: vec!["PresentOut".into()],
+                            resolved: BackendKind::Cpal,
+                        },
+                        Err("raw backend error".into()),
+                    )),
+                    w,
+                    cx,
+                );
+            });
+        })
+        .unwrap();
+    view.read_with(cx, |v, _| {
+        assert_eq!(
+            v.device_error,
+            "前回使った音声機器が見つかりません。入力・出力デバイスを確認してください。"
+        );
+    });
+    cleanup(model, window, cx);
+}
+
+#[gpui_kit::test]
+fn closing_disables_settings_navigation_and_overview_stage_buttons(cx: &mut TestAppContext) {
+    let dir = directory();
+    let (model, window, _view) = open(cx, &dir);
+    navigate(&model, window, "overview", cx);
+    model.update(cx, |m, cx| {
+        m.closing = true;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    window
+        .update(cx, |_, w, cx| {
+            w.render_frame(cx);
+            w.click("nav-devices", cx);
+            w.click("stage-inputEq", cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        model.read_with(cx, |m, _| m.preferences.section.clone()),
+        "overview"
+    );
+    cleanup(model, window, cx);
+}
