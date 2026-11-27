@@ -1395,3 +1395,105 @@ fn closing_disables_settings_navigation_and_overview_stage_buttons(cx: &mut Test
     cleanup(model, window, cx);
 }
 
+#[gpui_kit::test]
+fn out_of_range_input_and_output_channels_still_offer_valid_device_channels(
+    cx: &mut TestAppContext,
+) {
+    use crate::backend::{DeviceChannels, DeviceSampleRates};
+
+    let dir = directory();
+    let (model, window, view) = open(cx, &dir);
+    set(&view, window, "/devices/inputChannel", "4", cx);
+    set(&view, window, "/devices/outputChannels", "3,4", cx);
+    view.update(cx, |v, cx| {
+        v.rates = Some(DeviceSampleRates {
+            channels: vec![DeviceChannels {
+                sample_rate: 48000,
+                input: 2,
+                output: 2,
+            }],
+            input: vec![48000],
+            output: vec![48000],
+            common: vec![48000],
+        });
+        cx.notify();
+    });
+    navigate(&model, window, "devices", cx);
+    window
+        .update(cx, |_, w, cx| {
+            w.render_frame(cx);
+            for id in [
+                "input-channel:1",
+                "input-channel:2",
+                "input-channel:4",
+                "output-channel:1",
+                "output-channel:2",
+                "output-channel:3",
+                "output-channel:4",
+            ] {
+                assert!(w.try_find(id).is_some(), "{id}");
+            }
+            w.click("input-channel:1", cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |v, _| v.value("/devices/inputChannel")),
+        "1"
+    );
+    cleanup(model, window, cx);
+}
+
+#[gpui_kit::test]
+fn asio_unselected_shows_rate_hint_and_preview_device_change_skips_rediscovery(
+    cx: &mut TestAppContext,
+) {
+    use crate::backend::{BackendKind, DeviceChannels, DeviceSampleRates};
+
+    let dir = directory();
+    let (model, window, view) = open(cx, &dir);
+    set(&view, window, "/devices/backend", "asio", cx);
+    set(&view, window, "/devices/device", "", cx);
+    navigate(&model, window, "devices", cx);
+    window
+        .update(cx, |_, w, cx| {
+            w.render_frame(cx);
+            assert!(w.try_find("device-select-hint").is_some());
+        })
+        .unwrap();
+
+    set(
+        &view,
+        window,
+        "/devices/backend",
+        BackendKind::Cpal.name(),
+        cx,
+    );
+    view.update(cx, |v, cx| {
+        v.rates = Some(DeviceSampleRates {
+            channels: vec![DeviceChannels {
+                sample_rate: 48000,
+                input: 2,
+                output: 2,
+            }],
+            input: vec![48000],
+            output: vec![48000],
+            common: vec![48000],
+        });
+        cx.notify();
+    });
+    window
+        .update(cx, |_, w, cx| {
+            view.update(cx, |v, cx| {
+                v.changed("/devices/previewDevice", "Headphones".into(), w, cx);
+            });
+        })
+        .unwrap();
+    view.read_with(cx, |v, _| {
+        assert!(!v.pending());
+        assert!(v.rates.is_some());
+        assert_eq!(v.value("/devices/previewDevice"), "Headphones");
+    });
+    cleanup(model, window, cx);
+}
+

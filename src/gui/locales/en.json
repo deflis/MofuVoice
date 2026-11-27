@@ -259,5 +259,6 @@
   "模式図": "schematic",
   "減衰時間": "Decay time",
   "無音判定": "Activity threshold",
-  "モード": "Mode"
+  "モード": "Mode",
+  "デバイスを選ぶと対応レートを表示します。": "Select a device to see supported rates."
 }

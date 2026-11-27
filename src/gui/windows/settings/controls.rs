@@ -414,7 +414,6 @@ impl SettingsView {
                 "/devices/backend",
                 "/devices/device",
                 "/devices/outputDevice",
-                "/devices/previewDevice",
             ]
             .contains(&path)
         {

@@ -210,22 +210,29 @@ impl SettingsView {
                 .filter_map(|s| s.trim().parse::<usize>().ok())
                 .collect::<Vec<_>>();
             let required = selected.iter().copied().max().unwrap_or(1);
-            let rate_available = rates.channels.iter().any(|l| l.sample_rate == rate);
-            let inputs = rates
+            let at_rate: Vec<_> = rates
                 .channels
                 .iter()
-                .filter(|l| l.sample_rate == rate && l.output >= required)
+                .filter(|l| l.sample_rate == rate)
+                .collect();
+            let rate_available = !at_rate.is_empty();
+            let max_inputs = at_rate.iter().map(|l| l.input).max().unwrap_or(0);
+            let max_outputs = at_rate.iter().map(|l| l.output).max().unwrap_or(0);
+            let inputs = at_rate
+                .iter()
+                .filter(|l| l.output >= required)
                 .map(|l| l.input)
                 .max()
                 .unwrap_or(0);
-            let outputs = rates
-                .channels
+            let outputs = at_rate
                 .iter()
-                .filter(|l| l.sample_rate == rate && l.input >= input)
+                .filter(|l| l.input >= input)
                 .map(|l| l.output)
                 .max()
                 .unwrap_or(0);
-            let mut input_choices: Vec<usize> = (1..=inputs).collect();
+            let selectable_inputs = if inputs > 0 { inputs } else { max_inputs };
+            let selectable_outputs = if outputs > 0 { outputs } else { max_outputs };
+            let mut input_choices: Vec<usize> = (1..=selectable_inputs).collect();
             if input > 0 && !input_choices.contains(&input) {
                 input_choices.push(input);
                 input_choices.sort_unstable();
@@ -233,7 +240,7 @@ impl SettingsView {
             let mut input_buttons = div().flex().flex_wrap().gap_2();
             for channel in input_choices {
                 let owner = owner.clone();
-                let label = if channel > inputs {
+                let label = if channel > selectable_inputs {
                     format!("{channel}ch{}", t("（利用不可）"))
                 } else {
                     format!("{channel}ch")
@@ -253,7 +260,7 @@ impl SettingsView {
             body = body
                 .child(t("入力チャンネル（1つ選択）"))
                 .child(input_buttons);
-            let mut choices = (1..=outputs)
+            let mut choices = (1..=selectable_outputs)
                 .chain(selected.iter().copied())
                 .collect::<Vec<_>>();
             choices.sort_unstable();
@@ -273,7 +280,7 @@ impl SettingsView {
                     .map(usize::to_string)
                     .collect::<Vec<_>>()
                     .join(",");
-                let label = if channel > outputs {
+                let label = if channel > selectable_outputs {
                     format!("{channel}ch{}", t("（利用不可）"))
                 } else {
                     format!("{channel}ch")
@@ -332,6 +339,13 @@ impl SettingsView {
                     .id("device-discovery-pending")
                     .test_support()
                     .child(t("対応レートを確認中…")),
+            );
+        } else if kind == backend::BackendKind::Asio && self.value("/devices/device").is_empty() {
+            body = body.child(
+                div()
+                    .id("device-select-hint")
+                    .test_support()
+                    .child(t("デバイスを選ぶと対応レートを表示します。")),
             );
         }
         let refresh = owner.clone();
