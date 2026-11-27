@@ -27,7 +27,14 @@ impl Render for MainView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let m = self.model.read(cx);
         let t = |s: &str| m.text(s);
-        let needs_input_device = m.needs_input_device();
+        let can_start = m.can_start();
+        let device_guidance = m
+            .device_warning
+            .map(|warning| warning.message())
+            .or_else(|| {
+                m.needs_input_device()
+                    .then_some("最初に、入力・出力デバイスを設定してください。")
+            });
         layout::surface(cx)
             .id("main-content")
             .overflow_y_scroll()
@@ -66,7 +73,7 @@ impl Render for MainView {
                         Button::new("start-audio")
                             .primary()
                             .label(t("音声を開始"))
-                            .disabled(m.locked() || needs_input_device)
+                            .disabled(!can_start)
                             .on_click(cx.listener(|v, _, _, cx| {
                                 v.model.update(cx, |m, cx| m.start(false, cx))
                             })),
@@ -82,7 +89,7 @@ impl Render for MainView {
                     .child(
                         Button::new("inspect-audio")
                             .label(t("デバイスを検査"))
-                            .disabled(m.locked() || needs_input_device)
+                            .disabled(!can_start)
                             .on_click(cx.listener(|v, _, _, cx| {
                                 v.model.update(cx, |m, cx| m.start(true, cx))
                             })),
@@ -126,17 +133,16 @@ impl Render for MainView {
                             })),
                     ),
             )
-            .when(needs_input_device, |body| {
-                body.child(t("最初に、入力・出力デバイスを設定してください。"))
-                    .child(
-                        Button::new("device-settings")
-                            .label(t("入力・出力デバイスを確認する"))
-                            .disabled(m.closing)
-                            .on_click(cx.listener(|v, _, _, cx| {
-                                v.model
-                                    .update(cx, |m, cx| m.open_settings(Some("devices".into()), cx))
-                            })),
-                    )
+            .when_some(device_guidance, |body, message| {
+                body.child(t(message)).child(
+                    Button::new("device-settings")
+                        .label(t("入力・出力デバイスを確認する"))
+                        .disabled(m.closing)
+                        .on_click(cx.listener(|v, _, _, cx| {
+                            v.model
+                                .update(cx, |m, cx| m.open_settings(Some("devices".into()), cx))
+                        })),
+                )
             })
             .child(div().child(format!(
                 "{} · {} Hz · {} frames",

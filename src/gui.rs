@@ -44,6 +44,7 @@ pub fn run(
             gpui_kit::init(cx);
             theme::init(cx);
             let model = cx.new(|cx| model::AppModel::new(options, path, preferences, cx));
+            model.update(cx, |m, cx| m.check_saved_devices(cx));
             let quit_model = model.clone();
             cx.bind_keys([KeyBinding::new(
                 if cfg!(target_os = "macos") {

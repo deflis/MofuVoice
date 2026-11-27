@@ -189,8 +189,11 @@ impl SettingsView {
                                 m.saved = options;
                                 if target == CloseTarget::Application {
                                     m.shutdown(cx);
-                                } else if target == CloseTarget::Settings {
-                                    m.settings = None;
+                                } else {
+                                    m.check_saved_devices(cx);
+                                    if target == CloseTarget::Settings {
+                                        m.settings = None;
+                                    }
                                 }
                                 cx.notify();
                             });

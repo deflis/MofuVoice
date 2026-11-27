@@ -21,6 +21,8 @@ pub struct AppModel {
     pub info: AudioInfo,
     pub log: Option<AudioLog>,
     pub logging: bool,
+    pub device_warning: Option<DeviceWarning>,
+    device_check: Generation,
     pub status: String,
     pub error: String,
     pub busy: bool,
@@ -104,9 +106,11 @@ impl AppModel {
             path,
             info: AudioInfo::default(),
             log: None,
+            logging: false,
+            device_warning: None,
+            device_check: Generation::default(),
             status: String::new(),
             error: String::new(),
-            logging: false,
             busy: false,
             active: false,
             closing: false,
@@ -135,8 +139,32 @@ impl AppModel {
         self.saved.device.is_empty()
             && backend::resolve(self.saved.backend) == backend::BackendKind::Asio
     }
+    pub fn can_start(&self) -> bool {
+        !self.locked()
+            && !self.needs_input_device()
+            && self.device_warning != Some(DeviceWarning::Unavailable)
+    }
+    pub fn check_saved_devices(&mut self, cx: &mut Context<Self>) {
+        let options = self.saved.clone();
+        let generation = self.device_check.advance();
+        self.device_warning = None;
+        let task = cx
+            .background_executor()
+            .spawn(async move { saved_device_warning(&options, device_choices(options.backend)) });
+        cx.spawn(async move |this, cx| {
+            let warning = task.await;
+            _ = this.update(cx, |m, cx| {
+                if !m.closing && m.device_check.accepts(generation) {
+                    m.device_warning = warning;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+        cx.notify();
+    }
     pub fn start(&mut self, inspect: bool, cx: &mut Context<Self>) {
-        if self.locked() || self.needs_input_device() {
+        if !self.can_start() {
             return;
         }
         self.error.clear();
@@ -233,6 +261,7 @@ impl AppModel {
                 if handle.update(cx, |_, w, _| w.activate_window()).is_err() {
                     model.update(cx, |m, cx| {
                         m.log_window = None;
+                        m.set_logging(false, cx);
                         m.open_log(cx);
                     });
                 }
@@ -257,7 +286,6 @@ impl AppModel {
                 m.opening_log = false;
                 match result {
                     Ok((handle, _)) => {
-                        m.set_logging(false, cx);
                         m.log_window = Some(handle);
                     }
                     Err(e) => m.error = e.to_string(),
@@ -265,6 +293,17 @@ impl AppModel {
                 cx.notify();
             });
         });
+    }
+    pub fn set_logging(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.session
+            .lock()
+            .expect("session control lock")
+            .set_logging(enabled);
+        self.logging = enabled;
+        if !enabled {
+            self.log = None;
+        }
+        cx.notify();
     }
     pub fn open_spectrum(&mut self, cx: &mut Context<Self>) {
         if self.closing || self.opening_spectrum {
@@ -294,17 +333,6 @@ impl AppModel {
                     return;
                 }
             };
-    pub fn set_logging(&mut self, enabled: bool, cx: &mut Context<Self>) {
-        self.session
-            .lock()
-            .expect("session control lock")
-            .set_logging(enabled);
-        self.logging = enabled;
-        if !enabled {
-            self.log = None;
-        }
-        cx.notify();
-    }
             let close = model.clone();
             let observed = model.clone();
             let result =
@@ -395,6 +423,41 @@ pub struct DeviceChoices {
     pub outputs: Vec<String>,
     pub resolved: backend::BackendKind,
 }
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DeviceWarning {
+    Unavailable,
+    Missing,
+}
+
+impl DeviceWarning {
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::Unavailable => "使える音声機器が見つかりません。接続と設定を確認してください。",
+            Self::Missing => {
+                "前回使った音声機器が見つかりません。入力・出力デバイスを確認してください。"
+            }
+        }
+    }
+}
+
+fn saved_device_warning(
+    options: &Options,
+    choices: Result<DeviceChoices, String>,
+) -> Option<DeviceWarning> {
+    let Ok(choices) = choices else {
+        return Some(DeviceWarning::Unavailable);
+    };
+    let missing = |name: &str, devices: &[String]| {
+        !name.is_empty() && !devices.iter().any(|device| device == name)
+    };
+    (missing(&options.device, &choices.inputs)
+        || (choices.resolved == backend::BackendKind::Cpal
+            && (missing(&options.output_device, &choices.outputs)
+                || missing(&options.preview_device, &choices.outputs))))
+    .then_some(DeviceWarning::Missing)
+}
+
 pub fn device_choices(kind: backend::BackendKind) -> Result<DeviceChoices, String> {
     let kind = backend::resolve(kind);
     #[cfg(all(windows, feature = "asio"))]
@@ -409,4 +472,52 @@ pub fn device_choices(kind: backend::BackendKind) -> Result<DeviceChoices, Strin
         outputs: selected.output_device_names().map_err(|e| e.to_string())?,
         resolved: kind,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{saved_device_warning, DeviceChoices, DeviceWarning};
+    use crate::{backend::BackendKind, cli::Options};
+
+    #[test]
+    fn saved_device_warning_checks_each_cpal_route_and_distinguishes_enumeration_failure() {
+        let choices = || {
+            Ok(DeviceChoices {
+                inputs: vec!["mic".into()],
+                outputs: vec!["speaker".into(), "headphones".into()],
+                resolved: BackendKind::Cpal,
+            })
+        };
+        let options = Options {
+            device: "mic".into(),
+            output_device: "speaker".into(),
+            preview_device: "headphones".into(),
+            ..Default::default()
+        };
+        assert_eq!(saved_device_warning(&options, choices()), None);
+        assert_eq!(saved_device_warning(&Options::default(), choices()), None);
+        for missing in [
+            Options {
+                device: "missing".into(),
+                ..options.clone()
+            },
+            Options {
+                output_device: "missing".into(),
+                ..options.clone()
+            },
+            Options {
+                preview_device: "missing".into(),
+                ..options.clone()
+            },
+        ] {
+            assert_eq!(
+                saved_device_warning(&missing, choices()),
+                Some(DeviceWarning::Missing)
+            );
+        }
+        assert_eq!(
+            saved_device_warning(&options, Err("failed".into())),
+            Some(DeviceWarning::Unavailable)
+        );
+    }
 }
