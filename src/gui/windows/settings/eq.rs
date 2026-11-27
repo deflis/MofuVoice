@@ -29,6 +29,7 @@ impl SettingsView {
         }
         self.base = Settings::from_options(&options);
         self.build_controls(window, cx);
+        self.error.clear();
         window.refresh();
         cx.notify();
     }
@@ -37,6 +38,7 @@ impl SettingsView {
 #[cfg(all(test, feature = "desktop-tests"))]
 mod tests {
     use super::super::tests::{cleanup, directory, open, set};
+    use super::super::CloseTarget;
     use gpui_kit::TestAppContext;
 
     #[gpui_kit::test]
@@ -59,6 +61,8 @@ mod tests {
             initial_count + 1
         );
         set(&view, window, &band_q, "", cx);
+        view.update(cx, |v, cx| v.save(CloseTarget::None, cx));
+        assert!(view.read_with(cx, |v, _| v.error.starts_with(&band_q)));
         window
             .update(cx, |_, w, cx| {
                 view.update(cx, |v, cx| v.band_count("eq", false, w, cx))
@@ -69,7 +73,10 @@ mod tests {
             assert_eq!(v.base.options().unwrap().eq.bands.len(), initial_count);
             assert!(!v.edits().contains_key(&band_q));
             assert_eq!(v.value("/voice/pitch"), "");
+            assert!(v.error.is_empty());
         });
+        view.update(cx, |v, cx| v.save(CloseTarget::None, cx));
+        assert!(view.read_with(cx, |v, _| v.error.starts_with("/voice/pitch")));
         cleanup(model, window, cx);
     }
 }
