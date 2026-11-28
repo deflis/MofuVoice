@@ -109,6 +109,7 @@ impl SettingsView {
         &self,
         field: NumberField,
         style: FieldStyle,
+        window: &Window,
         cx: &App,
     ) -> AnyElement {
         let control = self
@@ -144,13 +145,34 @@ impl SettingsView {
                     .slider_focus
                     .as_ref()
                     .expect("simple slider focus handle");
+                let focused = focus.is_focused(window);
                 let state = slider.clone();
-                div()
+                let ring = crate::gui::theme::palette(cx).accent;
+                // FocusHandle defaults to tab_stop=false; div.tab_index is ignored when
+                // track_focus is set, so configure tab order on the handle itself.
+                let mut slider_el = div()
                     .id(SharedString::from(format!("slider:{field_id}")))
                     .flex_1()
                     .h(px(28.))
-                    .track_focus(focus)
-                    .tab_index(0)
+                    .border_1()
+                    .border_color(rgba(0x0000_0000))
+                    .focus(move |style| style.border_color(ring));
+                // Keep tracking while focused even when blocked so Tab can leave.
+                if !blocked || focused {
+                    let handle = focus.clone().tab_index(0).tab_stop(!blocked);
+                    let click_focus = handle.clone();
+                    slider_el = slider_el.track_focus(&handle).on_mouse_down(
+                        MouseButton::Left,
+                        move |_, window, cx| {
+                            click_focus.focus(window, cx);
+                        },
+                    );
+                } else {
+                    slider_el = slider_el.on_mouse_down(MouseButton::Left, |_, _, cx| {
+                        cx.stop_propagation();
+                    });
+                }
+                slider_el
                     .on_key_down(move |event, window, cx| {
                         if blocked {
                             return;
@@ -243,6 +265,7 @@ impl SettingsView {
         &self,
         section: Section,
         owner: Entity<Self>,
+        window: &Window,
         cx: &App,
     ) -> AnyElement {
         let model = self.model.read(cx);
@@ -264,10 +287,16 @@ impl SettingsView {
                     ));
                 }
                 body = body
-                    .child(self.render_number(NumberField::Pitch, FieldStyle::VoiceSlider, cx))
+                    .child(self.render_number(
+                        NumberField::Pitch,
+                        FieldStyle::VoiceSlider,
+                        window,
+                        cx,
+                    ))
                     .child(self.render_number(
                         NumberField::FormantShift,
                         FieldStyle::VoiceSlider,
+                        window,
                         cx,
                     ))
                     .child(t(
@@ -288,6 +317,7 @@ impl SettingsView {
                         body = body.child(self.render_number(
                             NumberField::EqBand(kind, index, EqBandField::GainDb),
                             FieldStyle::SimpleSlider,
+                            window,
                             cx,
                         ));
                     }
@@ -310,6 +340,7 @@ impl SettingsView {
                         .child(self.render_number(
                             NumberField::DeesserRangeDb,
                             FieldStyle::SimpleSlider,
+                            window,
                             cx,
                         ))
                         .child(self.detail_button(section, owner, cx));
@@ -340,17 +371,25 @@ impl SettingsView {
                     .child(self.render_number(
                         NumberField::CompressorThresholdDb,
                         FieldStyle::Number,
+                        window,
                         cx,
                     ))
-                    .child(self.render_number(NumberField::CompressorRatio, FieldStyle::Number, cx))
+                    .child(self.render_number(
+                        NumberField::CompressorRatio,
+                        FieldStyle::Number,
+                        window,
+                        cx,
+                    ))
                     .child(self.render_number(
                         NumberField::CompressorAttackMs,
                         FieldStyle::Number,
+                        window,
                         cx,
                     ))
                     .child(self.render_number(
                         NumberField::CompressorReleaseMs,
                         FieldStyle::Number,
+                        window,
                         cx,
                     ));
                 if !self.draft.compressor_enabled {
@@ -363,11 +402,13 @@ impl SettingsView {
                     .child(self.render_number(
                         NumberField::LimiterCeilingDb,
                         FieldStyle::Number,
+                        window,
                         cx,
                     ))
                     .child(self.render_number(
                         NumberField::LimiterReleaseMs,
                         FieldStyle::Number,
+                        window,
                         cx,
                     ));
                 if !self.draft.limiter_enabled {
@@ -377,10 +418,16 @@ impl SettingsView {
             Section::Dereverb => {
                 body = body
                     .child(self.render_toggle(ToggleField::DereverbEnabled, owner, cx))
-                    .child(self.render_number(NumberField::DereverbAmount, FieldStyle::Number, cx))
+                    .child(self.render_number(
+                        NumberField::DereverbAmount,
+                        FieldStyle::Number,
+                        window,
+                        cx,
+                    ))
                     .child(self.render_number(
                         NumberField::DereverbDecayMs,
                         FieldStyle::Number,
+                        window,
                         cx,
                     ));
                 if !self.draft.dereverb_enabled {
@@ -390,13 +437,24 @@ impl SettingsView {
             Section::Reverb => {
                 body = body
                     .child(self.render_toggle(ToggleField::ReverbEnabled, owner, cx))
-                    .child(self.render_number(NumberField::ReverbMix, FieldStyle::Number, cx))
+                    .child(self.render_number(
+                        NumberField::ReverbMix,
+                        FieldStyle::Number,
+                        window,
+                        cx,
+                    ))
                     .child(self.render_number(
                         NumberField::ReverbPreDelayMs,
                         FieldStyle::Number,
+                        window,
                         cx,
                     ))
-                    .child(self.render_number(NumberField::ReverbDecayMs, FieldStyle::Number, cx));
+                    .child(self.render_number(
+                        NumberField::ReverbDecayMs,
+                        FieldStyle::Number,
+                        window,
+                        cx,
+                    ));
                 if !self.draft.reverb_enabled {
                     body = body.child(t("バイパス中。設定値は保持されます。"));
                 }

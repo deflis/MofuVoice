@@ -33,7 +33,7 @@ impl SettingsView {
             self.notify_host(cx);
         }
         let weak = cx.weak_entity();
-        window.open_dialog(cx, move |dialog, _, cx| {
+        window.open_dialog(cx, move |dialog, window, cx| {
             let owner = weak.upgrade().expect("settings window owns its modal");
             let view = owner.read(cx);
             let model = view.model.read(cx);
@@ -45,7 +45,7 @@ impl SettingsView {
                 ))
                 .width(px(650.))
                 .overlay_closable(false)
-                .child(view.render_details(section, owner.clone(), cx))
+                .child(view.render_details(section, owner.clone(), window, cx))
                 .footer(
                     Button::new("close-details")
                         .label(model.text("閉じる"))
@@ -56,7 +56,13 @@ impl SettingsView {
         cx.notify();
     }
 
-    fn render_details(&self, section: Section, owner: Entity<Self>, cx: &App) -> AnyElement {
+    fn render_details(
+        &self,
+        section: Section,
+        owner: Entity<Self>,
+        window: &Window,
+        cx: &App,
+    ) -> AnyElement {
         let mut body = div()
             .id("details-content")
             .max_h(px(500.))
@@ -69,7 +75,7 @@ impl SettingsView {
             Section::Devices => {
                 body = body
                     .child(self.render_select(SelectField::Backend, cx))
-                    .child(self.render_number(NumberField::Frames, FieldStyle::Number, cx));
+                    .child(self.render_number(NumberField::Frames, FieldStyle::Number, window, cx));
             }
             Section::Voice => {
                 let algorithm = self.draft.pitch_algorithm;
@@ -128,24 +134,20 @@ impl SettingsView {
                     ))
                     .child(self.render_number(
                         NumberField::DeesserFrequencyHz,
-                        FieldStyle::Number,
-                        cx,
+                        FieldStyle::Number, window, cx,
                     ))
                     .child(self.render_number(
                         NumberField::DeesserThresholdDb,
-                        FieldStyle::Number,
-                        cx,
+                        FieldStyle::Number, window, cx,
                     ))
-                    .child(self.render_number(NumberField::DeesserRangeDb, FieldStyle::Number, cx))
+                    .child(self.render_number(NumberField::DeesserRangeDb, FieldStyle::Number, window, cx))
                     .child(self.render_number(
                         NumberField::DeesserAttackMs,
-                        FieldStyle::Number,
-                        cx,
+                        FieldStyle::Number, window, cx,
                     ))
                     .child(self.render_number(
                         NumberField::DeesserReleaseMs,
-                        FieldStyle::Number,
-                        cx,
+                        FieldStyle::Number, window, cx,
                     ))
                     .child(self.reset_button(
                         ResetTarget::Deesser,
@@ -163,19 +165,50 @@ impl SettingsView {
                     body = body.child(self.render_number(
                         NumberField::GateThresholdDb,
                         FieldStyle::Number,
+                        window,
                         cx,
                     ));
                 }
                 body = body
-                    .child(self.render_number(NumberField::GateAttackMs, FieldStyle::Number, cx))
-                    .child(self.render_number(NumberField::GateReleaseMs, FieldStyle::Number, cx));
+                    .child(self.render_number(
+                        NumberField::GateAttackMs,
+                        FieldStyle::Number,
+                        window,
+                        cx,
+                    ))
+                    .child(self.render_number(
+                        NumberField::GateReleaseMs,
+                        FieldStyle::Number,
+                        window,
+                        cx,
+                    ));
             }
             Section::AutoLevel => {
                 body = body
-                    .child(self.render_number(NumberField::LevelTargetDb, FieldStyle::Number, cx))
-                    .child(self.render_number(NumberField::LevelMaxGainDb, FieldStyle::Number, cx))
-                    .child(self.render_number(NumberField::LevelFloorDb, FieldStyle::Number, cx))
-                    .child(self.render_number(NumberField::LevelResponseMs, FieldStyle::Number, cx))
+                    .child(self.render_number(
+                        NumberField::LevelTargetDb,
+                        FieldStyle::Number,
+                        window,
+                        cx,
+                    ))
+                    .child(self.render_number(
+                        NumberField::LevelMaxGainDb,
+                        FieldStyle::Number,
+                        window,
+                        cx,
+                    ))
+                    .child(self.render_number(
+                        NumberField::LevelFloorDb,
+                        FieldStyle::Number,
+                        window,
+                        cx,
+                    ))
+                    .child(self.render_number(
+                        NumberField::LevelResponseMs,
+                        FieldStyle::Number,
+                        window,
+                        cx,
+                    ))
                     .child(self.reset_button(ResetTarget::AutoLevel, "標準に戻す", owner, cx));
             }
             Section::PostCompressor => {
@@ -183,21 +216,25 @@ impl SettingsView {
                     .child(self.render_number(
                         NumberField::PostCompressorThresholdDb,
                         FieldStyle::Number,
+                        window,
                         cx,
                     ))
                     .child(self.render_number(
                         NumberField::PostCompressorRatio,
                         FieldStyle::Number,
+                        window,
                         cx,
                     ))
                     .child(self.render_number(
                         NumberField::PostCompressorAttackMs,
                         FieldStyle::Number,
+                        window,
                         cx,
                     ))
                     .child(self.render_number(
                         NumberField::PostCompressorReleaseMs,
                         FieldStyle::Number,
+                        window,
                         cx,
                     ))
                     .child(self.reset_button(ResetTarget::PostCompressor, "標準に戻す", owner, cx));
@@ -213,6 +250,7 @@ impl SettingsView {
                         body = body.child(self.render_number(
                             NumberField::EqBand(kind, index, field),
                             FieldStyle::Number,
+                            window,
                             cx,
                         ));
                     }
@@ -220,6 +258,7 @@ impl SettingsView {
                 body = body.child(self.render_number(
                     NumberField::EqOutputDb(kind),
                     FieldStyle::Number,
+                    window,
                     cx,
                 ));
                 let gains = eq

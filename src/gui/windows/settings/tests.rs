@@ -8,7 +8,7 @@ use crate::{
             ToggleField, UiMode,
         },
         layout,
-        model::{AppModel, DeviceChoices},
+        model::{AppModel, DeviceChoices, DeviceWarning},
         preferences::{Language, Preferences, Section},
     },
     pitch::PitchAlgorithm,
@@ -1796,5 +1796,181 @@ fn opening_details_clears_discard_target_and_notice_when_switching_mode(cx: &mut
         .update(cx, |_, w, cx| w.click("close-details", cx))
         .unwrap();
     cx.run_until_parked();
+    cleanup(model, window, cx);
+}
+
+#[gpui_kit::test]
+fn simple_slider_is_reachable_by_tab_and_arrows_change_value(cx: &mut TestAppContext) {
+    let dir = directory();
+    let (model, window, view) = open(cx, &dir);
+    set_toggle(&view, window, ToggleField::DeesserEnabled, true, cx);
+    navigate(&model, window, Section::Deesser, cx);
+    let field = NumberField::DeesserRangeDb;
+    let before = view.read_with(cx, |v, _| {
+        v.draft.number_text(field).parse::<f64>().unwrap()
+    });
+    let focus = view.read_with(cx, |v, _| {
+        v.numbers[&field]
+            .slider_focus
+            .clone()
+            .expect("simple slider focus")
+    });
+    window
+        .update(cx, |_, w, cx| {
+            w.render_frame(cx);
+            w.focus_next(cx);
+            w.render_frame(cx);
+            let mut reached = focus.is_focused(w);
+            for _ in 0..64 {
+                if reached {
+                    break;
+                }
+                w.press("tab", cx);
+                w.render_frame(cx);
+                reached = focus.is_focused(w);
+            }
+            assert!(reached, "SimpleSlider should be a Tab stop");
+            w.press("right", cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let after = view.read_with(cx, |v, _| {
+        v.draft.number_text(field).parse::<f64>().unwrap()
+    });
+    assert!(after > before, "before={before} after={after}");
+
+    set_number(&view, window, field, "-", cx);
+    window
+        .update(cx, |_, w, cx| {
+            w.render_frame(cx);
+            focus.focus(w, cx);
+            w.render_frame(cx);
+            assert!(focus.is_focused(w));
+            w.press("right", cx);
+            w.press("left", cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |v, _| v.draft.number_text(field).to_string()),
+        "-"
+    );
+    cleanup(model, window, cx);
+}
+
+#[gpui_kit::test]
+fn set_device_missing_detection_uses_discovered_across_alias_and_missing_round_trips(
+    cx: &mut TestAppContext,
+) {
+    let dir = directory();
+    let (model, window, view) = open(cx, &dir);
+    let labeled = "Headphones [out-2]";
+    let missing_msg = DeviceWarning::Missing.message();
+    window
+        .update(cx, |_, w, cx| {
+            view.update(cx, |v, cx| {
+                v.draft.backend = BackendKind::Cpal;
+                v.apply_discovery(
+                    Ok((
+                        DeviceChoices {
+                            inputs: vec!["Mic [in-1]".into()],
+                            outputs: vec![labeled.into()],
+                            resolved: BackendKind::Cpal,
+                        },
+                        Ok(None),
+                    )),
+                    w,
+                    cx,
+                );
+            });
+        })
+        .unwrap();
+    window
+        .update(cx, |_, w, cx| {
+            view.update(cx, |v, cx| {
+                v.set_device(DeviceSlot::Preview, "Headphones".into(), w, cx);
+            });
+        })
+        .unwrap();
+    view.read_with(cx, |v, _| {
+        let select = v.selects.device(DeviceSlot::Preview);
+        assert_eq!(select.discovered.as_slice(), &[labeled.to_string()]);
+        assert_eq!(select.missing, None);
+        assert!(v.device_error.is_empty());
+        assert_eq!(
+            select.items.as_slice(),
+            &[String::new(), labeled.into(), "Headphones".into()]
+        );
+    });
+    // Reselecting the CPAL alias must not flip the device to missing.
+    window
+        .update(cx, |_, w, cx| {
+            view.update(cx, |v, cx| {
+                v.set_device(DeviceSlot::Preview, "Headphones".into(), w, cx);
+            });
+        })
+        .unwrap();
+    view.read_with(cx, |v, _| {
+        assert_eq!(v.selects.device(DeviceSlot::Preview).missing, None);
+        assert!(v.device_error.is_empty());
+    });
+    window
+        .update(cx, |_, w, cx| {
+            view.update(cx, |v, cx| {
+                v.set_device(DeviceSlot::Preview, "Speaker [out-1]".into(), w, cx);
+                v.set_device(DeviceSlot::Preview, "Headphones".into(), w, cx);
+            });
+        })
+        .unwrap();
+    view.read_with(cx, |v, _| {
+        assert_eq!(v.selects.device(DeviceSlot::Preview).missing, None);
+        assert!(v.device_error.is_empty());
+    });
+
+    // Missing preview must leave items after switching away, and stay missing if reselected.
+    window
+        .update(cx, |_, w, cx| {
+            view.update(cx, |v, cx| {
+                v.set_device(DeviceSlot::Preview, "OldHeadphones".into(), w, cx);
+            });
+        })
+        .unwrap();
+    view.read_with(cx, |v, _| {
+        let select = v.selects.device(DeviceSlot::Preview);
+        assert_eq!(select.missing.as_deref(), Some("OldHeadphones"));
+        assert_eq!(v.device_error, missing_msg);
+        assert_eq!(
+            select.items.as_slice(),
+            &[String::new(), labeled.into(), "OldHeadphones".into()]
+        );
+    });
+    window
+        .update(cx, |_, w, cx| {
+            view.update(cx, |v, cx| {
+                v.set_device(DeviceSlot::Preview, String::new(), w, cx);
+            });
+        })
+        .unwrap();
+    view.read_with(cx, |v, _| {
+        let select = v.selects.device(DeviceSlot::Preview);
+        assert_eq!(select.missing, None);
+        assert!(v.device_error.is_empty());
+        assert_eq!(select.items.as_slice(), &[String::new(), labeled.into()]);
+        assert!(!select.items.iter().any(|item| item == "OldHeadphones"));
+    });
+    window
+        .update(cx, |_, w, cx| {
+            view.update(cx, |v, cx| {
+                v.set_device(DeviceSlot::Preview, "OldHeadphones".into(), w, cx);
+            });
+        })
+        .unwrap();
+    view.read_with(cx, |v, _| {
+        assert_eq!(
+            v.selects.device(DeviceSlot::Preview).missing.as_deref(),
+            Some("OldHeadphones")
+        );
+        assert_eq!(v.device_error, missing_msg);
+    });
     cleanup(model, window, cx);
 }
