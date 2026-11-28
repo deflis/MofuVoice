@@ -187,6 +187,7 @@ impl Configuration {
     }
     pub fn validate_rate(&self, frames: u32, rate: u32) -> Result<()> {
         crate::validate_sample_rate(rate)?;
+        crate::audio::DspChain::validate_block_frames(frames as usize)?;
         if self.rate != rate as f64 {
             return Err(format!(
                 "Driver currently runs at {} Hz; set the ASIO driver to {rate} Hz to match the selected sample rate",
@@ -781,6 +782,51 @@ mod tests {
                 step: 32
             }
         ));
+    }
+    #[test]
+    fn public_startup_rejects_buffers_above_dsp_limit_before_callbacks() {
+        let limit = crate::audio::MAX_DSP_FRAMES as u32;
+        let config = Configuration {
+            inputs: 1,
+            outputs: 1,
+            format: Format::F32,
+            rate: RATE as f64,
+            min: 64,
+            max: (limit * 2) as i32,
+            preferred: BufferPreference::Stepped {
+                preferred: 512,
+                step: 64,
+            },
+        };
+        assert!(config.validate_rate(limit, RATE).is_ok());
+        assert!(buffer_supported(
+            limit + 64,
+            config.min,
+            config.max,
+            config.preferred
+        ));
+        let err = config.validate_rate(limit + 64, RATE).unwrap_err();
+        assert!(
+            err.to_string().contains(&limit.to_string()),
+            "expected DSP limit in error, got {err}"
+        );
+        assert!(config.validate_rate(0, RATE).is_err());
+        assert!(config.validate_rate(1, RATE).is_err());
+        let tight = Configuration {
+            inputs: 1,
+            outputs: 1,
+            format: Format::F32,
+            rate: RATE as f64,
+            min: 1,
+            max: limit as i32,
+            preferred: BufferPreference::Stepped {
+                preferred: 1,
+                step: 1,
+            },
+        };
+        assert!(tight.validate_rate(1, RATE).is_ok());
+        assert!(tight.validate_rate(limit, RATE).is_ok());
+        assert!(tight.validate_rate(limit + 1, RATE).is_err());
     }
     #[test]
     fn direct_buffer_copy_has_no_fifo_and_silences_other_outputs() {
