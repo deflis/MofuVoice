@@ -38,17 +38,21 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         return Ok(());
     }
-    let routing = backend::ChannelRouting::from(&options);
-    let details = backend.inspect(&options.device, options.frames, &routing)?;
-    println!(
-        "Selected: {}\n{details}",
-        if options.device.is_empty() {
-            "OS default"
-        } else {
-            &options.device
-        }
-    );
+    run_audio(backend.as_ref(), &options)
+}
+
+fn run_audio(backend: &dyn backend::AudioBackend, options: &cli::Options) -> backend::Result<()> {
+    let routing = backend::ChannelRouting::from(options);
     if options.inspect {
+        let details = backend.inspect(&options.device, options.frames, &routing)?;
+        println!(
+            "Selected: {}\n{details}",
+            if options.device.is_empty() {
+                "OS default"
+            } else {
+                &options.device
+            }
+        );
         println!(
             "Requested {} Hz / {} frames supported. No audio buffers created.",
             options.sample_rate, options.frames
@@ -59,9 +63,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         &options.device,
         options.frames,
         &routing,
-        DspSettings::from(&options),
+        DspSettings::from(options),
     )?;
-    mofu_voice::spectrum::set_sample_rate(options.sample_rate);
+    if backend::resolve(options.backend) != backend::BackendKind::Cpal {
+        mofu_voice::spectrum::set_sample_rate(options.sample_rate);
+    }
     engine.print_latencies()?;
     println!("Pitch algorithm: {}", options.pitch.algorithm.name());
     println!(
@@ -119,6 +125,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     engine.start()?;
     println!(
+        "Selected: {}\n{}",
+        engine.configuration().device,
+        engine.details()
+    );
+    println!(
         "Formant shift: {} semitones (independent of pitch).",
         options.pitch.formant_shift
     );
@@ -173,4 +184,58 @@ fn main() -> Result<(), Box<dyn Error>> {
     engine.check_events()?;
     engine.check_test_result()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct UnavailablePreview;
+
+    impl backend::AudioBackend for UnavailablePreview {
+        fn device_names(&self) -> backend::Result<Vec<String>> {
+            unreachable!()
+        }
+
+        fn inspect_configuration(
+            &self,
+            _: &str,
+            _: u32,
+            _: &backend::ChannelRouting,
+        ) -> backend::Result<backend::AudioInspection> {
+            Err("preview device unavailable during inspection".into())
+        }
+
+        fn open(
+            &self,
+            _: &str,
+            _: u32,
+            _: &backend::ChannelRouting,
+            _: DspSettings,
+        ) -> backend::Result<Box<dyn backend::AudioStream>> {
+            // Stop before playback and prove the CLI reached the primary open.
+            Err("primary open reached".into())
+        }
+    }
+
+    #[test]
+    fn live_cli_reaches_primary_open_when_explicit_preview_inspection_would_fail() {
+        let mut options = cli::Options::parse(
+            ["--backend", "cpal", "--preview-device", "missing"].map(String::from),
+        )
+        .unwrap();
+        assert_eq!(
+            run_audio(&UnavailablePreview, &options)
+                .unwrap_err()
+                .to_string(),
+            "primary open reached"
+        );
+        options.inspect = true;
+        assert_eq!(
+            run_audio(&UnavailablePreview, &options)
+                .unwrap_err()
+                .to_string(),
+            "preview device unavailable during inspection"
+        );
+    }
 }

@@ -31,9 +31,9 @@ const NARROW_FFT: usize = 2048;
 const NARROW_HOP: usize = 512;
 
 static SAMPLE_RATE: AtomicUsize = AtomicUsize::new(RATE as usize);
-/// Set on the control thread before starting a new stream.
+/// Set the native playback sample rate on the control thread before starting a stream.
 pub fn set_sample_rate(rate: u32) {
-    assert!(crate::validate_sample_rate(rate).is_ok());
+    assert!((8000..=192000).contains(&rate));
     SAMPLE_RATE.store(rate as usize, Ordering::Release);
 }
 static ACTIVE: AtomicPtr<Shared> = AtomicPtr::new(ptr::null_mut());
@@ -332,6 +332,9 @@ fn db_to_bgra(db: f64) -> [u8; 4] {
 }
 
 fn magnitude_at(bins: &[f64], fft_size: usize, hz: f64, rate: u32) -> f64 {
+    if hz > rate as f64 * 0.5 {
+        return 0.0;
+    }
     let bin = hz * fft_size as f64 / rate as f64;
     if bin <= 0.0 {
         return bins[0];
@@ -555,8 +558,16 @@ mod tests {
     }
 
     #[test]
+    fn native_output_rate_limits_spectrogram_to_nyquist() {
+        let bins = [0.0, 0.125, 0.5];
+        assert_eq!(magnitude_at(&bins, 4, 4000.0, 8000), 0.5);
+        assert_eq!(magnitude_at(&bins, 4, 4001.0, 8000), 0.0);
+        assert_eq!(magnitude_at(&bins, 4, 8000.0, 8000), 0.0);
+    }
+
+    #[test]
     fn frequency_mapping_and_meter_timing_follow_selected_rate() {
-        for rate in crate::SAMPLE_RATES {
+        for rate in [8000, 44100, 48000, 96000, 192000] {
             let fft = Fft::new(NARROW_FFT);
             let hz = rate as f64 * 43.0 / NARROW_FFT as f64;
             let mut data: Vec<_> = (0..NARROW_FFT)
