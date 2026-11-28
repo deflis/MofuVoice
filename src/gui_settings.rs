@@ -413,13 +413,6 @@ fn decode(text: &str) -> Result<SavedSettings, Box<dyn Error>> {
     })
 }
 
-fn read_settings_file(path: &Path) -> Result<SavedSettings, Box<dyn Error>> {
-    let text = fs::read_to_string(path)
-        .map_err(|error| format!("Cannot read GUI settings '{}': {error}", path.display()))?;
-    decode(&text)
-        .map_err(|error| format!("Cannot read GUI settings '{}': {error}", path.display()).into())
-}
-
 fn default_settings() -> Result<SavedSettings, Box<dyn Error>> {
     Ok(SavedSettings {
         options: Options::parse_gui(Vec::new())?,
@@ -427,58 +420,14 @@ fn default_settings() -> Result<SavedSettings, Box<dyn Error>> {
     })
 }
 
-/// Loads `path`, or migrates a legacy file when the primary path is absent.
-///
-/// `legacy` is only consulted when `path` does not exist. A corrupt legacy file
-/// fails; a failed write to `path` still returns the loaded legacy settings so
-/// the next launch can retry the migration. After a successful write the legacy
-/// file is renamed to `*.ini.migrated` when possible; rename failure does not
-/// fail the migration.
-pub(crate) fn load_with_legacy(
-    path: &Path,
-    legacy: Option<&Path>,
-) -> Result<SavedSettings, Box<dyn Error>> {
+/// Loads `path`, or defaults when the file is missing. Corrupt files fail.
+pub(crate) fn load(path: &Path) -> Result<SavedSettings, Box<dyn Error>> {
     match fs::read_to_string(path) {
         Ok(text) => decode(&text).map_err(|error| {
             format!("Cannot read GUI settings '{}': {error}", path.display()).into()
         }),
-        Err(error) if error.kind() == ErrorKind::NotFound => {
-            if let Some(legacy) = legacy.filter(|legacy| *legacy != path && legacy.exists()) {
-                let settings = read_settings_file(legacy)?;
-                if save(path, &settings.options, &settings.ui).is_ok() {
-                    // Archive the legacy file so deleting the primary path does not remigrate.
-                    let archived = legacy.with_extension("ini.migrated");
-                    let _ = fs::rename(legacy, archived);
-                }
-                return Ok(settings);
-            }
-            default_settings()
-        }
+        Err(error) if error.kind() == ErrorKind::NotFound => default_settings(),
         Err(error) => Err(format!("Cannot read GUI settings '{}': {error}", path.display()).into()),
-    }
-}
-
-/// Loads only `path` (or defaults when missing). Never consults a legacy file.
-pub(crate) fn load(path: &Path) -> Result<SavedSettings, Box<dyn Error>> {
-    load_with_legacy(path, None)
-}
-
-/// Startup load for the default settings path, including macOS legacy migration.
-#[cfg(feature = "desktop")]
-pub(crate) fn load_startup(path: &Path) -> Result<SavedSettings, Box<dyn Error>> {
-    #[cfg(target_os = "macos")]
-    {
-        if path.exists() {
-            return load(path);
-        }
-        let legacy = std::env::current_exe()
-            .ok()
-            .map(|executable| executable.with_file_name("settings.ini"));
-        load_with_legacy(path, legacy.as_deref())
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        load(path)
     }
 }
 
@@ -716,80 +665,6 @@ mod tests {
         );
         assert!(super::macos_path(None).is_err());
         assert!(super::macos_path(Some(std::ffi::OsString::new())).is_err());
-    }
-
-    #[test]
-    fn missing_primary_settings_migrate_from_legacy_and_prefer_primary() {
-        let root = std::env::temp_dir().join(format!(
-            "mofu-settings-migrate-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let primary = root.join("app-support").join("settings.ini");
-        let legacy = root.join("exe-dir").join("settings.ini");
-        fs::create_dir_all(legacy.parent().unwrap()).unwrap();
-        let options = Options::parse_gui(["--pitch", "7.5"].map(String::from)).unwrap();
-        save(&legacy, &options).unwrap();
-
-        let migrated = super::load_with_legacy(&primary, Some(&legacy)).unwrap();
-        assert_eq!(migrated.options.pitch.semitones, 7.5);
-        assert!(primary.is_file());
-        assert!(!legacy.is_file());
-        let archived = legacy.with_extension("ini.migrated");
-        assert!(archived.is_file());
-        assert_eq!(load(&primary).unwrap().pitch.semitones, 7.5);
-
-        let mut primary_options = options;
-        primary_options.pitch.semitones = 1.0;
-        save(&primary, &primary_options).unwrap();
-        assert_eq!(
-            super::load_with_legacy(&primary, Some(&legacy))
-                .unwrap()
-                .options
-                .pitch
-                .semitones,
-            1.0
-        );
-
-        fs::remove_file(&primary).unwrap();
-        let reset = super::load_with_legacy(&primary, Some(&legacy)).unwrap();
-        assert_eq!(
-            reset.options.pitch.semitones,
-            Options::parse_gui(Vec::new()).unwrap().pitch.semitones
-        );
-        assert!(!legacy.is_file());
-
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn load_reads_only_the_given_path_without_legacy_migration() {
-        let root = std::env::temp_dir().join(format!(
-            "mofu-settings-load-only-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let primary = root.join("app-support").join("settings.ini");
-        let legacy = root.join("exe-dir").join("settings.ini");
-        fs::create_dir_all(legacy.parent().unwrap()).unwrap();
-        let options = Options::parse_gui(["--pitch", "4.5"].map(String::from)).unwrap();
-        save(&legacy, &options).unwrap();
-
-        let loaded = super::load(&primary).unwrap();
-        assert_eq!(
-            loaded.options.pitch.semitones,
-            Options::parse_gui(Vec::new()).unwrap().pitch.semitones
-        );
-        assert!(!primary.is_file());
-        assert!(legacy.is_file());
-
-        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
