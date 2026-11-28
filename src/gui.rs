@@ -27,7 +27,7 @@ pub fn initial_settings(args: impl IntoIterator<Item = String>) -> Result<Startu
             preferences: preferences::Preferences::system(),
         });
     }
-    let saved = gui_settings::load(&gui_settings::path()?)?;
+    let saved = gui_settings::load_startup(&gui_settings::path()?)?;
     Ok(Startup {
         options: gui_settings::merge(&saved.options, args)?,
         persisted_options: saved.options,
