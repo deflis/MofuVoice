@@ -245,19 +245,24 @@ fn run_audio(
     )?;
     let configuration = engine.configuration();
     update_configuration(info, &configuration, &options, "opening", kind);
-    let details = format!(
-        "Device: {}\n{}\nPitch algorithm: {}",
-        configuration.device,
-        engine.details(),
-        options.pitch.algorithm.name()
-    );
+    let format_details = |details: &str| {
+        format!(
+            "Device: {}\n{details}\nPitch algorithm: {}",
+            configuration.device,
+            options.pitch.algorithm.name()
+        )
+    };
+    let mut stream_details = engine.details();
+    let mut details = format_details(&stream_details);
     set_status(status, details.clone());
     if stop.load(Ordering::Acquire) {
         info.lock().unwrap().phase = "stopped";
         set_status(status, format!("Stopped before playback.\n{details}"));
         return Ok(());
     }
-    crate::spectrum::set_sample_rate(options.sample_rate);
+    if kind != backend::BackendKind::Cpal {
+        crate::spectrum::set_sample_rate(options.sample_rate);
+    }
     engine.start()?;
     let (input, output) = engine.latency_ms()?;
     {
@@ -281,6 +286,12 @@ fn run_audio(
     let result: Result<(), Box<dyn Error>> = (|| {
         while !stop.load(Ordering::Acquire) {
             engine.check_events()?;
+            let current_details = engine.details();
+            if current_details != stream_details {
+                stream_details = current_details;
+                details = format_details(&stream_details);
+                set_status(status, details.clone());
+            }
             let blocks = engine.blocks();
             if blocks != last_blocks {
                 last_progress = Instant::now();

@@ -7,6 +7,10 @@ use crate::{
 };
 use std::error::Error;
 
+/// Hard ceiling for a single DSP callback block. Backends must reject larger periods
+/// before starting streams so process paths never assert on the working buffer.
+pub const MAX_DSP_FRAMES: usize = 8192;
+
 pub struct DspSettings {
     pub input_eq: crate::eq::EqSettings,
     pub pre_conversion_eq: crate::eq::EqSettings,
@@ -121,7 +125,7 @@ impl DspChain {
     pub fn with_sample_rate(settings: DspSettings, rate: u32) -> Result<Self, Box<dyn Error>> {
         crate::validate_sample_rate(rate)?;
         Ok(Self {
-            working: vec![0.0; 8192],
+            working: vec![0.0; MAX_DSP_FRAMES],
             input_eq: settings.input_eq.build_with_sample_rate(rate)?,
             pre_conversion_eq: settings.pre_conversion_eq.build_with_sample_rate(rate)?,
             voice_enabled: settings.voice_enabled,
@@ -140,6 +144,15 @@ impl DspChain {
                 rate,
             )?,
         })
+    }
+
+    /// Reject periods the shared working buffer cannot hold, before any backend starts callbacks.
+    pub fn validate_block_frames(frames: usize) -> Result<(), Box<dyn Error>> {
+        if (1..=MAX_DSP_FRAMES).contains(&frames) {
+            Ok(())
+        } else {
+            Err(format!("DSP requires a maximum block size of 1..{MAX_DSP_FRAMES} frames").into())
+        }
     }
 
     /// Equal input/output lengths, scratch at least that long. No allocation or I/O.
@@ -231,9 +244,7 @@ impl<T: Sample> AudioProcessor<T> {
         settings: DspSettings,
     ) -> Result<Self, Box<dyn Error>> {
         crate::validate_sample_rate(rate)?;
-        if !(1..=8192).contains(&max_frames) {
-            return Err("DSP requires a maximum block size of 1..8192 frames".into());
-        }
+        DspChain::validate_block_frames(max_frames)?;
         Ok(Self {
             chain: DspChain::with_sample_rate(settings, rate)?,
             scratch: vec![0.0; max_frames],

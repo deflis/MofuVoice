@@ -31,9 +31,9 @@ const NARROW_FFT: usize = 2048;
 const NARROW_HOP: usize = 512;
 
 static SAMPLE_RATE: AtomicUsize = AtomicUsize::new(RATE as usize);
-/// Set on the control thread before starting a new stream.
+/// Set the native playback sample rate on the control thread before starting a stream.
 pub fn set_sample_rate(rate: u32) {
-    assert!(crate::validate_sample_rate(rate).is_ok());
+    assert!((8000..=192000).contains(&rate));
     SAMPLE_RATE.store(rate as usize, Ordering::Release);
 }
 static ACTIVE: AtomicPtr<Shared> = AtomicPtr::new(ptr::null_mut());
@@ -332,6 +332,9 @@ fn db_to_bgra(db: f64) -> [u8; 4] {
 }
 
 fn magnitude_at(bins: &[f64], fft_size: usize, hz: f64, rate: u32) -> f64 {
+    if hz > rate as f64 * 0.5 {
+        return 0.0;
+    }
     let bin = hz * fft_size as f64 / rate as f64;
     if bin <= 0.0 {
         return bins[0];
@@ -345,14 +348,16 @@ fn magnitude_at(bins: &[f64], fft_size: usize, hz: f64, rate: u32) -> f64 {
     bins[lo] * (1.0 - frac) + bins[lo + 1] * frac
 }
 
-fn append_column(image: &mut [u8], column: &[[u8; 4]]) {
+fn append_columns(image: &mut [u8], column: &[[u8; 4]], columns: usize) {
     debug_assert_eq!(column.len(), IMAGE_HEIGHT);
     let stride = IMAGE_WIDTH * BYTES_PER_PIXEL;
+    let shift = columns * BYTES_PER_PIXEL;
     for y in 0..IMAGE_HEIGHT {
         let row = &mut image[y * stride..(y + 1) * stride];
-        row.copy_within(BYTES_PER_PIXEL.., 0);
-        let offset = (IMAGE_WIDTH - 1) * BYTES_PER_PIXEL;
-        row[offset..offset + 4].copy_from_slice(&column[y]);
+        row.copy_within(shift.., 0);
+        for pixel in row[stride - shift..].as_chunks_mut::<BYTES_PER_PIXEL>().0 {
+            *pixel = column[y];
+        }
     }
 }
 
@@ -362,14 +367,11 @@ struct DisplayCadence {
     phase: u64,
 }
 impl DisplayCadence {
-    fn advance(&mut self, frames: usize, rate: u32) -> bool {
+    fn advance(&mut self, frames: usize, rate: u32) -> usize {
         self.phase += frames as u64 * DISPLAY_COLUMNS_PER_SECOND;
-        if self.phase >= rate as u64 {
-            self.phase %= rate as u64;
-            true
-        } else {
-            false
-        }
+        let columns = self.phase / rate as u64;
+        self.phase %= rate as u64;
+        columns as usize
     }
 }
 
@@ -476,7 +478,8 @@ fn analyzer_loop(shared: Arc<Shared>) {
             }
             // Analyze every overlapping FFT frame, but only shift/copy the image
             // at a fixed rate. The visible time span is independent of sample rate.
-            if !cadence.advance(hop, rate) {
+            let columns = cadence.advance(hop, rate);
+            if columns == 0 {
                 time_domain.drain(..hop);
                 continue;
             }
@@ -489,7 +492,7 @@ fn analyzer_loop(shared: Arc<Shared>) {
             }
             {
                 let mut image = shared.image.lock().expect("spectrum image lock");
-                append_column(&mut image, &column);
+                append_columns(&mut image, &column, columns);
             }
             shared.generation.fetch_add(1, Ordering::Release);
             time_domain.drain(..hop);
@@ -509,17 +512,19 @@ mod tests {
     #[test]
     fn display_cadence_keeps_the_same_time_span_for_both_fft_modes() {
         // Include future high rates to prevent restoring the original 4x copy load.
-        for rate in [44100, 48000, 88200, 96000, 192000] {
+        for rate in [8000, 16000, 44100, 48000, 88200, 96000, 192000] {
             for hop in [WIDE_HOP, NARROW_HOP] {
                 let mut cadence = DisplayCadence::default();
                 let frames = rate as usize * 10 / hop;
-                let columns = (0..frames).filter(|_| cadence.advance(hop, rate)).count();
+                let columns = (0..frames)
+                    .map(|_| cadence.advance(hop, rate))
+                    .sum::<usize>();
                 assert_eq!(
                     columns,
                     frames * hop * DISPLAY_COLUMNS_PER_SECOND as usize / rate as usize
                 );
                 assert!(
-                    (599..=600).contains(&columns),
+                    (596..=600).contains(&columns),
                     "rate={rate}, hop={hop}, columns={columns}"
                 );
             }
@@ -555,8 +560,16 @@ mod tests {
     }
 
     #[test]
+    fn native_output_rate_limits_spectrogram_to_nyquist() {
+        let bins = [0.0, 0.125, 0.5];
+        assert_eq!(magnitude_at(&bins, 4, 4000.0, 8000), 0.5);
+        assert_eq!(magnitude_at(&bins, 4, 4001.0, 8000), 0.0);
+        assert_eq!(magnitude_at(&bins, 4, 8000.0, 8000), 0.0);
+    }
+
+    #[test]
     fn frequency_mapping_and_meter_timing_follow_selected_rate() {
-        for rate in crate::SAMPLE_RATES {
+        for rate in [8000, 44100, 48000, 96000, 192000] {
             let fft = Fft::new(NARROW_FFT);
             let hz = rate as f64 * 43.0 / NARROW_FFT as f64;
             let mut data: Vec<_> = (0..NARROW_FFT)
@@ -721,13 +734,13 @@ mod tests {
     fn append_column_scrolls_left() {
         let mut image = vec![0_u8; IMAGE_WIDTH * IMAGE_HEIGHT * BYTES_PER_PIXEL];
         let red = vec![[0, 0, 255, 255]; IMAGE_HEIGHT];
-        append_column(&mut image, &red);
+        append_columns(&mut image, &red, 1);
         let stride = IMAGE_WIDTH * BYTES_PER_PIXEL;
         assert_eq!(&image[stride - 4..stride], &[0, 0, 255, 255]);
         let blue = vec![[255, 0, 0, 255]; IMAGE_HEIGHT];
-        append_column(&mut image, &blue);
-        assert_eq!(&image[stride - 8..stride - 4], &[0, 0, 255, 255]);
-        assert_eq!(&image[stride - 4..stride], &[255, 0, 0, 255]);
+        append_columns(&mut image, &blue, 3);
+        assert_eq!(&image[stride - 16..stride - 12], &[0, 0, 255, 255]);
+        assert_eq!(&image[stride - 12..stride], &[255, 0, 0, 255].repeat(3));
     }
 
     #[test]
