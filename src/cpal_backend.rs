@@ -569,6 +569,18 @@ fn input_reserve(frames: usize, input_rate: u32, output_rate: u32) -> usize {
         .saturating_mul(2)
 }
 
+// Even a short input callback can publish a whole native output sample,
+// which in turn can emit several monitor samples in one converter push.
+fn preview_input_reserve(
+    frames: usize,
+    input_rate: u32,
+    output_rate: u32,
+    monitor_rate: u32,
+) -> usize {
+    input_reserve(frames, input_rate, monitor_rate)
+        .max(2 * (monitor_rate as usize).div_ceil(output_rate as usize))
+}
+
 fn queue_layout(frames: usize, input_rate: u32, output_rate: u32) -> (usize, usize) {
     let reserve = input_reserve(frames, input_rate, output_rate).max(frames * 2);
     (reserve, (reserve * 4).max(32768).next_power_of_two())
@@ -700,7 +712,12 @@ impl<O: Sample> ResampledCapture<O> {
         } = self;
         if let Some(preview) = preview.as_ref() {
             preview.metrics.prime_frames.fetch_max(
-                input_reserve(frames, self.input_rate, preview.metrics.sample_rate),
+                preview_input_reserve(
+                    frames,
+                    self.input_rate,
+                    metrics.sample_rate,
+                    preview.metrics.sample_rate,
+                ),
                 Ordering::Relaxed,
             );
         }
@@ -900,26 +917,29 @@ impl PreviewPlayback {
             return;
         }
         let frames = data.len() / self.channels;
+        // Acquire capture's queue publication before reading its reserve update.
+        let queued = self.queue.len();
         let requested = frames.saturating_mul(2);
         let target = self
             .metrics
             .prime_frames
             .fetch_max(requested, Ordering::Relaxed)
             .max(requested);
-        let queued = self.queue.len();
         self.metrics.output_blocks.fetch_add(1, Ordering::Relaxed);
         self.metrics
             .last_output_ns
             .store(self.metrics.now_ns(), Ordering::Relaxed);
         self.metrics.queue_peak.fetch_max(queued, Ordering::Relaxed);
         self.metrics.queue_depth.store(queued, Ordering::Relaxed);
-        // The ring must have room for the target and two lookahead samples.
-        if target.saturating_add(2) > self.queue.capacity() {
+        // Leave room for capture to publish a burst while consumption waits
+        // for priming, plus two samples for interpolation lookahead.
+        if target.saturating_mul(2).saturating_add(2) > self.queue.capacity() {
             self.metrics
                 .faults
                 .fetch_or(INVALID_BUFFER, Ordering::Relaxed);
             return;
         }
+        let mut available = queued as f64 + 1.0 - self.phase;
         if self.target.is_none() {
             if queued < target + 2 {
                 return;
@@ -932,8 +952,8 @@ impl PreviewPlayback {
                 self.queue.pop().unwrap_or_default() as f64,
             ];
             self.target = Some(target);
+            available -= 3.0;
         }
-        let available = self.queue.len() as f64 + 1.0 - self.phase;
         if self.target.is_some_and(|previous| target > previous) {
             // Refill without consuming any samples. Keep the interpolation window
             // and phase so the queued signal resumes at the same sample position.
@@ -989,12 +1009,35 @@ impl PreviewPlayback {
 
 fn preview_queue_layout(
     input_frames: usize,
-    input_rate: u32,
+    input: &StreamConfig,
+    output_rate: u32,
     monitor_frames: usize,
-    monitor_rate: u32,
+    monitor: &StreamConfig,
 ) -> (usize, usize) {
-    let reserve = input_reserve(input_frames, input_rate, monitor_rate).max(monitor_frames * 2);
-    (reserve, (reserve * 4 + 2).max(32768).next_power_of_two())
+    let reserve_for = |input_frames, monitor_frames: usize| {
+        preview_input_reserve(
+            input_frames,
+            input.sample_rate,
+            output_rate,
+            monitor.sample_rate,
+        )
+        .max(monitor_frames * 2)
+    };
+    let reserve = reserve_for(input_frames, monitor_frames);
+    // Size for an unannounced host-default period without making that the startup delay.
+    let capacity_period = |frames, config: &StreamConfig| match config.buffer_size {
+        cpal::BufferSize::Default => MAX_DSP_FRAMES.max(frames),
+        cpal::BufferSize::Fixed(_) => frames,
+    };
+    let max_reserve = reserve_for(
+        capacity_period(input_frames, input),
+        capacity_period(monitor_frames, monitor),
+    );
+    let capacity = (reserve * 4 + 2)
+        .max(max_reserve * 2 + 2)
+        .max(32768)
+        .next_power_of_two();
+    (reserve, capacity)
 }
 
 fn build_preview(
@@ -1088,9 +1131,10 @@ fn build<
         if let Some((device, format, config, monitor_frames)) = prepared.preview {
             let layout = preview_queue_layout(
                 frames as usize,
-                prepared.input_config.sample_rate,
+                &prepared.input_config,
+                prepared.output_config.sample_rate,
                 monitor_frames as usize,
-                config.sample_rate,
+                &config,
             );
             match build_preview(
                 &device,
@@ -1496,6 +1540,26 @@ mod tests {
         assert!(metrics.overruns.load(Ordering::Relaxed) > 0);
     }
 
+    fn fixed_preview_layout(
+        input_frames: usize,
+        input_rate: u32,
+        monitor_frames: usize,
+        monitor_rate: u32,
+    ) -> (usize, usize) {
+        let config = |frames, sample_rate| StreamConfig {
+            channels: 1,
+            sample_rate,
+            buffer_size: cpal::BufferSize::Fixed(frames as u32),
+        };
+        preview_queue_layout(
+            input_frames,
+            &config(input_frames, input_rate),
+            input_rate,
+            monitor_frames,
+            &config(monitor_frames, monitor_rate),
+        )
+    }
+
     #[test]
     fn monitor_queue_covers_larger_period_across_native_rates() {
         for (input_frames, input_rate, monitor_frames, monitor_rate, reserve) in [
@@ -1506,7 +1570,7 @@ mod tests {
             (8192, 48000, 128, 192000, 65536),
         ] {
             let (target, capacity) =
-                preview_queue_layout(input_frames, input_rate, monitor_frames, monitor_rate);
+                fixed_preview_layout(input_frames, input_rate, monitor_frames, monitor_rate);
             assert_eq!(target, reserve);
             assert!(capacity >= target * 4 + 2);
             assert!(capacity.is_power_of_two());
@@ -1514,38 +1578,131 @@ mod tests {
     }
 
     #[test]
-    fn monitor_refills_when_observed_periods_grow_and_rejects_oversized_target() {
+    fn default_monitor_queue_has_headroom_for_observed_capture_bursts() {
+        let input = StreamConfig {
+            channels: 1,
+            sample_rate: 48000,
+            buffer_size: cpal::BufferSize::Default,
+        };
+        let monitor = StreamConfig {
+            channels: 2,
+            sample_rate: 192000,
+            buffer_size: cpal::BufferSize::Default,
+        };
+        let (startup, capacity) = preview_queue_layout(64, &input, 48000, 128, &monitor);
+        assert_eq!(startup, 512);
+        let observed = preview_input_reserve(4096, 48000, 48000, 192000);
+        assert_eq!(observed, 32768);
+        assert!(capacity >= observed * 2 + 2);
+    }
+
+    #[test]
+    fn cascaded_conversion_reserves_whole_native_output_bursts() {
+        let input = StreamConfig {
+            channels: 1,
+            sample_rate: 192000,
+            buffer_size: cpal::BufferSize::Fixed(8),
+        };
+        let (reserve, capacity) = preview_queue_layout(8, &input, 8000, 8, &input);
+        assert_eq!(reserve, 48);
+        let (queue, _primary) = audio_queue::channel::<f32>(512);
+        let (monitor_queue, consumer) = audio_queue::channel(capacity);
+        let metrics = Arc::new(Metrics::with_sample_rate(16, 8000));
+        let monitor_metrics = Arc::new(Metrics::with_sample_rate(16, 192000));
+        metrics.active.store(true, Ordering::Release);
+        monitor_metrics.active.store(true, Ordering::Release);
+        let mut capture = ResampledCapture {
+            input_channel: 1,
+            channels: 1,
+            input_rate: 192000,
+            input_converter: crate::dsp::resample::RateConverter::new(192000, 48000).unwrap(),
+            output_converter: crate::dsp::resample::RateConverter::new(48000, 8000).unwrap(),
+            processor: AudioProcessor::new(48000, 1, DspSettings::from(&Options::default()))
+                .unwrap(),
+            queue,
+            preview: Some(PreviewTap {
+                converter: crate::dsp::resample::RateConverter::new(8000, 192000).unwrap(),
+                queue: monitor_queue,
+                metrics: monitor_metrics.clone(),
+            }),
+            metrics: metrics.clone(),
+        };
+        let mut monitor = PreviewPlayback::new(2, consumer, monitor_metrics.clone());
+        let mut heard = [0_i16; 16];
+        for _ in 0..600 {
+            capture.process(&[0.25_f32; 8]);
+            monitor.process(&mut heard);
+        }
+        assert_eq!(
+            monitor_metrics.prime_frames.load(Ordering::Relaxed),
+            reserve
+        );
+        assert!(monitor_metrics.played_frames.load(Ordering::Relaxed) > 4600);
+        for &[left, right] in heard.as_chunks::<2>().0 {
+            assert!((left - 8192).abs() <= 2);
+            assert_eq!(left, right);
+        }
+        assert_eq!(monitor_metrics.faults.load(Ordering::Relaxed), 0);
+        assert_eq!(metrics.faults.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn monitor_refills_without_losing_waveform_and_leaves_primary_running_on_capacity_fault() {
+        let (mut capture, mut primary, primary_metrics) = callbacks::<f32>(128, 1, &[]);
         let metrics = Arc::new(Metrics::new(128));
         metrics.active.store(true, Ordering::Release);
-        let (mut producer, consumer) = audio_queue::channel(1024);
-        let mut monitor = PreviewPlayback::new(1, consumer, metrics.clone());
-        assert!(producer.push_block(&[0.25; 130]));
-        let mut short = [0.0_f32; 64];
+        let (producer, consumer) = audio_queue::channel(2048);
+        capture.preview = Some(PreviewTap {
+            converter: crate::dsp::resample::RateConverter::new(RATE, RATE).unwrap(),
+            queue: producer,
+            metrics: metrics.clone(),
+        });
+        let mut monitor = PreviewPlayback::new(2, consumer, metrics.clone());
+        const SLOPE: f32 = 1.0 / 1024.0;
+        let input: [f32; 1024] = std::array::from_fn(|i| i as f32 * SLOPE);
+        capture.process(&input[..64]);
+        capture.process(&input[64..128]);
+        capture.process(&input[128..132]);
+        let mut short = [0.0_f32; 128];
         monitor.process(&mut short);
-        assert_eq!(short, [0.25; 64]);
-        let state = (monitor.phase, monitor.window, monitor.queue.len());
+        assert!(short[126] > 62.0 * SLOPE);
+        let state = (monitor.phase, monitor.window);
 
-        metrics.prime_frames.fetch_max(256, Ordering::Relaxed);
+        capture.process(&input[132..260]);
         monitor.process(&mut short);
-        assert_eq!(short, [0.0; 64]);
-        assert_eq!(metrics.faults.load(Ordering::Relaxed), 0);
-        let mut long = [1.0_f32; 256];
+        assert_eq!(short, [0.0; 128]);
+        assert_eq!(metrics.prime_frames.load(Ordering::Relaxed), 256);
+        let mut long = [1.0_f32; 512];
         monitor.process(&mut long);
-        assert_eq!(long, [0.0; 256]);
+        assert_eq!(long, [0.0; 512]);
         assert_eq!(metrics.prime_frames.load(Ordering::Relaxed), 512);
-        assert_eq!((monitor.phase, monitor.window, monitor.queue.len()), state);
+        assert_eq!((monitor.phase, monitor.window), state);
 
-        assert!(producer.push_block(&[0.25; 512]));
+        for block in input[260..644].as_chunks::<128>().0 {
+            capture.process(block);
+        }
         monitor.process(&mut long);
         assert_eq!(monitor.target, Some(512));
-        assert_eq!(long, [0.25; 256]);
+        let expected = (state.1[1] + state.0 * SLOPE as f64) as f32;
+        assert!((long[0] - expected).abs() < 1e-7);
+        for [left, right] in long.as_chunks::<2>().0 {
+            assert_eq!(left, right);
+        }
+        assert!(long[510] > long[0] + 250.0 * SLOPE);
         assert_eq!(metrics.faults.load(Ordering::Relaxed), 0);
         assert_eq!(metrics.played_frames.load(Ordering::Relaxed), 320);
 
-        let mut oversized = [1.0_f32; 512];
+        let mut oversized = [1_i32; 1024];
         monitor.process(&mut oversized);
-        assert_eq!(oversized, [0.0; 512]);
+        assert_eq!(oversized, [0; 1024]);
         assert_eq!(metrics.faults.load(Ordering::Relaxed), INVALID_BUFFER);
+        capture.process(&input[644..708]);
+        let mut main = [0.0_f32; 192];
+        primary.process(&mut main);
+        for (frame, &sample) in main.as_chunks::<3>().0.iter().zip(&input) {
+            assert_eq!(*frame, [sample, 0.0, 0.0]);
+        }
+        assert_eq!(primary_metrics.faults.load(Ordering::Relaxed), 0);
     }
 
     #[test]
@@ -1566,7 +1723,7 @@ mod tests {
         let max_delta = (std::f64::consts::TAU * 1000.0 / monitor_rate as f64) as f32 + 0.003;
         for clock in [SCALE - 1000, SCALE + 1000] {
             let (reserve, capacity) =
-                preview_queue_layout(CAPTURE, RATE as u32, MONITOR, monitor_rate);
+                fixed_preview_layout(CAPTURE, RATE as u32, MONITOR, monitor_rate);
             let metrics = Arc::new(Metrics::with_sample_rate(reserve, monitor_rate));
             metrics.active.store(true, Ordering::Release);
             let (producer, consumer) = audio_queue::channel(capacity);
@@ -2209,10 +2366,10 @@ mod tests {
         assert_eq!(format, SampleFormat::F32);
         assert_eq!(frames, 128);
         assert_eq!(config.buffer_size, cpal::BufferSize::Fixed(128));
-        let (reserve, _) = preview_queue_layout(primary as usize, RATE, frames as usize, RATE);
+        let (reserve, _) = fixed_preview_layout(primary as usize, RATE, frames as usize, RATE);
         assert_eq!(reserve, 256);
         assert_ne!(
-            preview_queue_layout(primary as usize, RATE, primary as usize, RATE).0,
+            fixed_preview_layout(primary as usize, RATE, primary as usize, RATE).0,
             reserve,
             "monitor queue must be sized from the monitor period, not primary 64"
         );
