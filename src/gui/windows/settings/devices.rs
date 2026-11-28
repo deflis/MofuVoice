@@ -91,13 +91,11 @@ impl SettingsView {
                     self.observed.auto_backend = choices.resolved;
                 }
                 let prefs = self.model.read(cx).preferences;
-                for (slot, mut items) in [
+                for (slot, discovered) in [
                     (DeviceSlot::Input, choices.inputs),
                     (DeviceSlot::Output, choices.outputs.clone()),
                     (DeviceSlot::Preview, choices.outputs),
                 ] {
-                    let discovered = items.clone();
-                    items.insert(0, String::new());
                     let current = self.draft.device(slot).to_string();
                     let used = slot == DeviceSlot::Input || choices.resolved == BackendKind::Cpal;
                     let missing = (used
@@ -107,10 +105,9 @@ impl SettingsView {
                     if missing.is_some() {
                         self.device_error = model::DeviceWarning::Missing.message().into();
                     }
-                    if !current.is_empty() && !items.iter().any(|item| item == &current) {
-                        items.push(current.clone());
-                    }
+                    let items = super::controls::device_display_items(&discovered, &current);
                     let select = self.selects.device_mut(slot);
+                    select.discovered = discovered;
                     select.missing = missing.clone();
                     select.items = items.clone();
                     let labeled = fields::device_choices(

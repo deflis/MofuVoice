@@ -48,7 +48,10 @@ pub enum CloseTarget {
 
 struct DeviceSelect {
     state: Entity<SelectState<Vec<Choice<String>>>>,
+    /// Display list: empty choice, discovered names, and an optional missing current.
     items: Vec<String>,
+    /// Raw names returned by the last successful discovery (no empty/missing entries).
+    discovered: Vec<String>,
     missing: Option<String>,
 }
 
@@ -395,7 +398,7 @@ impl SettingsView {
 }
 
 impl Render for SettingsView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let model = self.model.read(cx);
         let section = model.preferences.section;
         let locked = model.locked() || self.pending();
@@ -442,7 +445,7 @@ impl Render for SettingsView {
         if section == Section::Overview {
             content = overview::render(content, model, self, cx);
         } else {
-            content = content.child(self.render_page(section, cx.entity(), cx));
+            content = content.child(self.render_page(section, cx.entity(), window, cx));
         }
 
         let error = self.error_text(cx);

@@ -2,11 +2,18 @@ use super::*;
 use crate::gui::preferences::Preferences;
 
 fn initial_device_items(current: &str) -> Vec<String> {
-    if current.is_empty() {
-        vec![String::new()]
-    } else {
-        vec![String::new(), current.into()]
+    device_display_items(&[], current)
+}
+
+/// Build the select display list from discovered names plus an optional current.
+pub(super) fn device_display_items(discovered: &[String], current: &str) -> Vec<String> {
+    let mut items = Vec::with_capacity(discovered.len() + 2);
+    items.push(String::new());
+    items.extend(discovered.iter().cloned());
+    if !current.is_empty() && !items.iter().any(|item| item == current) {
+        items.push(current.into());
     }
+    items
 }
 
 fn new_select<T: Clone + PartialEq + 'static>(
@@ -69,6 +76,7 @@ impl SettingsView {
             DeviceSelect {
                 state,
                 items,
+                discovered: Vec::new(),
                 missing: None,
             }
         };
@@ -589,20 +597,10 @@ impl SettingsView {
         let kind = self.resolved_backend(cx);
         let used = slot == DeviceSlot::Input || kind == BackendKind::Cpal;
         let select = self.selects.device_mut(slot);
-        let discovered: Vec<String> = select
-            .items
-            .iter()
-            .filter(|device| {
-                !device.is_empty() && select.missing.as_deref() != Some(device.as_str())
-            })
-            .cloned()
-            .collect();
         select.missing =
-            (used && !value.is_empty() && !model::device_listed(&value, &discovered, kind))
+            (used && !value.is_empty() && !model::device_listed(&value, &select.discovered, kind))
                 .then(|| value.clone());
-        if !value.is_empty() && !select.items.iter().any(|item| item == &value) {
-            select.items.push(value.clone());
-        }
+        select.items = device_display_items(&select.discovered, &value);
         let prefs = self.model.read(cx).preferences;
         let items = select.items.clone();
         let missing = select.missing.clone();
@@ -921,9 +919,7 @@ impl SettingsView {
         for slot in DeviceSlot::ALL {
             let current = self.draft.device(slot).to_string();
             let select = self.selects.device_mut(slot);
-            if !select.items.contains(&current) {
-                select.items.push(current.clone());
-            }
+            select.items = device_display_items(&select.discovered, &current);
             let choices = fields::device_choices(
                 slot,
                 &select.items,
@@ -1008,7 +1004,8 @@ impl SettingsView {
         for slot in DeviceSlot::ALL {
             self.draft.set_device(slot, String::new());
             let select = self.selects.device_mut(slot);
-            select.items = vec![String::new()];
+            select.discovered.clear();
+            select.items = device_display_items(&select.discovered, "");
             select.missing = None;
         }
         self.refresh_choices(window, cx);
