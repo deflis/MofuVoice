@@ -157,17 +157,25 @@ impl SettingsView {
                     .border_1()
                     .border_color(rgba(0x0000_0000))
                     .focus(move |style| style.border_color(ring));
-                // Keep tracking while focused even when blocked so Tab can leave.
-                if !blocked || focused {
-                    let handle = focus.clone().tab_index(0).tab_stop(!blocked);
+                if !blocked {
+                    let handle = focus.clone().tab_index(0).tab_stop(true);
                     let click_focus = handle.clone();
-                    slider_el = slider_el.track_focus(&handle).on_mouse_down(
-                        MouseButton::Left,
-                        move |_, window, cx| {
-                            click_focus.focus(window, cx);
+                    // Capture phase: SliderThumb stops bubbling mouse-down, so focus
+                    // must be taken before the thumb owns the press.
+                    slider_el = slider_el.track_focus(&handle).capture_any_mouse_down(
+                        move |event, window, cx| {
+                            if event.button == MouseButton::Left {
+                                click_focus.focus(window, cx);
+                            }
                         },
                     );
                 } else {
+                    // Keep tracking while focused so Tab can leave; stop clicks
+                    // from refocusing or reaching the disabled slider.
+                    if focused {
+                        let handle = focus.clone().tab_index(0).tab_stop(false);
+                        slider_el = slider_el.track_focus(&handle);
+                    }
                     slider_el = slider_el.on_mouse_down(MouseButton::Left, |_, _, cx| {
                         cx.stop_propagation();
                     });

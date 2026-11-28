@@ -1859,6 +1859,111 @@ fn simple_slider_is_reachable_by_tab_and_arrows_change_value(cx: &mut TestAppCon
 }
 
 #[gpui_kit::test]
+fn simple_slider_thumb_click_focuses_and_arrows_change_value(cx: &mut TestAppContext) {
+    let dir = directory();
+    let (model, window, view) = open(cx, &dir);
+    set_toggle(&view, window, ToggleField::DeesserEnabled, true, cx);
+    navigate(&model, window, Section::Deesser, cx);
+    let field = NumberField::DeesserRangeDb;
+    let before = view.read_with(cx, |v, _| {
+        v.draft.number_text(field).parse::<f64>().unwrap()
+    });
+    let focus = view.read_with(cx, |v, _| {
+        v.numbers[&field]
+            .slider_focus
+            .clone()
+            .expect("simple slider focus")
+    });
+    let slider_id = SharedString::from(format!("slider:{}", field.id()));
+    window
+        .update(cx, |_, w, cx| {
+            w.render_frame(cx);
+            w.focus_next(cx);
+            w.render_frame(cx);
+            if focus.is_focused(w) {
+                w.press("tab", cx);
+                w.render_frame(cx);
+            }
+            assert!(!focus.is_focused(w), "focus must start off the slider");
+            w.within(slider_id).click(("slider-thumb", 0u32), cx);
+            w.render_frame(cx);
+            assert!(
+                focus.is_focused(w),
+                "clicking SliderThumb should focus SimpleSlider"
+            );
+            w.press("right", cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let after = view.read_with(cx, |v, _| {
+        v.draft.number_text(field).parse::<f64>().unwrap()
+    });
+    assert!(after > before, "before={before} after={after}");
+    cleanup(model, window, cx);
+}
+
+#[gpui_kit::test]
+fn blocked_simple_slider_skips_tab_allows_leave_and_ignores_click(cx: &mut TestAppContext) {
+    let dir = directory();
+    let (model, window, view) = open(cx, &dir);
+    set_toggle(&view, window, ToggleField::DeesserEnabled, true, cx);
+    navigate(&model, window, Section::Deesser, cx);
+    let field = NumberField::DeesserRangeDb;
+    set_number(&view, window, field, "-", cx);
+    let focus = view.read_with(cx, |v, _| {
+        v.numbers[&field]
+            .slider_focus
+            .clone()
+            .expect("simple slider focus")
+    });
+    let slider_id = SharedString::from(format!("slider:{}", field.id()));
+    window
+        .update(cx, |_, w, cx| {
+            w.render_frame(cx);
+            w.focus_next(cx);
+            w.render_frame(cx);
+            for _ in 0..64 {
+                assert!(
+                    !focus.is_focused(w),
+                    "blocked SimpleSlider must not be a Tab stop"
+                );
+                w.press("tab", cx);
+                w.render_frame(cx);
+            }
+            focus.focus(w, cx);
+            w.render_frame(cx);
+            assert!(focus.is_focused(w));
+            w.press("tab", cx);
+            w.render_frame(cx);
+            assert!(
+                !focus.is_focused(w),
+                "blocked && focused SimpleSlider must leave on Tab"
+            );
+            // Disabled SliderThumb is not hittable; click the tracked wrapper instead.
+            w.click(slider_id, cx);
+            w.render_frame(cx);
+            assert!(
+                !focus.is_focused(w),
+                "click must not refocus a blocked SimpleSlider"
+            );
+            w.press("right", cx);
+            w.press("left", cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |v, _| v.draft.number_text(field).to_string()),
+        "-"
+    );
+    drag_slider(window, field, 0.9, cx);
+    assert_eq!(
+        view.read_with(cx, |v, _| v.draft.number_text(field).to_string()),
+        "-"
+    );
+    cleanup(model, window, cx);
+}
+
+#[gpui_kit::test]
 fn set_device_missing_detection_uses_discovered_across_alias_and_missing_round_trips(
     cx: &mut TestAppContext,
 ) {
