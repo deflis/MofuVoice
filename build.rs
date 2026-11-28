@@ -1,6 +1,23 @@
 fn main() {
-    #[cfg(feature = "desktop")]
-    tauri_build::build();
+    #[cfg(all(windows, feature = "desktop"))]
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        println!("cargo:rerun-if-changed=resources/windows.rc");
+        println!("cargo:rerun-if-changed=icons/icon.ico");
+        let version = env!("CARGO_PKG_VERSION");
+        let major = env!("CARGO_PKG_VERSION_MAJOR");
+        let minor = env!("CARGO_PKG_VERSION_MINOR");
+        let patch = env!("CARGO_PKG_VERSION_PATCH");
+        let output =
+            std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("Cargo output directory"));
+        std::fs::write(
+            output.join("mofu-version.h"),
+            format!("#define MOFU_VERSION {major},{minor},{patch},0\n#define MOFU_VERSION_STRING \"{version}\"\n"),
+        )
+        .expect("Cannot generate MofuVoice version metadata");
+        embed_resource::compile("resources/windows.rc", embed_resource::NONE)
+            .manifest_optional()
+            .expect("Cannot embed MofuVoice icon");
+    }
     #[cfg(feature = "asio")]
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         check_asio_sdk();

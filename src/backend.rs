@@ -5,8 +5,6 @@ use std::error::Error;
 pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 #[derive(Clone, Debug, Default, PartialEq)]
-#[cfg_attr(feature = "desktop", derive(serde::Serialize))]
-#[cfg_attr(feature = "desktop", serde(rename_all = "camelCase"))]
 pub struct AudioTelemetry {
     pub blocks: u64,
     pub nonzero_samples: u64,
@@ -75,8 +73,6 @@ impl ChannelRouting {
 
 /// Rates supported by the selected devices among the engine's available choices.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "desktop", derive(serde::Serialize))]
-#[cfg_attr(feature = "desktop", serde(rename_all = "camelCase"))]
 pub struct DeviceSampleRates {
     pub channels: Vec<DeviceChannels>,
     pub input: Vec<u32>,
@@ -86,8 +82,6 @@ pub struct DeviceSampleRates {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "desktop", derive(serde::Serialize))]
-#[cfg_attr(feature = "desktop", serde(rename_all = "camelCase"))]
 pub struct DeviceChannels {
     /// Each entry is a compatible duplex layout; maxima from different entries cannot be combined.
     pub sample_rate: u32,

@@ -46,32 +46,13 @@ jobs:
         if: matrix.setup_llvm
         run: mise run setup:ci
 
-      - name: Get pnpm store directory
-        id: pnpm-cache
-        shell: bash
-        run: echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
-          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-store-
-
-      - uses: flatt-security/setup-takumi-guard-npm@14f07d0cbc739b42a1b7c70a04c2b84cd1318ddd # v1
-
-      - name: Install frontend dependencies
-        run: pnpm install --frozen-lockfile
-
       - name: Cache Cargo
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: release-${{ matrix.artifact }}
 
-      - name: Build Windows GUI
-        if: matrix.platform == 'windows'
-        run: |
-          mise run build:web
-          cargo build --release --features desktop,custom-protocol,asio --locked --bin MofuVoice
+      - name: Build GUI
+        run: cargo build --release --features desktop --locked --bin MofuVoice
 
       - name: Package Windows portable
         if: matrix.platform == 'windows'
@@ -81,54 +62,9 @@ jobs:
           cp target/release/MofuVoice.exe dist/
           cp LICENSE dist/
 
-      - name: Build macOS app
+      - name: Package macOS app, DMG and archive
         if: matrix.platform == 'macos'
-        run: pnpm exec tauri build --features desktop,custom-protocol --bundles app -- --locked
-
-      - name: Package macOS DMG and app archive
-        if: matrix.platform == 'macos'
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-          app_path="$(find target/release/bundle/macos -maxdepth 1 -name 'MofuVoice.app' -print -quit)"
-          if [[ -z "$app_path" ]]; then
-            echo "Expected MofuVoice.app under target/release/bundle/macos" >&2
-            find target/release/bundle -maxdepth 3 -print >&2 || true
-            exit 1
-          fi
-
-          # GUI bundle must not ship the CLI side binary.
-          rm -f "$app_path/Contents/MacOS/mofu-voice-cli"
-
-          # Tauri may leave only a linker ad-hoc signature; Finder needs a sealed bundle.
-          codesign --force --deep --sign - "$app_path"
-          codesign --verify --deep --strict "$app_path"
-
-          version="$(python3 -c "import json; print(json.load(open('tauri.conf.json'))['version'])")"
-          dmg_name="MofuVoice_${version}_aarch64.dmg"
-          stage="$(mktemp -d)"
-          mnt="$(mktemp -d)"
-          cleanup() {
-            hdiutil detach "$mnt" -force >/dev/null 2>&1 || true
-            rm -rf "$stage" "$mnt"
-          }
-          trap cleanup EXIT
-
-          ditto "$app_path" "$stage/MofuVoice.app"
-          ln -s /Applications "$stage/Applications"
-          hdiutil create -volname MofuVoice -srcfolder "$stage" -ov -format UDZO "dist/${dmg_name}"
-
-          hdiutil attach "dist/${dmg_name}" -readonly -nobrowse -mountpoint "$mnt"
-          test -x "$mnt/MofuVoice.app/Contents/MacOS/MofuVoice"
-          test -L "$mnt/Applications"
-          hdiutil detach "$mnt"
-          rmdir "$mnt" 2>/dev/null || true
-          mnt=""
-
-          # upload-artifact flattens modes to 644; keep .app inside tar.gz / DMG.
-          tar -czf dist/MofuVoice.app.tar.gz -C "$(dirname "$app_path")" "$(basename "$app_path")"
-          cp LICENSE dist/
+        run: bash scripts/package-macos.sh
 
       - name: Upload package
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

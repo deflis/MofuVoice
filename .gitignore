@@ -3,13 +3,5 @@
 /logs/
 /mise.local.toml
 *.pdb
-
-
-
-/node_modules/
-/frontend/dist/
-/gen/
-
 /work/
-
-/frontend/tooling/css-modules-kit/node_modules/
+/dist/

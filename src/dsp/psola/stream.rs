@@ -225,11 +225,10 @@ impl PsolaStream {
         }
         (self.correlation)(&self.analysis, &mut self.difference, false);
         let mut cumulative = 0.0;
-        for lag in 1..=MAX_LAG + 1 {
-            let difference = self.difference[lag];
-            cumulative += difference;
-            self.difference[lag] = if cumulative > 1e-20 {
-                difference * lag as f64 / cumulative
+        for (lag, difference) in self.difference.iter_mut().enumerate().skip(1) {
+            cumulative += *difference;
+            *difference = if cumulative > 1e-20 {
+                *difference * lag as f64 / cumulative
             } else {
                 1.0
             };

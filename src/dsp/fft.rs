@@ -55,9 +55,9 @@ impl Fft {
 
     pub(crate) fn forward(&self, data: &mut [Complex]) {
         assert_eq!(data.len(), self.size);
-        for i in 0..self.size {
-            if i < self.reverse[i] {
-                data.swap(i, self.reverse[i]);
+        for (index, &reversed) in self.reverse.iter().enumerate() {
+            if index < reversed {
+                data.swap(index, reversed);
             }
         }
         match self.size {

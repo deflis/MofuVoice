@@ -1,14 +1,33 @@
 //! GUI preferences only; never read or written from an audio callback.
 use crate::{cli::Options, gate::GateThreshold};
-#[cfg(feature = "desktop")]
+#[cfg(any(feature = "desktop", test))]
 use std::path::PathBuf;
 use std::{error::Error, fs, io::ErrorKind, path::Path};
 
+#[cfg(any(all(feature = "desktop", target_os = "macos"), test))]
+fn macos_path(home: Option<std::ffi::OsString>) -> Result<PathBuf, Box<dyn Error>> {
+    let home = home
+        .filter(|value| !value.is_empty())
+        .ok_or("Cannot locate user home directory: HOME is unset")?;
+    Ok(PathBuf::from(home)
+        .join("Library")
+        .join("Application Support")
+        .join("MofuVoice")
+        .join("settings.ini"))
+}
+
 #[cfg(feature = "desktop")]
 pub(crate) fn path() -> Result<PathBuf, Box<dyn Error>> {
-    Ok(std::env::current_exe()
-        .map_err(|error| format!("Cannot locate GUI executable: {error}"))?
-        .with_file_name("settings.ini"))
+    #[cfg(target_os = "macos")]
+    {
+        macos_path(std::env::var_os("HOME"))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(std::env::current_exe()
+            .map_err(|error| format!("Cannot locate GUI executable: {error}"))?
+            .with_file_name("settings.ini"))
+    }
 }
 
 fn threshold_text(threshold: GateThreshold) -> String {
@@ -118,7 +137,18 @@ fn arguments(options: &Options) -> Vec<String> {
     args
 }
 
-fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
+#[derive(Default)]
+pub(crate) struct UiPreferences {
+    pub language: Option<String>,
+    pub section: Option<String>,
+}
+
+pub(crate) struct SavedSettings {
+    pub options: Options,
+    pub ui: UiPreferences,
+}
+
+fn decode(text: &str) -> Result<SavedSettings, Box<dyn Error>> {
     let mut section = false;
     let mut values = std::collections::HashMap::new();
     for (index, line) in text.trim_start_matches('\u{feff}').lines().enumerate() {
@@ -135,6 +165,13 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
             .filter(|_| section)
             .ok_or_else(|| format!("Invalid GUI INI entry on line {}", index + 1))?;
         let key = key.trim();
+        if matches!(key, "ui_language" | "ui_section") {
+            values
+                .entry(key)
+                .and_modify(|stored| *stored = "")
+                .or_insert(value.trim());
+            continue;
+        }
         if ![
             "device",
             "backend",
@@ -188,7 +225,14 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
             .ok_or_else(|| format!("Missing GUI setting '{key}'"))
     };
     let device = value("device")?;
-    if device.contains('\0') {
+    if device.contains('\0')
+        || values
+            .get("output_device")
+            .is_some_and(|name| name.contains('\0'))
+        || values
+            .get("preview_device")
+            .is_some_and(|name| name.contains('\0'))
+    {
         return Err("Device name cannot contain NUL".into());
     }
     let formant = match value("preserve_formants")? {
@@ -360,15 +404,29 @@ fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
         .unwrap_or("semitones")
         .into();
     options.validate()?;
-    Ok(options)
+    Ok(SavedSettings {
+        options,
+        ui: UiPreferences {
+            language: values.get("ui_language").map(|value| value.to_string()),
+            section: values.get("ui_section").map(|value| value.to_string()),
+        },
+    })
 }
 
-pub(crate) fn load(path: &Path) -> Result<Options, Box<dyn Error>> {
+fn default_settings() -> Result<SavedSettings, Box<dyn Error>> {
+    Ok(SavedSettings {
+        options: Options::parse_gui(Vec::new())?,
+        ui: UiPreferences::default(),
+    })
+}
+
+/// Loads `path`, or defaults when the file is missing. Corrupt files fail.
+pub(crate) fn load(path: &Path) -> Result<SavedSettings, Box<dyn Error>> {
     match fs::read_to_string(path) {
         Ok(text) => decode(&text).map_err(|error| {
             format!("Cannot read GUI settings '{}': {error}", path.display()).into()
         }),
-        Err(error) if error.kind() == ErrorKind::NotFound => Options::parse_gui(Vec::new()),
+        Err(error) if error.kind() == ErrorKind::NotFound => default_settings(),
         Err(error) => Err(format!("Cannot read GUI settings '{}': {error}", path.display()).into()),
     }
 }
@@ -384,6 +442,7 @@ pub(crate) fn merge(saved: &Options, args: Vec<String>) -> Result<Options, Box<d
             "--device",
             "--backend",
             "--output-device",
+            "--preview-device",
             "--input-channel",
             "--output-channels",
             "--frames",
@@ -461,11 +520,16 @@ pub(crate) fn merge(saved: &Options, args: Vec<String>) -> Result<Options, Box<d
     Ok(options)
 }
 
-pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>> {
+pub(crate) fn save(
+    path: &Path,
+    options: &Options,
+    ui: &UiPreferences,
+) -> Result<(), Box<dyn Error>> {
     options.validate()?;
     Options::parse_gui(arguments(options))?;
     if options.device.contains(['\r', '\n', '\0'])
         || options.output_device.contains(['\r', '\n', '\0'])
+        || options.preview_device.contains(['\r', '\n', '\0'])
     {
         return Err("Device name cannot contain line breaks or NUL".into());
     }
@@ -553,6 +617,11 @@ pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>>
             pair[1]
         ));
     }
+    for (key, value) in [("ui_language", &ui.language), ("ui_section", &ui.section)] {
+        if let Some(value) = value {
+            text.push_str(&format!("{key}={value}\n"));
+        }
+    }
     let temporary = path.with_extension(format!("{}.tmp", std::process::id()));
     let result = (|| -> std::io::Result<()> {
         fs::create_dir_all(
@@ -571,6 +640,65 @@ pub(crate) fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>>
 
 #[cfg(test)]
 mod tests {
+    fn decode(text: &str) -> Result<Options, Box<dyn Error>> {
+        super::decode(text).map(|settings| settings.options)
+    }
+
+    fn load(path: &Path) -> Result<Options, Box<dyn Error>> {
+        super::load(path).map(|settings| settings.options)
+    }
+
+    fn save(path: &Path, options: &Options) -> Result<(), Box<dyn Error>> {
+        super::save(path, options, &UiPreferences::default())
+    }
+
+    #[test]
+    fn macos_settings_path_uses_application_support_and_rejects_missing_home() {
+        let path = super::macos_path(Some(std::ffi::OsString::from("/Users/mofu"))).unwrap();
+        assert_eq!(
+            path,
+            PathBuf::from("/Users/mofu")
+                .join("Library")
+                .join("Application Support")
+                .join("MofuVoice")
+                .join("settings.ini")
+        );
+        assert!(super::macos_path(None).is_err());
+        assert!(super::macos_path(Some(std::ffi::OsString::new())).is_err());
+    }
+
+    #[test]
+    fn ui_preferences_round_trip_in_gui_ini_without_changing_audio_options() {
+        let path =
+            std::env::temp_dir().join(format!("mofu-ui-settings-{}.ini", std::process::id()));
+        let options = Options::parse_gui(["--pitch", "6.5"].map(String::from)).unwrap();
+        let ui = UiPreferences {
+            language: Some("ja".into()),
+            section: Some("devices".into()),
+        };
+        super::save(&path, &options, &ui).unwrap();
+        let source = fs::read_to_string(&path).unwrap();
+        fs::remove_file(path).unwrap();
+
+        let saved = super::decode(&source).unwrap();
+        assert_eq!(saved.options, options);
+        assert_eq!(saved.ui.language.as_deref(), Some("ja"));
+        assert_eq!(saved.ui.section.as_deref(), Some("devices"));
+
+        let legacy = source
+            .replace("ui_language=ja\n", "")
+            .replace("ui_section=devices\n", "");
+        let saved = super::decode(&legacy).unwrap();
+        assert_eq!(saved.options, options);
+        assert!(saved.ui.language.is_none());
+        assert!(saved.ui.section.is_none());
+
+        let saved = super::decode(&format!("{source}ui_language=en\n")).unwrap();
+        assert_eq!(saved.options, options);
+        assert_eq!(saved.ui.language.as_deref(), Some(""));
+        assert_eq!(saved.ui.section.as_deref(), Some("devices"));
+    }
+
     #[test]
     fn preview_device_round_trips_settings_and_cli() {
         let path = std::env::temp_dir().join(format!("preview-device-{}.ini", std::process::id()));
@@ -589,6 +717,20 @@ mod tests {
         save(&path, &options).unwrap();
         assert_eq!(load(&path).unwrap(), options);
         assert_eq!(merge(&options, vec![]).unwrap(), options);
+        assert_eq!(
+            merge(
+                &Options::parse_gui(["--backend", "cpal"].map(String::from)).unwrap(),
+                ["--preview-device", "Headphones"].map(String::from).into(),
+            )
+            .unwrap()
+            .preview_device,
+            "Headphones"
+        );
+        let mut invalid_preview = options.clone();
+        invalid_preview.preview_device = "Head\nphones".into();
+        assert!(save(&path, &invalid_preview).is_err());
+        let saved_text = fs::read_to_string(&path).unwrap();
+        assert!(decode(&saved_text.replace("Headphones", "Head\0phones")).is_err());
         assert!(Options::parse_gui(
             ["--backend", "asio", "--preview-device", "Headphones"].map(String::from)
         )
@@ -736,18 +878,17 @@ mod tests {
                 pitch_unit: unit.into(),
                 ..super::Options::default()
             };
-            super::save(&path, &options).unwrap();
-            assert_eq!(super::load(&path).unwrap(), options);
+            save(&path, &options).unwrap();
+            assert_eq!(load(&path).unwrap(), options);
             let merged = super::merge(&options, vec!["--pitch".into(), "3.25".into()]).unwrap();
             assert_eq!(merged.pitch_unit, unit);
             assert_eq!(merged.pitch.semitones, 3.25);
             let text = std::fs::read_to_string(&path).unwrap();
             let legacy = text.replace(&format!("pitch_unit={unit}\n"), "");
-            assert_eq!(super::decode(&legacy).unwrap().pitch_unit, "semitones");
-            assert!(super::decode(
-                &text.replace(&format!("pitch_unit={unit}"), "pitch_unit=invalid")
-            )
-            .is_err());
+            assert_eq!(decode(&legacy).unwrap().pitch_unit, "semitones");
+            assert!(
+                decode(&text.replace(&format!("pitch_unit={unit}"), "pitch_unit=invalid")).is_err()
+            );
         }
         std::fs::remove_file(path).unwrap();
     }
@@ -856,9 +997,9 @@ mod tests {
             .map(String::from),
         )
         .unwrap();
-        super::save(&path, &options).unwrap();
+        save(&path, &options).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(super::decode(&text).unwrap(), options);
+        assert_eq!(decode(&text).unwrap(), options);
         let merged = super::merge(
             &options,
             ["--psola-analysis-window", "4096"]
@@ -869,14 +1010,14 @@ mod tests {
         assert_eq!(merged.pitch.windows, options.pitch.windows);
         assert_eq!(merged.pitch.psola_windows.analysis, 4096);
         assert_eq!(merged.pitch.psola_windows.synthesis, 256);
-        assert!(super::decode(
-            &text.replace("psola_synthesis_window=256", "psola_synthesis_window=2048")
-        )
-        .is_err());
+        assert!(
+            decode(&text.replace("psola_synthesis_window=256", "psola_synthesis_window=2048"))
+                .is_err()
+        );
         let missing = text
             .replace("psola_analysis_window=1024\n", "")
             .replace("psola_synthesis_window=256\n", "");
-        let loaded = super::decode(&missing).unwrap();
+        let loaded = decode(&missing).unwrap();
         assert_eq!(loaded.pitch.windows, options.pitch.windows);
         assert_eq!(loaded.pitch.psola_windows, Default::default());
         for args in [
@@ -906,11 +1047,8 @@ mod tests {
             ["--analysis-window", "4096", "--synthesis-window", "1024"].map(String::from),
         )
         .unwrap();
-        super::save(&path, &options).unwrap();
-        assert_eq!(
-            super::load(&path).unwrap().pitch.windows,
-            options.pitch.windows
-        );
+        save(&path, &options).unwrap();
+        assert_eq!(load(&path).unwrap().pitch.windows, options.pitch.windows);
         assert_eq!(
             super::merge(&options, vec![]).unwrap().pitch.windows,
             options.pitch.windows
@@ -924,7 +1062,7 @@ mod tests {
             text.replace("analysis_window=4096", "analysis_window=1024")
                 .replace("synthesis_window=1024", "synthesis_window=2048"),
         ] {
-            assert!(super::decode(&invalid).is_err());
+            assert!(decode(&invalid).is_err());
         }
         std::fs::remove_file(path).unwrap();
     }
@@ -950,7 +1088,7 @@ mod tests {
             .map(String::from),
         )
         .unwrap();
-        super::save(&path, &options).unwrap();
+        save(&path, &options).unwrap();
         let original = std::fs::read_to_string(&path).unwrap();
         for (missing_analysis, missing_synthesis) in [(true, true), (true, false), (false, true)] {
             let mut text = original.clone();
@@ -964,9 +1102,9 @@ mod tests {
                 expected.pitch.windows.synthesis = 512;
             }
             std::fs::write(&path, text).unwrap();
-            let loaded = super::load(&path).unwrap();
+            let loaded = load(&path).unwrap();
             assert_eq!(loaded, expected);
-            super::save(&path, &loaded).unwrap();
+            save(&path, &loaded).unwrap();
             let saved = std::fs::read_to_string(&path).unwrap();
             assert!(saved.contains(&format!(
                 "analysis_window={}\n",
@@ -976,7 +1114,7 @@ mod tests {
                 "synthesis_window={}\n",
                 expected.pitch.windows.synthesis
             )));
-            assert_eq!(super::load(&path).unwrap(), expected);
+            assert_eq!(load(&path).unwrap(), expected);
         }
         std::fs::remove_file(path).unwrap();
     }
@@ -987,8 +1125,8 @@ mod tests {
         for algorithm in PitchAlgorithm::ALL {
             let mut options = super::Options::default();
             options.pitch.algorithm = algorithm;
-            super::save(&path, &options).unwrap();
-            assert_eq!(super::load(&path).unwrap().pitch.algorithm, algorithm);
+            save(&path, &options).unwrap();
+            assert_eq!(load(&path).unwrap().pitch.algorithm, algorithm);
             let overridden = super::merge(
                 &options,
                 ["--pitch-algorithm", "pvsola"].map(String::from).to_vec(),
@@ -996,11 +1134,10 @@ mod tests {
             .unwrap();
             assert_eq!(overridden.pitch.algorithm, PitchAlgorithm::Pvsola);
             let text = std::fs::read_to_string(&path).unwrap();
-            assert!(super::decode(&text.replace(algorithm.name(), "invalid")).is_err());
-            let legacy = super::decode(
-                &text.replace(&format!("pitch_algorithm={}\n", algorithm.name()), ""),
-            )
-            .unwrap();
+            assert!(decode(&text.replace(algorithm.name(), "invalid")).is_err());
+            let legacy =
+                decode(&text.replace(&format!("pitch_algorithm={}\n", algorithm.name()), ""))
+                    .unwrap();
             assert_eq!(legacy.pitch.algorithm, PitchAlgorithm::PhaseLocked);
             assert_eq!(legacy.pitch.semitones, options.pitch.semitones);
             assert_eq!(legacy.pitch.formant_shift, options.pitch.formant_shift);
@@ -1016,14 +1153,14 @@ mod tests {
                 let mut options = super::Options::default();
                 options.level.enabled = enabled;
                 options.level.compressor_enabled = compressor_enabled;
-                super::save(&path, &options).unwrap();
-                assert_eq!(super::load(&path).unwrap(), options);
+                save(&path, &options).unwrap();
+                assert_eq!(load(&path).unwrap(), options);
                 let text = std::fs::read_to_string(&path).unwrap();
-                assert!(super::decode(
-                    &text.replace(&format!("compressor={compressor_enabled}\n"), "")
-                )
-                .is_err());
-                assert!(super::decode(&text.replace(
+                assert!(
+                    decode(&text.replace(&format!("compressor={compressor_enabled}\n"), ""))
+                        .is_err()
+                );
+                assert!(decode(&text.replace(
                     &format!("compressor={compressor_enabled}\n"),
                     "compressor=invalid\n"
                 ))

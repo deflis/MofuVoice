@@ -462,8 +462,17 @@ fn analyzer_loop(shared: Arc<Shared>) {
                 };
             }
             fft.forward(spectrum);
+            let window_sum: f64 = window.iter().sum();
             for i in 0..bins.len() {
-                bins[i] = spectrum[i].re.hypot(spectrum[i].im);
+                let raw = spectrum[i].re.hypot(spectrum[i].im);
+                // Coherent gain of the window, with the usual one-sided factor for
+                // non-DC / non-Nyquist bins, so bin magnitudes read in amplitude dBFS.
+                let scale = if i == 0 || i + i == fft_size {
+                    window_sum
+                } else {
+                    window_sum * 0.5
+                };
+                bins[i] = raw / scale;
             }
             // Analyze every overlapping FFT frame, but only shift/copy the image
             // at a fixed rate. The visible time span is independent of sample rate.
@@ -516,6 +525,35 @@ mod tests {
             }
         }
     }
+    fn normalized_sine_db(fft_size: usize, amplitude: f64, rate: u32) -> f64 {
+        let window = hann(fft_size);
+        let window_sum: f64 = window.iter().sum();
+        let hz = rate as f64 * (fft_size / 8) as f64 / fft_size as f64;
+        let mut data: Vec<_> = (0..fft_size)
+            .map(|i| Complex {
+                re: amplitude
+                    * window[i]
+                    * (std::f64::consts::TAU * hz * i as f64 / rate as f64).sin(),
+                im: 0.0,
+            })
+            .collect();
+        Fft::new(fft_size).forward(&mut data);
+        let bins: Vec<_> = data[..=fft_size / 2]
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                let raw = c.re.hypot(c.im);
+                let scale = if i == 0 || i + i == fft_size {
+                    window_sum
+                } else {
+                    window_sum * 0.5
+                };
+                raw / scale
+            })
+            .collect();
+        20.0 * magnitude_at(&bins, fft_size, hz, rate).max(1e-12).log10()
+    }
+
     #[test]
     fn frequency_mapping_and_meter_timing_follow_selected_rate() {
         for rate in crate::SAMPLE_RATES {
@@ -538,6 +576,21 @@ mod tests {
             // After 100 ms the RMS meter has passed one time constant at every rate.
             let expected = 10.0 * (0.01 * (1.0 - (-1.0_f64).exp())).log10();
             assert!((levels.rms_db - expected).abs() < 0.0001);
+        }
+    }
+
+    #[test]
+    fn spectrogram_dbfs_matches_known_sine_for_wide_and_narrow_ffts() {
+        let amplitude = 10f64.powf(-20.0 / 20.0);
+        for rate in [44_100, 48_000] {
+            let wide = normalized_sine_db(WIDE_FFT, amplitude, rate);
+            let narrow = normalized_sine_db(NARROW_FFT, amplitude, rate);
+            assert!((wide + 20.0).abs() < 0.5, "wide db={wide} at {rate} Hz");
+            assert!(
+                (narrow + 20.0).abs() < 0.5,
+                "narrow db={narrow} at {rate} Hz"
+            );
+            assert!((wide - narrow).abs() < 0.5, "wide={wide} narrow={narrow}");
         }
     }
 

@@ -37,8 +37,6 @@ impl Drop for ComApartment {
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
-#[cfg_attr(feature = "desktop", derive(serde::Serialize))]
-#[cfg_attr(feature = "desktop", serde(rename_all = "camelCase"))]
 pub struct AudioInfo {
     pub phase: &'static str,
     pub error: Option<String>,
@@ -56,8 +54,6 @@ pub struct AudioInfo {
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
-#[cfg_attr(feature = "desktop", derive(serde::Serialize))]
-#[cfg_attr(feature = "desktop", serde(rename_all = "camelCase"))]
 pub struct AudioLog {
     pub elapsed_seconds: Option<f64>,
     pub telemetry: Option<backend::AudioTelemetry>,
@@ -261,7 +257,6 @@ fn run_audio(
         set_status(status, format!("Stopped before playback.\n{details}"));
         return Ok(());
     }
-    #[cfg(windows)]
     crate::spectrum::set_sample_rate(options.sample_rate);
     engine.start()?;
     let (input, output) = engine.latency_ms()?;
@@ -295,14 +290,16 @@ fn run_audio(
                 return Err("No audio callbacks for 2 seconds".into());
             }
             if logging.load(Ordering::Acquire) {
-                let (input, output) = engine.latency_ms()?;
+                let latency = engine.latency_ms();
                 let mut info = info.lock().unwrap();
                 *log.lock().unwrap() = AudioLog {
                     elapsed_seconds: Some(started.elapsed().as_secs_f64()),
                     telemetry: Some(engine.telemetry()),
                 };
-                info.input_latency_ms = input;
-                info.output_latency_ms = output;
+                if let Ok((input, output)) = latency {
+                    info.input_latency_ms = input;
+                    info.output_latency_ms = output;
+                }
             }
             thread::sleep(Duration::from_millis(100));
         }

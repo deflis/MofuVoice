@@ -1,7 +1,5 @@
 [tools]
 rust = { version = "1.99.1", components = ["rustfmt", "clippy"] }
-node = "26.12.1"
-pnpm = "12.15.0"
 "http:asiosdk" = {
   version = "2.3.4",
   url = "https://download.steinberg.net/sdk_downloads/ASIO-SDK_2.3.4_2025-10-15.zip",
@@ -13,51 +11,25 @@ pnpm = "12.15.0"
 [env]
 CPAL_ASIO_DIR = { value = "{% if tools.asiosdk %}{{ tools.asiosdk.path }}{% endif %}", tools = true }
 
-[tasks.fmt]
-description = "Format Rust and frontend files"
-depends = ["fmt:rust", "fmt:web"]
+[tasks.dev]
+description = "Run the GPUI desktop application"
+run = "cargo run --features desktop --bin MofuVoice"
 
-[tasks."fmt:rust"]
+[tasks.build]
+description = "Build the GPUI desktop application"
+run = "cargo build --release --features desktop --locked --bin MofuVoice"
+
+[tasks.fmt]
 run = "cargo fmt"
 
-[tasks."fmt:web"]
-run = "pnpm exec oxfmt frontend package.json tauri.conf.json capabilities .oxlintrc.json .oxfmtrc.json .github/workflows"
-
 [tasks."fmt:check"]
-description = "Check Rust and frontend formatting"
-depends = ["fmt:rust:check", "fmt:web:check"]
-
-[tasks."fmt:rust:check"]
 run = "cargo fmt --check"
 
-[tasks."fmt:web:check"]
-run = "pnpm exec oxfmt --check frontend package.json tauri.conf.json capabilities .oxlintrc.json .oxfmtrc.json .github/workflows"
-
 [tasks.lint]
-description = "Lint Rust and frontend code"
-depends = ["lint:rust", "lint:web"]
-
-[tasks."lint:rust"]
-depends = ["build:web"]
 run = "cargo clippy --all-targets --all-features --locked -- -D warnings"
 
-[tasks."lint:web"]
-run = "pnpm exec oxlint --deny-warnings frontend"
-
-[tasks.typecheck]
-run = "pnpm typecheck"
-
-[tasks."build:web"]
-depends = ["typecheck"]
-run = "pnpm build"
-
 [tasks.check]
-description = "Check formatting, lint and types across the project"
-depends = ["fmt:check", "lint", "typecheck"]
-
-[tasks."check:web"]
-description = "Check frontend formatting, lint and types"
-depends = ["fmt:web:check", "lint:web", "typecheck"]
+depends = ["fmt:check", "lint"]
 
 [tasks."setup:ci"]
 description = "Install LLVM for GitHub Actions"

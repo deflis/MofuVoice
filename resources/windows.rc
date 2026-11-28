@@ -1,0 +1,25 @@
+#include "mofu-version.h"
+
+1 ICON "../icons/icon.ico"
+
+1 VERSIONINFO
+FILEVERSION MOFU_VERSION
+PRODUCTVERSION MOFU_VERSION
+FILEOS 0x40004
+FILETYPE 1
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "FileDescription", "MofuVoice"
+            VALUE "FileVersion", MOFU_VERSION_STRING
+            VALUE "ProductName", "MofuVoice"
+            VALUE "ProductVersion", MOFU_VERSION_STRING
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END
